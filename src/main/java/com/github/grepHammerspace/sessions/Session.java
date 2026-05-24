@@ -1,4 +1,5 @@
 package com.github.grepHammerspace.sessions;
 
-public class Session {
-}
+import org.openqa.selenium.WebDriver;
+
+public record Session(String userId, WebDriver driver) {}
