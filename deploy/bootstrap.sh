@@ -64,8 +64,8 @@ docker-compose -f "$COMPOSE_FILE" up -d
 
 # ── Wait for services ─────────────────────────────────────────────────────────
 
-wait_for "mongo-express" "http://localhost:$ME_PORT"
-wait_for "app"           "http://localhost:$APP_PORT/otj-services"
+wait_for "mongo-express" "http://localhost:$ME_PORT"  30
+wait_for "app"           "http://localhost:$APP_PORT/health" 30
 
 # ── Done ──────────────────────────────────────────────────────────────────────
 

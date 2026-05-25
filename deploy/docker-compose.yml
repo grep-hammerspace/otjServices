@@ -10,6 +10,12 @@ services:
       - mongo_data:/data/db
     networks:
       - otj-net
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')", "--quiet"]
+      interval: 3s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
 
   mongo-express:
     image: mongo-express:latest
@@ -22,7 +28,8 @@ services:
       ME_CONFIG_MONGODB_URL: mongodb://${MONGO_USER}:${MONGO_PASSWORD}@mongo:27017/
       ME_CONFIG_BASICAUTH: false
     depends_on:
-      - mongo
+      mongo:
+        condition: service_healthy
     networks:
       - otj-net
 
@@ -39,7 +46,8 @@ services:
       username: ${OA_USERNAME}
       OApassword: ${OA_PASSWORD}
     depends_on:
-      - mongo
+      mongo:
+        condition: service_healthy
     networks:
       - otj-net
 
