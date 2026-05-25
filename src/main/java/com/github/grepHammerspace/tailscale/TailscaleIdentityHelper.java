@@ -95,7 +95,8 @@ public class TailscaleIdentityHelper {
         @Override public boolean isClosed() { return channel == null || !channel.isOpen(); }
         @Override
         public void setSoTimeout(int timeout) throws SocketException {
-            if (channel != null) channel.socket().setSoTimeout(timeout);
+            // Unix domain SocketChannel does not support .socket() — no-op here.
+            // OkHttp's callTimeout watchdog enforces the overall deadline instead.
         }
         @Override public void setTcpNoDelay(boolean on) {}
         @Override public void setKeepAlive(boolean on) {}

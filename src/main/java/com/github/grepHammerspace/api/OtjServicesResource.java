@@ -40,13 +40,10 @@ public class OtjServicesResource {
         this.userRepository = userRepository;
     }
 
-    @Context
-    private HttpServletRequest request;
-
     @GET
-    public Response testGetTailscaleId() {
+    public Response testGetTailscaleId(@Context HttpServletRequest request) {
         try {
-            String userId = resolveUserState();
+            String userId = resolveUserState(request);
             log.info(" Received request {} from user {}",request,userId);
             return Response.ok("{\"user\": \"" + userId + "\"}").build();
         } catch (IOException e) {
@@ -56,10 +53,10 @@ public class OtjServicesResource {
 
     @POST
     @Path("/prepare-browser")
-    public Response prepareBrowser() throws InterruptedException {
+    public Response prepareBrowser(@Context HttpServletRequest request) throws InterruptedException {
         String userId;
         try {
-            userId = resolveUserState();
+            userId = resolveUserState(request);
         } catch (IOException e) {
             return Response.status(Response.Status.UNAUTHORIZED).entity("{\"error\": \"" + e.getMessage() + "\"}").build();
         }
@@ -77,10 +74,10 @@ public class OtjServicesResource {
 
     @POST
     @Path("/register")
-    public Response register(@Valid RegisterRequest body) {
+    public Response register(@Valid RegisterRequest body, @Context HttpServletRequest request) {
         try {
             log.info("Received request on /register");
-            String userId = resolveUserState();
+            String userId = resolveUserState(request);
             log.info("Received registration request from user {}, registering them with learnerId {}", userId, body.learnerId());
             userRepository.save(new User(userId, body.username(), body.password(), body.learnerId()));
             return Response.status(Response.Status.CREATED).build();
@@ -89,7 +86,7 @@ public class OtjServicesResource {
         }
     }
 
-    private String resolveUserState() throws IOException {
+    private String resolveUserState(HttpServletRequest request) throws IOException {
         String userId = TailscaleIdentityHelper.getUser(request);
         userStateStore.createUserState(userId);
         return userId;
