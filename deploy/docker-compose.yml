@@ -38,6 +38,13 @@ services:
       context: ..
       dockerfile: docker/otjService.Dockerfile
     restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    sysctls:
+      - net.ipv4.conf.all.src_valid_mark=1
     ports:
       - "8945:8945"
       - "5005:5005"

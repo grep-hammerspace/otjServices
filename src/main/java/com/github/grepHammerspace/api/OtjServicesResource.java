@@ -79,6 +79,7 @@ public class OtjServicesResource {
     @Path("/register")
     public Response register(@Valid RegisterRequest body) {
         try {
+            log.info("Received request on /register");
             String userId = resolveUserState();
             log.info("Received registration request from user {}, registering them with learnerId {}", userId, body.learnerId());
             userRepository.save(new User(userId, body.username(), body.password(), body.learnerId()));

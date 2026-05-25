@@ -4,8 +4,8 @@ set -eou pipefail
 # Initialize CSV state file if missing
 [ -f /app/otjs.csv ] || echo "date,time-spent,start-time,comments,posted" > /app/otjs.csv
 
-# Start Tailscale daemon in userspace mode (required in containers)
-tailscaled --tun=userspace-networking --socks5-server=localhost:1055 &
+# Start Tailscale daemon
+tailscaled &
 
 # Wait for daemon to be ready
 sleep 2
@@ -23,6 +23,7 @@ tailscale up \
   --authkey="${TAILSCALE_AUTHKEY}" \
   --hostname="hours-api"
 
+# Register port 8945 with Tailscale's userspace netstack so incoming packets are forwarded to the local server
 echo "Tailscale connected"
 
 JAVA_OPTS=""

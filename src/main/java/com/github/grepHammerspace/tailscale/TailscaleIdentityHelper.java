@@ -15,6 +15,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.InetAddress;
+import java.net.SocketException;
 import java.util.List;
 import java.net.Socket;
 import java.net.SocketAddress;
@@ -22,6 +23,7 @@ import java.net.UnixDomainSocketAddress;
 import java.nio.channels.Channels;
 import java.nio.channels.SocketChannel;
 import java.net.StandardProtocolFamily;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Helper class to extract the tailscale identity of someone who makes a request to the server.
@@ -31,6 +33,9 @@ public class TailscaleIdentityHelper {
     private static final String TAILSCALE_SOCKET = "/run/tailscale/tailscaled.sock";
 
     private static final OkHttpClient client = new OkHttpClient.Builder()
+            .callTimeout(5, TimeUnit.SECONDS)
+            .connectTimeout(5, TimeUnit.SECONDS)
+            .readTimeout(5, TimeUnit.SECONDS)
             .dns(hostname -> List.of(InetAddress.getLoopbackAddress()))
             .socketFactory(new SocketFactory() {
                 @Override public Socket createSocket() { return new UnixSocket(TAILSCALE_SOCKET); }
@@ -88,7 +93,10 @@ public class TailscaleIdentityHelper {
         @Override public synchronized void close() throws IOException { if (channel != null) channel.close(); }
         @Override public boolean isConnected() { return channel != null && channel.isConnected(); }
         @Override public boolean isClosed() { return channel == null || !channel.isOpen(); }
-        @Override public void setSoTimeout(int timeout) {}
+        @Override
+        public void setSoTimeout(int timeout) throws SocketException {
+            if (channel != null) channel.socket().setSoTimeout(timeout);
+        }
         @Override public void setTcpNoDelay(boolean on) {}
         @Override public void setKeepAlive(boolean on) {}
         @Override public int getLocalPort() { return -1; }
