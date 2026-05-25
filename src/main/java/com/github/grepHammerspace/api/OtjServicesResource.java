@@ -80,6 +80,7 @@ public class OtjServicesResource {
     public Response register(@Valid RegisterRequest body) {
         try {
             String userId = resolveUserState();
+            log.info("Received registration request from user {}, registering them with learnerId {}", userId, body.learnerId());
             userRepository.save(new User(userId, body.username(), body.password(), body.learnerId()));
             return Response.status(Response.Status.CREATED).build();
         } catch (IOException e) {

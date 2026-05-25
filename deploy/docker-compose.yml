@@ -40,11 +40,13 @@ services:
     restart: unless-stopped
     ports:
       - "8945:8945"
+      - "5005:5005"
     environment:
       MONGO_URI: mongodb://${MONGO_USER}:${MONGO_PASSWORD}@mongo:27017/otjdb
       TAILSCALE_API_KEY: ${TAILSCALE_API_KEY}
       username: ${OA_USERNAME}
       OApassword: ${OA_PASSWORD}
+      JAVA_DEBUG: ${JAVA_DEBUG:-true}
     depends_on:
       mongo:
         condition: service_healthy

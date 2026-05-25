@@ -2,7 +2,8 @@
 # Bootstrap the full otjServices stack (mongo, mongo-express, app).
 #
 # Usage:
-#   bash deploy/bootstrap.sh          # build app image, start stack
+#   bash deploy/bootstrap.sh          # build and start in debug mode (default)
+#   bash deploy/bootstrap.sh --prod   # build and start in production mode
 #   bash deploy/bootstrap.sh --stop   # tear down stack (keeps Mongo data)
 #
 set -euo pipefail
@@ -13,6 +14,7 @@ ENV_FILE="$SCRIPT_DIR/../.env"
 
 APP_PORT=8945
 ME_PORT=8081
+DEBUG_PORT=5005
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -24,7 +26,7 @@ require() {
 }
 
 wait_for() {
-  local name="$1" url="$2" attempts="${3:-20}"
+  local name="$1" url="$2" attempts="${3:-30}"
   info "Waiting for $name..."
   for i in $(seq 1 "$attempts"); do
     if curl -s -o /dev/null "$url" 2>/dev/null; then
@@ -44,6 +46,19 @@ if [[ "${1:-}" == "--stop" ]]; then
   exit 0
 fi
 
+# ── Mode ──────────────────────────────────────────────────────────────────────
+
+MODE="debug"
+for arg in "$@"; do
+  [[ "$arg" == "--prod" ]] && MODE="prod"
+done
+
+if [ "$MODE" = "prod" ]; then
+  export JAVA_DEBUG=false
+else
+  export JAVA_DEBUG=true
+fi
+
 # ── Pre-flight ────────────────────────────────────────────────────────────────
 
 require docker
@@ -59,13 +74,13 @@ docker-compose -f "$COMPOSE_FILE" build app
 
 # ── Start stack ───────────────────────────────────────────────────────────────
 
-info "Starting full stack..."
+info "Starting full stack (mode: $MODE)..."
 docker-compose -f "$COMPOSE_FILE" up -d
 
 # ── Wait for services ─────────────────────────────────────────────────────────
 
-wait_for "mongo-express" "http://localhost:$ME_PORT"  30
-wait_for "app"           "http://localhost:$APP_PORT/health" 30
+wait_for "mongo-express" "http://localhost:$ME_PORT"
+wait_for "app"           "http://localhost:$APP_PORT/health"
 
 # ── Done ──────────────────────────────────────────────────────────────────────
 
@@ -74,8 +89,11 @@ echo "  Stack is up."
 echo ""
 echo "  mongo-express  →  http://localhost:$ME_PORT"
 echo "  app            →  http://localhost:$APP_PORT/otj-services"
+if [ "$MODE" = "debug" ]; then
+echo "  debugger       →  localhost:$DEBUG_PORT  (attach IDE remote debugger)"
+fi
 echo ""
-echo "  Logs:  docker-compose -f deploy/docker-compose.yml logs -f"
+echo "  Logs:  docker-compose -f deploy/docker-compose.yml logs -f app"
 echo "  Stop:  bash deploy/bootstrap.sh --stop"
 echo "  Wipe:  clean-mongo  (removes Mongo data volume)"
 echo ""
