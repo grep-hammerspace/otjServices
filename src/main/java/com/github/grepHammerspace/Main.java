@@ -1,6 +1,6 @@
 package com.github.grepHammerspace;
 
-import com.github.grepHammerspace.app.OtjServicesResource;
+import com.github.grepHammerspace.api.OtjServicesResource;
 import jakarta.ws.rs.core.UriBuilder;
 import org.glassfish.grizzly.http.server.HttpServer;
 import org.glassfish.jersey.grizzly2.servlet.GrizzlyWebContainerFactory;

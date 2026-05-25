@@ -1,4 +1,4 @@
-package com.github.grepHammerspace.app;
+package com.github.grepHammerspace.api;
 
 import com.github.grepHammerspace.tailscale.TailscaleIdentityHelper;
 import jakarta.servlet.http.HttpServletRequest;
