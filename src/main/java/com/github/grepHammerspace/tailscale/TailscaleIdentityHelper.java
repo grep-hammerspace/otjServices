@@ -59,7 +59,6 @@ public class TailscaleIdentityHelper {
 
             JsonNode root = mapper.readTree(response.body().string());
             String user = root.path("UserProfile").path("LoginName").asText();
-            log.info("User retrieved as {}", user);
 
             if (user == null || user.isEmpty()) {
                 throw new SecurityException("Empty user identity returned from Tailscale");
@@ -72,7 +71,7 @@ public class TailscaleIdentityHelper {
     // Wraps a Unix domain SocketChannel as a java.net.Socket for OkHttp compatibility.
     private static class UnixSocket extends Socket {
         private final String socketPath;
-        private SocketChannel channel;
+        private volatile SocketChannel channel;
 
         UnixSocket(String socketPath) {
             this.socketPath = socketPath;
