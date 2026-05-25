@@ -31,7 +31,4 @@ public class UserStateStore {
             return usersToStates.get(userId);
     }
 
-    public boolean isRegisteredUser(String userId){
-        return usersToStates.containsKey(userId);
-    }
 }

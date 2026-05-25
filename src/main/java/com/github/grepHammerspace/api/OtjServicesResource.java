@@ -1,6 +1,8 @@
 package com.github.grepHammerspace.api;
 
-import com.github.grepHammerspace.stateStore.UserState;
+import com.github.grepHammerspace.db.RegisterRequest;
+import com.github.grepHammerspace.db.UserRepository;
+import com.github.grepHammerspace.db.model.User;
 import com.github.grepHammerspace.stateStore.UserStateStore;
 import com.github.grepHammerspace.tailscale.TailscaleIdentityHelper;
 import jakarta.servlet.http.HttpServletRequest;
@@ -15,6 +17,7 @@ import org.slf4j.LoggerFactory;
 import io.github.cdimascio.dotenv.Dotenv;
 import org.openqa.selenium.Keys;
 
+import jakarta.validation.Valid;
 import javax.inject.Inject;
 import java.io.IOException;
 
@@ -28,11 +31,13 @@ public class OtjServicesResource {
     private static final String LOGIN_URL = "https://education.oneadvanced.com/";
 
     private final UserStateStore userStateStore;
-    private final Dotenv dotenv = Dotenv.load();
+    private final UserRepository userRepository;
+    private final Dotenv dotenv = Dotenv.configure().directory("./").ignoreIfMissing().load();
 
     @Inject
-    public OtjServicesResource(UserStateStore userStateStore) {
+    public OtjServicesResource(UserStateStore userStateStore, UserRepository userRepository) {
         this.userStateStore = userStateStore;
+        this.userRepository = userRepository;
     }
 
     @Context
@@ -68,6 +73,18 @@ public class OtjServicesResource {
         waitForElement(driver, By.id("otp"));
 
         return Response.ok().build();
+    }
+
+    @POST
+    @Path("/register")
+    public Response register(@Valid RegisterRequest body) {
+        try {
+            String userId = resolveUserState();
+            userRepository.save(new User(userId, body.username(), body.password(), body.learnerId()));
+            return Response.status(Response.Status.CREATED).build();
+        } catch (IOException e) {
+            return Response.status(Response.Status.UNAUTHORIZED).entity("{\"error\": \"" + e.getMessage() + "\"}").build();
+        }
     }
 
     private String resolveUserState() throws IOException {

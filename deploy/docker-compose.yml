@@ -49,3 +49,4 @@ networks:
 
 volumes:
   mongo_data:
+    name: otj_mongo_data
