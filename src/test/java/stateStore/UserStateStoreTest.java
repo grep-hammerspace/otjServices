@@ -6,6 +6,10 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestTemplate;
 
+/**
+ * Unit tests for {@link com.github.grepHammerspace.stateStore.UserStateStore}.
+ * Each test gets a fresh store instance via {@code @BeforeEach} so there is no shared state.
+ */
 public class UserStateStoreTest {
 
     private UserStateStore userStateStore;

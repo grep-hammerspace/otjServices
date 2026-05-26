@@ -21,20 +21,17 @@ import jakarta.validation.Valid;
 import javax.inject.Inject;
 import java.io.IOException;
 
-import static com.github.grepHammerspace.util.DriverUtils.*;
-
-/** Primary JAX-RS resource for OTJ automation endpoints. */
+/** Primary JAX-RS resource for OTJ automation endpoints.
+ */
 @Path("/otj-services")
 @Produces("application/json")
 @Consumes("application/json")
 public class OtjServicesResource {
     private static final Logger log = LoggerFactory.getLogger(OtjServicesResource.class);
-    private static final String LOGIN_URL = "https://education.oneadvanced.com/";
 
     private final UserStateStore userStateStore;
     private final UserRepository userRepository;
     private final TailscaleIdentityService tailscaleIdentityService;
-    private final Dotenv dotenv = Dotenv.configure().directory("./").ignoreIfMissing().load();
 
     @Inject
     public OtjServicesResource(UserStateStore userStateStore, UserRepository userRepository,
@@ -42,17 +39,6 @@ public class OtjServicesResource {
         this.userStateStore = userStateStore;
         this.userRepository = userRepository;
         this.tailscaleIdentityService = tailscaleIdentityService;
-    }
-
-    @GET
-    public Response testGetTailscaleId(@Context HttpServletRequest request) {
-        try {
-            String userId = resolveUserState(request);
-            log.info(" Received request {} from user {}",request,userId);
-            return Response.ok("{\"user\": \"" + userId + "\"}").build();
-        } catch (IOException e) {
-            return Response.status(Response.Status.UNAUTHORIZED).entity("{\"error\": \"" + e.getMessage() + "\"}").build();
-        }
     }
 
     /**
@@ -71,13 +57,7 @@ public class OtjServicesResource {
             return Response.status(Response.Status.UNAUTHORIZED).entity("{\"error\": \"" + e.getMessage() + "\"}").build();
         }
 
-        WebDriver driver = new FirefoxDriver();
-        driver.get(LOGIN_URL);
-
-        waitForElement(driver, By.name("emailOrUsername")).sendKeys(dotenv.get("username") + Keys.RETURN);
-        waitForElement(driver, By.name("username")).sendKeys(dotenv.get("username") + Keys.RETURN);
-        waitForElement(driver, By.id("user_password")).sendKeys(dotenv.get("OApassword"), Keys.RETURN);
-        waitForElement(driver, By.id("otp"));
+        // TODO: Get username and password for user from Mongo, create OtjDriver and call prepareBrowser, store the driver in the UserState so it can be used for later steps
 
         return Response.ok().build();
     }
@@ -90,6 +70,7 @@ public class OtjServicesResource {
             String userId = resolveUserState(request);
             log.info("Received registration request from user {}, registering them with learnerId {}", userId, body.learnerId());
             userRepository.save(new User(userId, body.username(), body.password(), body.learnerId()));
+            userStateStore.createUserState(userId);
             return Response.status(Response.Status.CREATED).build();
         } catch (IOException e) {
             return Response.status(Response.Status.UNAUTHORIZED).entity("{\"error\": \"" + e.getMessage() + "\"}").build();

@@ -1,5 +1,6 @@
 package com.github.grepHammerspace.stateStore;
 
+import com.github.grepHammerspace.webDriver.OtjDriver;
 import org.openqa.selenium.WebDriver;
 
 /**
@@ -7,4 +8,4 @@ import org.openqa.selenium.WebDriver;
  * @param userId
  * @param driver
  */
-public record UserState(String userId, WebDriver driver) {}
+public record UserState(String userId, OtjDriver driver) {}
