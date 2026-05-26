@@ -4,7 +4,7 @@ import com.github.grepHammerspace.db.RegisterRequest;
 import com.github.grepHammerspace.db.UserRepository;
 import com.github.grepHammerspace.db.model.User;
 import com.github.grepHammerspace.stateStore.UserStateStore;
-import com.github.grepHammerspace.tailscale.TailscaleIdentityHelper;
+import com.github.grepHammerspace.tailscale.TailscaleIdentityService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.ws.rs.*;
 import jakarta.ws.rs.core.Context;
@@ -32,12 +32,15 @@ public class OtjServicesResource {
 
     private final UserStateStore userStateStore;
     private final UserRepository userRepository;
+    private final TailscaleIdentityService tailscaleIdentityService;
     private final Dotenv dotenv = Dotenv.configure().directory("./").ignoreIfMissing().load();
 
     @Inject
-    public OtjServicesResource(UserStateStore userStateStore, UserRepository userRepository) {
+    public OtjServicesResource(UserStateStore userStateStore, UserRepository userRepository,
+                                TailscaleIdentityService tailscaleIdentityService) {
         this.userStateStore = userStateStore;
         this.userRepository = userRepository;
+        this.tailscaleIdentityService = tailscaleIdentityService;
     }
 
     @GET
@@ -87,7 +90,7 @@ public class OtjServicesResource {
     }
 
     private String resolveUserState(HttpServletRequest request) throws IOException {
-        String userId = TailscaleIdentityHelper.getUser(request);
+        String userId = tailscaleIdentityService.getUser(request);
         userStateStore.createUserState(userId);
         return userId;
     }
