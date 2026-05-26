@@ -6,6 +6,7 @@ import dagger.Component;
 
 import javax.inject.Singleton;
 
+/** Dagger component that wires the application object graph. */
 @Singleton
 @Component(modules = AppModule.class)
 public interface AppComponent {

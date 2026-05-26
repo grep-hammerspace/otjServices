@@ -1,5 +1,6 @@
 package com.github.grepHammerspace.db.model;
 
+/** Represents a single OTJ activity log entry. */
 public record ActivityLog(
         String learnerId,
         String activityImpact,

@@ -14,7 +14,12 @@ import java.net.URI;
 import java.util.Set;
 import java.util.concurrent.Executors;
 
+/** Configures and starts the Grizzly HTTP server. */
 public class ServerBootstrap {
+    /**
+     * Starts the server on {@code port}, replacing Grizzly's default thread pool with a
+     * virtual-thread-per-task executor so blocking Selenium calls don't saturate carrier threads.
+     */
     public static HttpServer start(int port, OtjServicesResource resource) throws IOException {
         URI baseUri = UriBuilder.fromUri("http://0.0.0.0/").port(port).build();
         ResourceConfig config = ResourceConfig.forApplication(new Application() {

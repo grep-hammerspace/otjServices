@@ -15,6 +15,7 @@ public class UserStateStore {
 
     private final  ConcurrentHashMap<String, UserState> usersToStates = new ConcurrentHashMap<>();
 
+    /** Creates an empty {@link UserState} for {@code userId} if one doesn't already exist. Idempotent. */
     public void createUserState(String userId){
         // If user already has a UserState, return and do nothing
         if (usersToStates.containsKey(userId)){
@@ -27,6 +28,7 @@ public class UserStateStore {
         log.info("Created state for user {}", userId);
     }
 
+    /** Returns the {@link UserState} for {@code userId}, or {@code null} if none exists. */
     public UserState getStateForUser(String userId){
             return usersToStates.get(userId);
     }

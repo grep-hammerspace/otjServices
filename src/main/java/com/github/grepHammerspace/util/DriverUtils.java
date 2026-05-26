@@ -8,6 +8,7 @@ import org.openqa.selenium.WebElement;
 
 import java.util.function.Function;
 
+/** Selenium polling helpers used during the OA browser-automation login flow. */
 public class DriverUtils {
 
     public static void waitForUrlChange(WebDriver driver, String originalUrl) throws InterruptedException {

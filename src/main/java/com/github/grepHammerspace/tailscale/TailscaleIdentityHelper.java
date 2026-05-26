@@ -47,6 +47,14 @@ public class TailscaleIdentityHelper {
             .build();
     private static final Logger log = LoggerFactory.getLogger(TailscaleIdentityHelper.class);
 
+    /**
+     * Calls the Tailscale local API {@code /localapi/v0/whois} with the caller's IP and port to
+     * look up their Tailscale identity. The request travels over a Unix domain socket
+     * (see {@link UnixSocket}) rather than TCP; OkHttp is configured with a custom
+     * {@link SocketFactory} and a dummy DNS resolver to make this transparent.
+     *
+     * @throws SecurityException if Tailscale returns a non-200 or an empty login name
+     */
     public static String getUser(HttpServletRequest request) throws IOException {
         String clientIp = request.getRemoteAddr();
         int clientPort = request.getRemotePort();

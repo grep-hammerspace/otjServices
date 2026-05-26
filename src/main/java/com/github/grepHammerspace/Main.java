@@ -4,6 +4,7 @@ import com.github.grepHammerspace.api.OtjServicesResource;
 import com.github.grepHammerspace.bind.AppComponent;
 import com.github.grepHammerspace.bind.DaggerAppComponent;
 
+/** Application entry point. */
 public class Main {
     public static void main(String[] args) throws Exception {
         AppComponent component = DaggerAppComponent.create();

@@ -23,6 +23,7 @@ import java.io.IOException;
 
 import static com.github.grepHammerspace.util.DriverUtils.*;
 
+/** Primary JAX-RS resource for OTJ automation endpoints. */
 @Path("/otj-services")
 @Produces("application/json")
 @Consumes("application/json")
@@ -54,6 +55,12 @@ public class OtjServicesResource {
         }
     }
 
+    /**
+     * Launches a Firefox browser, navigates to the OA login page, fills credentials,
+     * and blocks at the OTP field. The browser stays open so the caller can supply the MFA token.
+     * MFA tokens expire in ~30 s, so the browser session is kept alive in {@link com.github.grepHammerspace.stateStore.UserStateStore}
+     * rather than being recreated on each request.
+     */
     @POST
     @Path("/prepare-browser")
     public Response prepareBrowser(@Context HttpServletRequest request) throws InterruptedException {
@@ -89,6 +96,7 @@ public class OtjServicesResource {
         }
     }
 
+    /** Resolves the Tailscale login name and lazily initialises per-user state if it doesn't exist yet. */
     private String resolveUserState(HttpServletRequest request) throws IOException {
         String userId = tailscaleIdentityService.getUser(request);
         userStateStore.createUserState(userId);

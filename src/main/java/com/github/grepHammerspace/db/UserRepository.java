@@ -12,6 +12,7 @@ import org.slf4j.LoggerFactory;
 import javax.inject.Inject;
 import javax.inject.Singleton;
 
+/** MongoDB-backed store for registered users. */
 @Singleton
 public class UserRepository {
 
@@ -24,6 +25,7 @@ public class UserRepository {
         this.collection = database.getCollection("users");
     }
 
+    /** Upserts the user record — re-registering the same Tailscale user updates rather than duplicates. */
     public void save(User user) {
         Document doc = new Document()
                 .append("userId", user.userId())

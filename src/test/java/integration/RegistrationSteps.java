@@ -33,15 +33,15 @@ public class RegistrationSteps {
         assertEquals(expectedStatus, lastResponse.code());
     }
 
-    @And("user {string} exists in the users collection")
-    public void userExistsInMongo(String username) {
+    @And("user {string} in the users collection has fields:")
+    public void userHasFields(String username, io.cucumber.datatable.DataTable table) {
         MongoDatabase db = (MongoDatabase) ScenarioContext.get("db");
         org.bson.Document doc = db.getCollection("users")
             .find(new org.bson.Document("username", username))
             .first();
         assertNotNull(doc, "Expected user '" + username + "' in MongoDB but found none");
-        assertNotNull(doc.getString("userId"),   "Field 'userId' is null for user '" + username + "'");
-        assertNotNull(doc.getString("password"), "Field 'password' is null for user '" + username + "'");
-        assertNotNull(doc.getString("learnerId"), "Field 'learnerId' is null for user '" + username + "'");
+        table.asMap().forEach((field, expected) ->
+            assertEquals(expected, doc.getString(field),
+                "Field '" + field + "' mismatch for user '" + username + "'"));
     }
 }
