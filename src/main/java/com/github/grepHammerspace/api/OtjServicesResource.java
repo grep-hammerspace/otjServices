@@ -1,21 +1,20 @@
 package com.github.grepHammerspace.api;
 
-import com.github.grepHammerspace.db.RegisterRequest;
-import com.github.grepHammerspace.db.UserRepository;
+import com.github.grepHammerspace.db.ActivityLogRepository;
+import com.github.grepHammerspace.api.dto.ActivityLogRequest;
+import com.github.grepHammerspace.api.dto.RegisterRequest;
+import com.github.grepHammerspace.api.dto.SubmitWithMfaRequest;
+import com.github.grepHammerspace.db.*;
 import com.github.grepHammerspace.db.model.User;
 import com.github.grepHammerspace.stateStore.UserStateStore;
 import com.github.grepHammerspace.tailscale.TailscaleIdentityService;
+import com.github.grepHammerspace.webDriver.OtjDriver;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.ws.rs.*;
 import jakarta.ws.rs.core.Context;
 import jakarta.ws.rs.core.Response;
-import org.openqa.selenium.By;
-import org.openqa.selenium.WebDriver;
-import org.openqa.selenium.firefox.FirefoxDriver;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import io.github.cdimascio.dotenv.Dotenv;
-import org.openqa.selenium.Keys;
 
 import jakarta.validation.Valid;
 import javax.inject.Inject;
@@ -31,13 +30,15 @@ public class OtjServicesResource {
 
     private final UserStateStore userStateStore;
     private final UserRepository userRepository;
+    private final ActivityLogRepository activityLogRepository;
     private final TailscaleIdentityService tailscaleIdentityService;
 
     @Inject
     public OtjServicesResource(UserStateStore userStateStore, UserRepository userRepository,
-                                TailscaleIdentityService tailscaleIdentityService) {
+                               TailscaleIdentityService tailscaleIdentityService, ActivityLogRepository activityLogRepository) {
         this.userStateStore = userStateStore;
         this.userRepository = userRepository;
+        this.activityLogRepository = activityLogRepository;
         this.tailscaleIdentityService = tailscaleIdentityService;
     }
 
@@ -57,8 +58,8 @@ public class OtjServicesResource {
             return Response.status(Response.Status.UNAUTHORIZED).entity("{\"error\": \"" + e.getMessage() + "\"}").build();
         }
 
-        // TODO: Get username and password for user from Mongo, create OtjDriver and call prepareBrowser, store the driver in the UserState so it can be used for later steps
-
+        // TODO: Get username and password for user from Mongo, decrypt them and create OtjDriver and call prepareBrowser, store the driver in the UserState so it can be used for later steps
+        // TODO: Ensure response code contains word "ready"
         return Response.ok().build();
     }
 
@@ -66,7 +67,6 @@ public class OtjServicesResource {
     @Path("/register")
     public Response register(@Valid RegisterRequest body, @Context HttpServletRequest request) {
         try {
-            log.info("Received request on /register");
             String userId = resolveUserState(request);
             log.info("Received registration request from user {}, registering them with learnerId {}", userId, body.learnerId());
             userRepository.save(new User(userId, body.username(), body.password(), body.learnerId()));
@@ -75,6 +75,50 @@ public class OtjServicesResource {
         } catch (IOException e) {
             return Response.status(Response.Status.UNAUTHORIZED).entity("{\"error\": \"" + e.getMessage() + "\"}").build();
         }
+    }
+
+    @POST
+    @Path("/log-activities")
+    public Response logActivtiesWithLlmHelp(@Valid ActivityLogRequest body, @Context HttpServletRequest request){
+        // TODO Implement method
+        try {
+            String userid = resolveUserState(request);
+        } catch (IOException e) {
+            log.error("Failed to resolve user state for request to /submit-with-mfa, likely because the request did not come from an authenticated Tailscale user");
+            log.error("{}",e.getStackTrace());
+            return Response.status(Response.Status.UNAUTHORIZED).entity("{\"error\": \"" + e.getMessage() + "\"}").build();
+        }
+        return null;
+    }
+
+    @POST
+    @Path("/submit-with-mfa")
+    public Response useMfaCodeToSubmitUnSubmittedOTJs(@Valid SubmitWithMfaRequest body, @Context HttpServletRequest request){
+
+        int totalPending;
+        int sucessfullyPosted;
+
+        try {
+            String userId = resolveUserState(request);
+            log.info("Received submit-with-mfa request from user {}", userId);
+            OtjDriver driver = userStateStore.getStateForUser(userId).driver();
+            if (driver == null){
+                return Response.status(Response.Status.INTERNAL_SERVER_ERROR).entity("{\"error\": \"No prepared browser session found for user, call /prepare-browser first\"}").build();
+            }
+
+            driver.submitMfaToken(body.mfaCode());
+            driver.LogAllPendingOtjs();
+
+        } catch (IOException e) {
+            log.error("Failed to resolve user state for request to /submit-with-mfa, likely because the request did not come from an authenticated Tailscale user");
+            log.error("{}",e.getStackTrace());
+            return Response.status(Response.Status.UNAUTHORIZED).entity("{\"error\": \"" + e.getMessage() + "\"}").build();
+        } catch (InterruptedException e) {
+            log.error("Thread was interrupted when attempting to log otjs. {}", e.getMessage());
+            log.error("{}",e.getStackTrace());
+            return Response.status(Response.Status.INTERNAL_SERVER_ERROR).entity("{\"error\": \"An unexpected error occurred while using MFA to log activities\"}").build();
+        }
+        return null;
     }
 
     /** Resolves the Tailscale login name and lazily initialises per-user state if it doesn't exist yet. */

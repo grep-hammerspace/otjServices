@@ -1,7 +1,9 @@
 package com.github.grepHammerspace.db.model;
 
-/** Represents a single OTJ activity log entry. */
+/** Wrapper around a pure otj. Has all the ke fields + tailscaleUserId and posted for easier querying
+ *  We write one of these to Mongo for each activity log that someone submits*/
 public record ActivityLog(
+        String tailscaleUserId,
         String learnerId,
         String activityImpact,
         String unitId,
@@ -9,5 +11,6 @@ public record ActivityLog(
         String activityTime,
         int activityType,
         int hours,
-        String minutes
+        int minutes,
+        boolean posted
 ) {}

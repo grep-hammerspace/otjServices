@@ -34,6 +34,7 @@ public class AppModule {
     @Provides
     @Singleton
     MongoClient provideMongoClient() {
+        // MongoClient is a wrapper around a connection pool and it thread-safe. Designed to be created one and reused
         String uri = System.getenv().getOrDefault("MONGO_URI", "mongodb://localhost:27017");
         return MongoClients.create(uri);
     }

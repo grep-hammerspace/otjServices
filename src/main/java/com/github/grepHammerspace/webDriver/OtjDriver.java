@@ -18,8 +18,15 @@ public class OtjDriver {
         this.driver = new FirefoxDriver();
     }
 
-    public OtjDriver prepareBrowser(String username, String password) throws InterruptedException {
 
+    /**
+     *  Follows log in process all the way up to the page where we submit the MFA token, it leaves the browser open and ready for the token to be submitted.
+     * @param username
+     * @param password
+     * @return (hopefully) stateful browser session
+     * @throws InterruptedException
+     */
+    public OtjDriver prepareBrowser(String username, String password) throws InterruptedException {
         driver.get(LOGIN_URL);
         waitForElement(driver, By.name("emailOrUsername")).sendKeys(username + Keys.RETURN);
         waitForElement(driver, By.name("username")).sendKeys(username + Keys.RETURN);
@@ -27,6 +34,23 @@ public class OtjDriver {
         waitForElement(driver, By.id("otp"));
 
         return this;
+    }
+
+    /**
+     * Use mfa token to sign in, when this exits, we should be fully authenticated and logged in.
+     * @param mfaToken
+     * @throws InterruptedException
+     */
+    public void submitMfaToken(String mfaToken) throws InterruptedException {
+        String originalUrl = driver.getCurrentUrl();
+        waitForElement(driver, By.id("otp")).sendKeys(mfaToken + Keys.RETURN);
+        waitForUrlChange(driver, originalUrl);
+    }
+
+    /**
+     * Get all unposted otjs from Mongo and post them one by one
+     */
+    public void LogAllPendingOtjs() {
     }
 
     private void waitForUrlChange(WebDriver driver, String originalUrl) throws InterruptedException {
