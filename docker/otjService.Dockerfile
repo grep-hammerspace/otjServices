@@ -31,6 +31,9 @@ RUN apt-get update -q && \
     apt-get install -y -q firefox && \
     rm -rf /var/lib/apt/lists/*
 
+RUN curl -sL "https://github.com/mozilla/geckodriver/releases/download/v0.35.0/geckodriver-v0.35.0-linux64.tar.gz" \
+        | tar -xz -C /usr/local/bin
+
 COPY --from=tailscale /usr/local/bin/tailscale /usr/local/bin/tailscale
 COPY --from=tailscale /usr/local/bin/tailscaled /usr/local/bin/tailscaled
 

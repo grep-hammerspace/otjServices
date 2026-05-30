@@ -42,6 +42,7 @@ public class OtjDriver {
         this.activityLogRepository = activityLogRepository;
         FirefoxOptions options = new FirefoxOptions();
         options.addArguments("--headless");
+//        options.setBinary("Path to firefox if debugging locally");
         this.driver = new FirefoxDriver(options);
         this.http = new OkHttpClient();
         this.mapper = new ObjectMapper();
@@ -58,8 +59,8 @@ public class OtjDriver {
     public OtjDriver prepareBrowser(String username, String password) throws InterruptedException {
         driver.get(LOGIN_URL);
         waitForElement(driver, By.name("emailOrUsername")).sendKeys(username + Keys.RETURN);
-        waitForElement(driver, By.name("username")).sendKeys(username + Keys.RETURN);
-        waitForElement(driver, By.id("user_password")).sendKeys(password, Keys.RETURN);
+        waitForElement(driver, By.name("username")).sendKeys(Keys.RETURN);
+        waitForElement(driver, By.id("password")).sendKeys(password, Keys.RETURN);
         waitForElement(driver, By.id("otp"));
 
         return this;
@@ -73,7 +74,17 @@ public class OtjDriver {
     public void submitMfaToken(String mfaToken) throws InterruptedException {
         String originalUrl = driver.getCurrentUrl();
         waitForElement(driver, By.id("otp")).sendKeys(mfaToken + Keys.RETURN);
-        waitForUrlChange(driver, originalUrl);
+
+        long deadline = System.currentTimeMillis() + 10_000;
+        while (System.currentTimeMillis() < deadline) {
+            if (!driver.getCurrentUrl().equals(originalUrl)) return;
+            try {
+                WebElement error = driver.findElement(By.id("error_message"));
+                if (error.isDisplayed()) throw new IllegalStateException("MFA code was incorrect: " + error.getText());
+            } catch (NoSuchElementException ignored) {}
+            Thread.sleep(500);
+        }
+        throw new TimeoutException("MFA timed out — URL did not change within 30s");
     }
 
     /**
@@ -117,7 +128,7 @@ public class OtjDriver {
                         OtjDriver.log.info("Posted activity log {} ({})", log.id(), log.activityDate());
                     } else {
                         failed.add(log.id());
-                        OtjDriver.log.warn("Failed to post activity log {} — HTTP {}", log.id(), response.code());
+                        OtjDriver.log.warn("Failed to post activity log {} — HTTP {} body: {}", log.id(), response.code(), response.body() != null ? response.body().string() : "null");
                     }
                 }
             } catch (Exception e) {
@@ -134,12 +145,13 @@ public class OtjDriver {
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("learnerId", log.learnerId());
         payload.put("activityImpact", log.activityImpact());
-        payload.put("unitId", log.unitId());
+        payload.put("unitId", "ef974f73-5d9d-447e-8652-379ba9535229");
         payload.put("activityDate", log.activityDate().replace("/", "-"));
         payload.put("activityTime", "T" + log.activityTime() + ":00");
         payload.put("activityType", log.activityType());
         payload.put("hours", log.hours());
-        payload.put("minutes", log.minutes());
+        payload.put("minutes", String.format("%02d", log.minutes()));
+        OtjDriver.log.info("Posting payload: {}", payload);
         return payload;
     }
 

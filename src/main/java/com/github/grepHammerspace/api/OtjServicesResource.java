@@ -219,7 +219,7 @@ public class OtjServicesResource {
         OtjDriver driver;
         try {
             userId = resolveUserState(request);
-            log.info("Received submit-with-mfa request from user {}", userId);
+            log.info("Received submit-with-mfa request from user {} and mfa code {}", userId, body.mfaCode());
             driver = userStateStore.getStateForUser(userId).getDriver();
             if (driver == null) {
                 return Response.status(Response.Status.INTERNAL_SERVER_ERROR)
@@ -232,6 +232,9 @@ public class OtjServicesResource {
 
         try {
             driver.submitMfaToken(body.mfaCode());
+        } catch (IllegalStateException e) {
+            return Response.status(Response.Status.BAD_REQUEST)
+                    .entity("{\"error\": \"" + e.getMessage() + "\"}").build();
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             return Response.status(Response.Status.INTERNAL_SERVER_ERROR)
