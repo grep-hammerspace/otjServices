@@ -35,12 +35,22 @@ public class RegistrationSteps {
             .post(RequestBody.create(body, JSON))
             .build();
         lastResponse = HTTP.newCall(req).execute();
+        ScenarioContext.put("lastResponseCode", lastResponse.code());
+        String responseBody = lastResponse.body() != null ? lastResponse.body().string() : "";
+        ScenarioContext.put("lastResponseBody", responseBody);
     }
 
     /** Asserts that the HTTP status code of the most recent response matches {@code expectedStatus}. */
     @Then("the response status is {int}")
     public void checkStatus(int expectedStatus) {
-        assertEquals(expectedStatus, lastResponse.code());
+        assertEquals(expectedStatus, ScenarioContext.get("lastResponseCode"));
+    }
+
+    @Then("the response body contains {string}")
+    public void responseBodyContains(String expected) {
+        String body = (String) ScenarioContext.get("lastResponseBody");
+        assertTrue(body != null && body.contains(expected),
+                "Expected body to contain: " + expected + "\nActual: " + body);
     }
 
     /**

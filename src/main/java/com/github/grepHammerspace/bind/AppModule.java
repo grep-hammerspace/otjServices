@@ -1,5 +1,9 @@
 package com.github.grepHammerspace.bind;
 
+import com.anthropic.client.AnthropicClient;
+import com.anthropic.client.okhttp.AnthropicOkHttpClient;
+import com.github.grepHammerspace.llm.LlmService;
+import com.github.grepHammerspace.llm.LlmServiceImpl;
 import com.github.grepHammerspace.stateStore.UserStateStore;
 import com.github.grepHammerspace.tailscale.TailscaleIdentityService;
 import com.github.grepHammerspace.tailscale.TailscaleIdentityServiceImpl;
@@ -43,5 +47,17 @@ public class AppModule {
     @Singleton
     MongoDatabase provideMongoDatabase(MongoClient client) {
         return client.getDatabase(DB_NAME);
+    }
+
+    @Provides
+    @Singleton
+    AnthropicClient provideAnthropicClient() {
+        return AnthropicOkHttpClient.fromEnv();
+    }
+
+    @Provides
+    @Singleton
+    LlmService provideLlmService(LlmServiceImpl impl) {
+        return impl;
     }
 }

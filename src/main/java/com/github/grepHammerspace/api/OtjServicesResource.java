@@ -1,11 +1,18 @@
 package com.github.grepHammerspace.api;
 
-import com.github.grepHammerspace.db.ActivityLogRepository;
 import com.github.grepHammerspace.api.dto.ActivityLogRequest;
+import com.github.grepHammerspace.api.dto.ActivityLogResponse;
 import com.github.grepHammerspace.api.dto.RegisterRequest;
 import com.github.grepHammerspace.api.dto.SubmitWithMfaRequest;
-import com.github.grepHammerspace.db.*;
+import com.github.grepHammerspace.db.ActivityLogRepository;
+import com.github.grepHammerspace.db.UserRepository;
+import com.github.grepHammerspace.db.model.ActivityLog;
 import com.github.grepHammerspace.db.model.User;
+import com.github.grepHammerspace.llm.ContentDiffer;
+import com.github.grepHammerspace.llm.exception.LlmException;
+import com.github.grepHammerspace.llm.exception.LlmRateLimitException;
+import com.github.grepHammerspace.llm.LlmResult;
+import com.github.grepHammerspace.llm.LlmService;
 import com.github.grepHammerspace.stateStore.UserStateStore;
 import com.github.grepHammerspace.tailscale.TailscaleIdentityService;
 import com.github.grepHammerspace.webDriver.OtjDriver;
@@ -19,6 +26,7 @@ import org.slf4j.LoggerFactory;
 import jakarta.validation.Valid;
 import javax.inject.Inject;
 import java.io.IOException;
+import java.time.LocalDate;
 
 /** Primary JAX-RS resource for OTJ automation endpoints.
  */
@@ -32,14 +40,18 @@ public class OtjServicesResource {
     private final UserRepository userRepository;
     private final ActivityLogRepository activityLogRepository;
     private final TailscaleIdentityService tailscaleIdentityService;
+    private final LlmService llmService;
 
     @Inject
     public OtjServicesResource(UserStateStore userStateStore, UserRepository userRepository,
-                               TailscaleIdentityService tailscaleIdentityService, ActivityLogRepository activityLogRepository) {
+                               TailscaleIdentityService tailscaleIdentityService,
+                               ActivityLogRepository activityLogRepository,
+                               LlmService llmService) {
         this.userStateStore = userStateStore;
         this.userRepository = userRepository;
         this.activityLogRepository = activityLogRepository;
         this.tailscaleIdentityService = tailscaleIdentityService;
+        this.llmService = llmService;
     }
 
     /**
@@ -79,16 +91,80 @@ public class OtjServicesResource {
 
     @POST
     @Path("/log-activities")
-    public Response logActivtiesWithLlmHelp(@Valid ActivityLogRequest body, @Context HttpServletRequest request){
-        // TODO Implement method
+    public Response logActivtiesWithLlmHelp(@Valid ActivityLogRequest body, @Context HttpServletRequest request) {
+        String userId;
         try {
-            String userid = resolveUserState(request);
+            userId = resolveUserState(request);
         } catch (IOException e) {
-            log.error("Failed to resolve user state for request to /submit-with-mfa, likely because the request did not come from an authenticated Tailscale user");
-            log.error("{}",e.getStackTrace());
-            return Response.status(Response.Status.UNAUTHORIZED).entity("{\"error\": \"" + e.getMessage() + "\"}").build();
+            return Response.status(Response.Status.UNAUTHORIZED)
+                    .entity("{\"error\": \"" + e.getMessage() + "\"}").build();
         }
-        return null;
+
+        String content = body.content() == null ? "" : body.content().strip();
+        if (content.isBlank()) {
+            String msg = "The 'content' field is missing or empty. " +
+                    "Expected a non-empty string in the 'content' key of the JSON body. " +
+                    "Got: content=" + body.content() + ". " +
+                    "This field must contain the activity text to be logged.";
+            log.warn(msg);
+            return Response.status(Response.Status.BAD_REQUEST)
+                    .entity("{\"error\": \"" + msg + "\"}").build();
+        }
+
+        User user = userRepository.findByUserId(userId);
+        if (user == null) {
+            String msg = "No registered user found for this Tailscale identity. " +
+                    "Call POST /otj-services/register first.";
+            log.warn("User {} not found in repository", userId);
+            return Response.status(Response.Status.BAD_REQUEST)
+                    .entity("{\"error\": \"" + msg + "\"}").build();
+        }
+
+        String lastContent = userRepository.getLastContent(userId);
+        String diff = ContentDiffer.computeDiff(lastContent, content);
+
+        if (diff == null) {
+            String msg = "No new content detected. " +
+                    "The incoming 'content' field is identical to what was last processed. " +
+                    "Send content that includes new lines to trigger logging.";
+            log.info(msg);
+            return Response.ok("{\"status\": \"no new content\", \"detail\": \"" + msg + "\"}").build();
+        }
+
+        log.info("Diff contains new content ({} chars), calling LLM", diff.length());
+
+        LlmResult result;
+        try {
+            result = llmService.parseActivities(diff, LocalDate.now().toString(), userId, user.learnerId());
+        } catch (LlmRateLimitException e) {
+            return Response.status(429)
+                    .entity("{\"error\": \"" + e.getMessage() + "\"}").build();
+        } catch (LlmException e) {
+            return Response.status(Response.Status.INTERNAL_SERVER_ERROR)
+                    .entity("{\"error\": \"" + e.getMessage() + "\"}").build();
+        } catch (Exception e) {
+            String msg = "Unexpected error calling LLM: " + e.getClass().getSimpleName() + ": " + e.getMessage();
+            log.error(msg, e);
+            return Response.status(Response.Status.INTERNAL_SERVER_ERROR)
+                    .entity("{\"error\": \"" + msg + "\"}").build();
+        }
+
+        for (ActivityLog entry : result.ok()) {
+            activityLogRepository.saveActivityLog(entry);
+        }
+
+        userRepository.saveLastContent(userId, content);
+
+        log.info("Request complete — {} row(s) written, {} error(s)", result.ok().size(), result.errors().size());
+
+        ActivityLogResponse responseBody = new ActivityLogResponse(
+                "ok",
+                result.ok().size(),
+                result.ok(),
+                result.errors().isEmpty() ? null : result.errors()
+        );
+
+        return Response.ok(responseBody).build();
     }
 
     @POST

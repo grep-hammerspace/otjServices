@@ -1,5 +1,8 @@
 package integration;
 
+import com.github.grepHammerspace.db.model.ActivityLog;
+import com.github.grepHammerspace.llm.LlmResult;
+import com.github.grepHammerspace.llm.LlmService;
 import com.github.grepHammerspace.stateStore.UserStateStore;
 import com.github.grepHammerspace.tailscale.TailscaleIdentityService;
 import com.mongodb.client.MongoClient;
@@ -9,6 +12,9 @@ import dagger.Module;
 import dagger.Provides;
 
 import javax.inject.Singleton;
+import java.util.Arrays;
+import java.util.List;
+import java.util.stream.Collectors;
 
 /**
  * Dagger module for the integration test object graph.
@@ -49,5 +55,20 @@ public class TestAppModule {
     @Provides @Singleton
     TailscaleIdentityService provideTailscaleIdentityService() {
         return request -> testUserId;
+    }
+
+    /**
+     * Fake LLM service for integration tests — returns one ActivityLog per non-blank line
+     * in the diff without calling the Anthropic API.
+     */
+    @Provides @Singleton
+    LlmService provideLlmService() {
+        return (diff, today, userId, learnerId) -> {
+            List<ActivityLog> ok = Arrays.stream(diff.split("\n"))
+                    .filter(line -> !line.isBlank())
+                    .map(line -> new ActivityLog(userId, learnerId, line.trim(), "", today, "10:00", 0, 1, 0, false))
+                    .collect(Collectors.toList());
+            return new LlmResult(ok, List.of());
+        };
     }
 }

@@ -5,6 +5,7 @@ import com.mongodb.client.MongoCollection;
 import com.mongodb.client.MongoDatabase;
 import com.mongodb.client.model.Filters;
 import com.mongodb.client.model.ReplaceOptions;
+import com.mongodb.client.model.Updates;
 import org.bson.Document;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -41,5 +42,30 @@ public class UserRepository {
         );
 
         log.info("Saved user {}", user.userId());
+    }
+
+    public User findByUserId(String userId) {
+        Document doc = collection.find(Filters.eq("userId", userId)).first();
+        if (doc == null) return null;
+        return new User(
+                doc.getString("userId"),
+                doc.getString("username"),
+                doc.getString("password"),
+                doc.getString("learnerId")
+        );
+    }
+
+    public String getLastContent(String userId) {
+        Document doc = collection.find(Filters.eq("userId", userId)).first();
+        if (doc == null) return null;
+        return doc.getString("lastContent");
+    }
+
+    public void saveLastContent(String userId, String content) {
+        collection.updateOne(
+                Filters.eq("userId", userId),
+                Updates.set("lastContent", content)
+        );
+        log.debug("Saved lastContent for user {} ({} chars)", userId, content.length());
     }
 }
