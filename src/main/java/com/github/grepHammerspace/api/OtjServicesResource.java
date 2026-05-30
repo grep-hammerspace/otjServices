@@ -15,7 +15,8 @@ import com.github.grepHammerspace.llm.LlmResult;
 import com.github.grepHammerspace.llm.LlmService;
 import com.github.grepHammerspace.stateStore.UserStateStore;
 import com.github.grepHammerspace.tailscale.TailscaleIdentityService;
-import com.github.grepHammerspace.webDriver.OtjDriver;
+import com.github.grepHammerspace.web.OtjDriver;
+import com.github.grepHammerspace.web.OtjSubmitResult;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.ws.rs.*;
 import jakarta.ws.rs.core.Context;
@@ -167,34 +168,82 @@ public class OtjServicesResource {
         return Response.ok(responseBody).build();
     }
 
+    @DELETE
+    @Path("/delete-last-row")
+    public Response deleteLastRow(@Context HttpServletRequest request) {
+        String userId;
+        try {
+            userId = resolveUserState(request);
+        } catch (IOException e) {
+            return Response.status(Response.Status.UNAUTHORIZED)
+                    .entity("{\"error\": \"" + e.getMessage() + "\"}").build();
+        }
+
+        boolean deleted = activityLogRepository.deleteLastActivityLog(userId);
+        if (!deleted) {
+            return Response.status(Response.Status.NOT_FOUND)
+                    .entity("{\"error\": \"No unposted activity log found for this user.\"}").build();
+        }
+        return Response.ok("{\"status\": \"ok\"}").build();
+    }
+
+    @DELETE
+    @Path("/reset-notes")
+    public Response resetNotes(@Context HttpServletRequest request) {
+        String userId;
+        try {
+            userId = resolveUserState(request);
+        } catch (IOException e) {
+            return Response.status(Response.Status.UNAUTHORIZED)
+                    .entity("{\"error\": \"" + e.getMessage() + "\"}").build();
+        }
+
+        userRepository.clearLastContent(userId);
+        return Response.ok("{\"status\": \"ok\"}").build();
+    }
+
     @POST
     @Path("/submit-with-mfa")
     public Response useMfaCodeToSubmitUnSubmittedOTJs(@Valid SubmitWithMfaRequest body, @Context HttpServletRequest request){
 
-        int totalPending;
-        int sucessfullyPosted;
+        String userId;
+        OtjDriver driver;
+        try {
+            userId = resolveUserState(request);
+            log.info("Received submit-with-mfa request from user {}", userId);
+            driver = userStateStore.getStateForUser(userId).driver();
+            if (driver == null) {
+                return Response.status(Response.Status.INTERNAL_SERVER_ERROR)
+                        .entity("{\"error\": \"No prepared browser session found for user, call /prepare-browser first\"}").build();
+            }
+        } catch (IOException e) {
+            return Response.status(Response.Status.UNAUTHORIZED)
+                    .entity("{\"error\": \"" + e.getMessage() + "\"}").build();
+        }
 
         try {
-            String userId = resolveUserState(request);
-            log.info("Received submit-with-mfa request from user {}", userId);
-            OtjDriver driver = userStateStore.getStateForUser(userId).driver();
-            if (driver == null){
-                return Response.status(Response.Status.INTERNAL_SERVER_ERROR).entity("{\"error\": \"No prepared browser session found for user, call /prepare-browser first\"}").build();
-            }
-
             driver.submitMfaToken(body.mfaCode());
-            driver.LogAllPendingOtjs();
-
-        } catch (IOException e) {
-            log.error("Failed to resolve user state for request to /submit-with-mfa, likely because the request did not come from an authenticated Tailscale user");
-            log.error("{}",e.getStackTrace());
-            return Response.status(Response.Status.UNAUTHORIZED).entity("{\"error\": \"" + e.getMessage() + "\"}").build();
         } catch (InterruptedException e) {
-            log.error("Thread was interrupted when attempting to log otjs. {}", e.getMessage());
-            log.error("{}",e.getStackTrace());
-            return Response.status(Response.Status.INTERNAL_SERVER_ERROR).entity("{\"error\": \"An unexpected error occurred while using MFA to log activities\"}").build();
+            Thread.currentThread().interrupt();
+            return Response.status(Response.Status.INTERNAL_SERVER_ERROR)
+                    .entity("{\"error\": \"Thread interrupted while waiting for MFA submission.\"}").build();
         }
-        return null;
+
+        OtjSubmitResult result = driver.LogAllPendingOtjs(userId);
+
+        if (result.nothingToPost()) {
+            return Response.ok("{\"status\": \"nothing_to_post\", \"detail\": \"No unposted OTJs found.\"}").build();
+        }
+        if (result.allPosted()) {
+            return Response.ok("{\"status\": \"ok\", \"posted\": " + result.posted().size() + "}").build();
+        }
+        if (result.allFailed()) {
+            return Response.status(502)
+                    .entity("{\"status\": \"all_failed\", \"total\": " + result.failed().size() + ", \"failed\": " + result.failed().size() + "}").build();
+        }
+        // partial success
+        return Response.status(207)
+                .entity("{\"status\": \"partial\", \"posted\": " + result.posted().size() + ", \"failed\": " + result.failed().size() + "}").build();
     }
 
     /** Resolves the Tailscale login name and lazily initialises per-user state if it doesn't exist yet. */

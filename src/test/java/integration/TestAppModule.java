@@ -66,7 +66,7 @@ public class TestAppModule {
         return (diff, today, userId, learnerId) -> {
             List<ActivityLog> ok = Arrays.stream(diff.split("\n"))
                     .filter(line -> !line.isBlank())
-                    .map(line -> new ActivityLog(userId, learnerId, line.trim(), "", today, "10:00", 0, 1, 0, false))
+                    .map(line -> new ActivityLog(userId, learnerId, line.trim(), "", today, "10:00", 0, 1, 0, false, null))
                     .collect(Collectors.toList());
             return new LlmResult(ok, List.of());
         };

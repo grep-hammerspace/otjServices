@@ -68,4 +68,12 @@ public class UserRepository {
         );
         log.debug("Saved lastContent for user {} ({} chars)", userId, content.length());
     }
+
+    public void clearLastContent(String userId) {
+        collection.updateOne(
+                Filters.eq("userId", userId),
+                Updates.unset("lastContent")
+        );
+        log.info("Cleared lastContent for user {}", userId);
+    }
 }

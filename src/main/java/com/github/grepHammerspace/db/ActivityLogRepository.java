@@ -4,8 +4,11 @@ import com.github.grepHammerspace.db.model.ActivityLog;
 import com.mongodb.client.MongoCollection;
 import com.mongodb.client.MongoDatabase;
 import com.mongodb.client.model.Filters;
+import com.mongodb.client.model.Sorts;
+import com.mongodb.client.model.Updates;
 import org.bson.Document;
 import org.bson.conversions.Bson;
+import org.bson.types.ObjectId;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -37,6 +40,20 @@ public class ActivityLogRepository {
                 .into(new ArrayList<>());
     }
 
+    /** Deletes the most recently inserted unposted activity log for the user. Returns {@code true} if one was found and deleted. */
+    public boolean deleteLastActivityLog(String userId) {
+        Document deleted = collection.findOneAndDelete(
+                Filters.and(Filters.eq("tailscaleUserId", userId), Filters.eq("posted", false)),
+                new com.mongodb.client.model.FindOneAndDeleteOptions().sort(Sorts.descending("_id"))
+        );
+        if (deleted != null) {
+            log.info("Deleted last activity log for user {}", userId);
+            return true;
+        }
+        log.info("No unposted activity log found to delete for user {}", userId);
+        return false;
+    }
+
     public void saveActivityLog(ActivityLog activityLog){
         Document doc = new Document()
                 .append("tailscaleUserId", activityLog.tailscaleUserId())
@@ -54,6 +71,17 @@ public class ActivityLogRepository {
         log.info("Saved activity log for user {}", activityLog.tailscaleUserId());
     }
 
+    public void markAsPosted(ActivityLog activityLog) {
+        if (activityLog.id() == null) {
+            throw new IllegalArgumentException("Cannot mark as posted: ActivityLog has no id (was it read from the database?)");
+        }
+        collection.updateOne(
+                Filters.eq("_id", new ObjectId(activityLog.id())),
+                Updates.set("posted", true)
+        );
+        log.info("Marked activity log {} as posted for user {}", activityLog.id(), activityLog.tailscaleUserId());
+    }
+
     private ActivityLog fromDoc(Document doc) {
         return new ActivityLog(
                 doc.getString("tailscaleUserId"),
@@ -65,7 +93,8 @@ public class ActivityLogRepository {
                 doc.getInteger("activityType"),
                 doc.getInteger("hours"),
                 doc.getInteger("minutes"),
-                doc.getBoolean("posted")
+                doc.getBoolean("posted"),
+                doc.getObjectId("_id").toHexString()
         );
     }
 }

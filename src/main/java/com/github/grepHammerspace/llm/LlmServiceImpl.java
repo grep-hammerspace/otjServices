@@ -131,7 +131,7 @@ public class LlmServiceImpl implements LlmService {
         String comments = node.has("comments") ? node.get("comments").asText() : "";
 
         return new ActivityLog(userId, learnerId, comments, "", date, startTime, 0,
-                Integer.parseInt(hoursMinutes[0]), Integer.parseInt(hoursMinutes[1]), false);
+                Integer.parseInt(hoursMinutes[0]), Integer.parseInt(hoursMinutes[1]), false, null);
     }
 
     private static String[] parseTimeSpent(String timeSpent) {

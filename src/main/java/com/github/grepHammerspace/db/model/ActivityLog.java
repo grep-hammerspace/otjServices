@@ -1,6 +1,6 @@
 package com.github.grepHammerspace.db.model;
 
-/** Wrapper around a pure otj. Has all the ke fields + tailscaleUserId and posted for easier querying
+/** Wrapper around a pure otj. Has all the key fields + tailscaleUserId,posted, and id for easier querying
  *  We write one of these to Mongo for each activity log that someone submits*/
 public record ActivityLog(
         String tailscaleUserId,
@@ -12,5 +12,6 @@ public record ActivityLog(
         int activityType,
         int hours,
         int minutes,
-        boolean posted
+        boolean posted,
+        String id   // nullable; null for new records, populated when read from MongoDB
 ) {}
