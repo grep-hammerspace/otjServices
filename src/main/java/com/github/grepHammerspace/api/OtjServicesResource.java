@@ -13,6 +13,7 @@ import com.github.grepHammerspace.llm.exception.LlmException;
 import com.github.grepHammerspace.llm.exception.LlmRateLimitException;
 import com.github.grepHammerspace.llm.LlmResult;
 import com.github.grepHammerspace.llm.LlmService;
+import com.github.grepHammerspace.stateStore.UserState;
 import com.github.grepHammerspace.stateStore.UserStateStore;
 import com.github.grepHammerspace.tailscale.TailscaleIdentityService;
 import com.github.grepHammerspace.web.OtjDriver;
@@ -26,6 +27,7 @@ import org.slf4j.LoggerFactory;
 
 import jakarta.validation.Valid;
 import javax.inject.Inject;
+import javax.inject.Provider;
 import java.io.IOException;
 import java.time.LocalDate;
 
@@ -42,17 +44,20 @@ public class OtjServicesResource {
     private final ActivityLogRepository activityLogRepository;
     private final TailscaleIdentityService tailscaleIdentityService;
     private final LlmService llmService;
+    private final Provider<OtjDriver> otjDriverProvider;
 
     @Inject
     public OtjServicesResource(UserStateStore userStateStore, UserRepository userRepository,
                                TailscaleIdentityService tailscaleIdentityService,
                                ActivityLogRepository activityLogRepository,
-                               LlmService llmService) {
+                               LlmService llmService,
+                               Provider<OtjDriver> otjDriverProvider) {
         this.userStateStore = userStateStore;
         this.userRepository = userRepository;
         this.activityLogRepository = activityLogRepository;
         this.tailscaleIdentityService = tailscaleIdentityService;
         this.llmService = llmService;
+        this.otjDriverProvider = otjDriverProvider;
     }
 
     /**
@@ -61,19 +66,23 @@ public class OtjServicesResource {
      * MFA tokens expire in ~30 s, so the browser session is kept alive in {@link com.github.grepHammerspace.stateStore.UserStateStore}
      * rather than being recreated on each request.
      */
-    @POST
+    @GET
     @Path("/prepare-browser")
     public Response prepareBrowser(@Context HttpServletRequest request) throws InterruptedException {
         String userId;
         try {
             userId = resolveUserState(request);
+            User user = userRepository.findByUserId(userId);
+            UserState userState = userStateStore.getStateForUser(userId);
+            OtjDriver driver = otjDriverProvider.get();
+            userState.setDriver(driver.prepareBrowser(user.username(), user.password()));
+
         } catch (IOException e) {
             return Response.status(Response.Status.UNAUTHORIZED).entity("{\"error\": \"" + e.getMessage() + "\"}").build();
         }
 
         // TODO: Get username and password for user from Mongo, decrypt them and create OtjDriver and call prepareBrowser, store the driver in the UserState so it can be used for later steps
-        // TODO: Ensure response code contains word "ready"
-        return Response.ok().build();
+        return Response.ok("{\"status\": \"ready\"}").build();
     }
 
     @POST
@@ -211,7 +220,7 @@ public class OtjServicesResource {
         try {
             userId = resolveUserState(request);
             log.info("Received submit-with-mfa request from user {}", userId);
-            driver = userStateStore.getStateForUser(userId).driver();
+            driver = userStateStore.getStateForUser(userId).getDriver();
             if (driver == null) {
                 return Response.status(Response.Status.INTERNAL_SERVER_ERROR)
                         .entity("{\"error\": \"No prepared browser session found for user, call /prepare-browser first\"}").build();

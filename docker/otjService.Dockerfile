@@ -18,7 +18,18 @@ FROM tailscale/tailscale:latest AS tailscale
 # Stage 3 — runtime
 FROM eclipse-temurin:25-jre
 
-RUN apt-get update -q && apt-get install -y -q curl jq && rm -rf /var/lib/apt/lists/*
+RUN apt-get update -q && \
+    apt-get install -y -q curl jq gnupg && \
+    install -d -m 0755 /etc/apt/keyrings && \
+    curl -fsSL https://packages.mozilla.org/apt/repo-signing-key.gpg \
+        -o /etc/apt/keyrings/packages.mozilla.org.asc && \
+    echo "deb [signed-by=/etc/apt/keyrings/packages.mozilla.org.asc] https://packages.mozilla.org/apt mozilla main" \
+        > /etc/apt/sources.list.d/mozilla.list && \
+    printf 'Package: *\nPin: origin packages.mozilla.org\nPin-Priority: 1000\n' \
+        > /etc/apt/preferences.d/mozilla && \
+    apt-get update -q && \
+    apt-get install -y -q firefox && \
+    rm -rf /var/lib/apt/lists/*
 
 COPY --from=tailscale /usr/local/bin/tailscale /usr/local/bin/tailscale
 COPY --from=tailscale /usr/local/bin/tailscaled /usr/local/bin/tailscaled

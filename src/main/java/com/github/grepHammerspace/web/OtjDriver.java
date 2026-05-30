@@ -2,7 +2,7 @@ package com.github.grepHammerspace.web;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.grepHammerspace.db.ActivityLogRepository;
-import com.github.grepHammerspace.db.UserRepository;
+import org.openqa.selenium.firefox.FirefoxOptions;
 import com.github.grepHammerspace.db.model.ActivityLog;
 import okhttp3.MediaType;
 import okhttp3.OkHttpClient;
@@ -18,7 +18,6 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
@@ -41,7 +40,9 @@ public class OtjDriver {
     @Inject
     public OtjDriver(ActivityLogRepository activityLogRepository){
         this.activityLogRepository = activityLogRepository;
-        this.driver = new FirefoxDriver();
+        FirefoxOptions options = new FirefoxOptions();
+        options.addArguments("--headless");
+        this.driver = new FirefoxDriver(options);
         this.http = new OkHttpClient();
         this.mapper = new ObjectMapper();
     }
