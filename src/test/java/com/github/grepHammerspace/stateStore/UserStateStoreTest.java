@@ -1,4 +1,4 @@
-package stateStore;
+package com.github.grepHammerspace.stateStore;
 
 import com.github.grepHammerspace.stateStore.UserStateStore;
 import org.junit.jupiter.api.Assertions;
