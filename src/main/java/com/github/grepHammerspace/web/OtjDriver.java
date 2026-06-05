@@ -180,7 +180,7 @@ public class OtjDriver {
             return new OtjSubmitResult(List.of(), List.of());
         }
 
-        String postUrl = String.format(ACTIVITY_LOG_API, pending.get(0).learnerId());
+        String postUrl = String.format(ACTIVITY_LOG_API, pending.get(0).learnerId().strip());
         log.info("Submitting {} pending OTJ(s) to {} for user {}", pending.size(), postUrl, userId);
 
         List<String> posted = new ArrayList<>();
@@ -220,7 +220,7 @@ public class OtjDriver {
 
     private Map<String, Object> buildPayload(ActivityLog log) {
         Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("learnerId", log.learnerId());
+        payload.put("learnerId", log.learnerId().strip());
         payload.put("activityImpact", log.activityImpact());
         payload.put("unitId", "ef974f73-5d9d-447e-8652-379ba9535229");
         payload.put("activityDate", log.activityDate().replace("/", "-"));

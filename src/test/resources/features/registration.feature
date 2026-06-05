@@ -13,6 +13,13 @@ Feature: User registration
     When I POST "/otj-services/register" with username "bob", password "pw2", learnerId ""
     Then the response status is 400
 
+  Scenario: Leading and trailing whitespace is stripped from username and learnerId before saving
+    When I POST "/otj-services/register" with username " padded-user ", password "pw", learnerId " learner-padded "
+    Then the response status is 201
+    And user "padded-user" in the users collection has fields:
+      | username  | padded-user    |
+      | learnerId | learner-padded |
+
   Scenario: Registering the same user twice upserts the existing record
     When I POST "/otj-services/register" with username "carol", password "pw3", learnerId "learner-v1"
     And  I POST "/otj-services/register" with username "carol", password "pw-changed", learnerId "learner-v2"
