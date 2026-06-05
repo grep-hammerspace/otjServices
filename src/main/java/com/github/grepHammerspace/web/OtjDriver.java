@@ -69,6 +69,10 @@ public class OtjDriver {
         public synchronized List<Cookie> loadForRequest(HttpUrl url) {
             return store.stream().filter(c -> c.matches(url)).toList();
         }
+
+        synchronized List<String> cookieNames() {
+            return store.stream().map(Cookie::name).toList();
+        }
     }
 
     /**
@@ -164,7 +168,12 @@ public class OtjDriver {
 
         try (Response response = httpClient.newCall(request).execute()) {
             response.body().string(); // consume to complete the redirect chain
-            log.info("MFA submitted, landing URL: {}", response.request().url());
+            String landingUrl = response.request().url().toString();
+            log.info("MFA submitted, landing URL: {}", landingUrl);
+            log.debug("Cookies after MFA: {}", ((InMemoryCookieJar) httpClient.cookieJar()).cookieNames());
+            if (!landingUrl.startsWith("https://education.oneadvanced.com")) {
+                throw new IOException("MFA code rejected — still on login page. Use a fresh OTP and try again.");
+            }
         }
     }
 
@@ -203,8 +212,9 @@ public class OtjDriver {
                         log.info("Posted activity log {} ({})", activityLog.id(), activityLog.activityDate());
                     } else {
                         failed.add(activityLog.id());
-                        log.warn("Failed to post activity log {} — HTTP {} body: {}",
+                        log.warn("Failed to post activity log {} — HTTP {} WWW-Authenticate: [{}] body: {}",
                                 activityLog.id(), response.code(),
+                                response.header("WWW-Authenticate"),
                                 response.body() != null ? response.body().string() : "null");
                     }
                 }

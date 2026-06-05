@@ -5,6 +5,8 @@
     </encoder>
   </appender>
 
+  <logger name="com.github.grepHammerspace.web.OtjDriver" level="DEBUG"/>
+
   <!-- Suppress noisy MongoDB cluster monitor heartbeat logs -->
   <logger name="org.mongodb.driver" level="WARN"/>
 

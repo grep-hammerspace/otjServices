@@ -234,8 +234,8 @@ public class OtjServicesResource {
             return Response.status(Response.Status.BAD_REQUEST)
                     .entity("{\"error\": \"" + e.getMessage() + "\"}").build();
         } catch (IOException e) {
-            return Response.status(Response.Status.INTERNAL_SERVER_ERROR)
-                    .entity("{\"error\": \"MFA submission failed: " + e.getMessage() + "\"}").build();
+            return Response.status(Response.Status.BAD_REQUEST)
+                    .entity("{\"error\": \"" + e.getMessage() + "\"}").build();
         }
 
         OtjSubmitResult result = driver.LogAllPendingOtjs(userId);
