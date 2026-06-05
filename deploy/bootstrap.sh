@@ -49,14 +49,27 @@ fi
 # ── Mode ──────────────────────────────────────────────────────────────────────
 
 MODE="debug"
+DETACH=true
 for arg in "$@"; do
-  [[ "$arg" == "--prod" ]] && MODE="prod"
+  [[ "$arg" == "--prod"       ]] && MODE="prod"
+  [[ "$arg" == "--no-detach"  ]] && DETACH=false
 done
 
 if [ "$MODE" = "prod" ]; then
   export JAVA_DEBUG=false
 else
   export JAVA_DEBUG=true
+fi
+
+# In prod mode detach from the SSH session so the deploy survives disconnects.
+# The script re-execs itself under nohup with --no-detach to skip this block.
+if [ "$MODE" = "prod" ] && [ "$DETACH" = "true" ]; then
+  LOG="/tmp/otj-deploy-$(date +%Y%m%d-%H%M%S).log"
+  info "Prod mode — detaching from terminal. Logs: $LOG"
+  nohup bash "$0" --prod --no-detach >"$LOG" 2>&1 &
+  disown
+  echo "    Running as PID $! — follow with: tail -f $LOG"
+  exit 0
 fi
 
 # ── Pre-flight ────────────────────────────────────────────────────────────────
@@ -79,15 +92,19 @@ docker-compose -f "$COMPOSE_FILE" up -d
 
 # ── Wait for services ─────────────────────────────────────────────────────────
 
-wait_for "mongo-express" "http://localhost:$ME_PORT"
-wait_for "app"           "http://localhost:$APP_PORT/health"
+if [ "$MODE" = "debug" ]; then
+  wait_for "mongo-express" "http://localhost:$ME_PORT"
+fi
+wait_for "app" "http://localhost:$APP_PORT/health"
 
 # ── Done ──────────────────────────────────────────────────────────────────────
 
 echo ""
 echo "  Stack is up."
 echo ""
+if [ "$MODE" = "debug" ]; then
 echo "  mongo-express  →  http://localhost:$ME_PORT"
+fi
 echo "  app            →  http://localhost:$APP_PORT/otj-services"
 if [ "$MODE" = "debug" ]; then
 echo "  debugger       →  localhost:$DEBUG_PORT  (attach IDE remote debugger)"
