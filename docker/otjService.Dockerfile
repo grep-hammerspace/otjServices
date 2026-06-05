@@ -1,7 +1,5 @@
 # Stage 1 — build
-FROM eclipse-temurin:25-jdk AS build
-
-RUN apt-get update -q && apt-get install -y -q maven && rm -rf /var/lib/apt/lists/*
+FROM maven:3.9-eclipse-temurin-25 AS build
 
 WORKDIR /app
 COPY pom.xml .
