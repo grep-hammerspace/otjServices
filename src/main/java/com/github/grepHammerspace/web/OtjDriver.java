@@ -2,94 +2,175 @@ package com.github.grepHammerspace.web;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.grepHammerspace.db.ActivityLogRepository;
-import org.openqa.selenium.firefox.FirefoxOptions;
 import com.github.grepHammerspace.db.model.ActivityLog;
-import okhttp3.MediaType;
-import okhttp3.OkHttpClient;
-import okhttp3.Request;
-import okhttp3.RequestBody;
-import org.openqa.selenium.*;
-import org.openqa.selenium.firefox.FirefoxDriver;
+import okhttp3.*;
+import org.jsoup.Jsoup;
+import org.jsoup.nodes.Document;
+import org.jsoup.nodes.Element;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.inject.Inject;
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.function.Function;
-import java.util.stream.Collectors;
 
-/**
- * Wrapper class around the basic Selenium WebDriver, it allows for individual WebDrivers to be created and used to login
- * in one clean package.
- */
 public class OtjDriver {
     private static final Logger log = LoggerFactory.getLogger(OtjDriver.class);
     private static final MediaType JSON_TYPE = MediaType.get("application/json");
-    private static final String LOGIN_URL = "https://education.oneadvanced.com/";
-    private static final String TIMELOG_URL = "https://education.oneadvanced.com/cloud-education/timelog";
-    private static final String ACTIVITY_LOG_API = "https://education.oneadvanced.com/api/cloud-education/v1/learner/%s/activity-log";
 
-    private final WebDriver driver;
+    // Entry point for the OneAdvanced SSO/Keycloak discovery flow.
+    // Double-encoded redirectUri passes through two layers of redirect before landing
+    // back at education.oneadvanced.com after a successful login.
+    private static final String DISCOVER_URL =
+            "https://auth.identity.oneadvanced.com/auth/discover"
+            + "?redirectUri=https%3A%2F%2Feducation.oneadvanced.com%2Fparseauth"
+            + "%3FredirectUri%3Dhttps%253A%252F%252Feducation.oneadvanced.com%252F";
+
+    private static final String ACTIVITY_LOG_API =
+            "https://education.oneadvanced.com/api/cloud-education/v1/learner/%s/activity-log";
+
+    private static final String USER_AGENT =
+            "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:151.0) Gecko/20100101 Firefox/151.0";
+
+    private final OkHttpClient httpClient;
+    private String mfaActionUrl;
     private final ActivityLogRepository activityLogRepository;
-    private final OkHttpClient http;
     private final ObjectMapper mapper;
 
     @Inject
-    public OtjDriver(ActivityLogRepository activityLogRepository){
+    public OtjDriver(ActivityLogRepository activityLogRepository) {
         this.activityLogRepository = activityLogRepository;
-        FirefoxOptions options = new FirefoxOptions();
-        options.addArguments("--headless");
-//        options.setBinary("Path to firefox if debugging locally");
-        this.driver = new FirefoxDriver(options);
-        this.http = new OkHttpClient();
         this.mapper = new ObjectMapper();
+
+        this.httpClient = new OkHttpClient.Builder()
+                .cookieJar(new InMemoryCookieJar())
+                .followRedirects(true)
+                .build();
     }
 
+    private static final class InMemoryCookieJar implements CookieJar {
+        private final List<Cookie> store = new ArrayList<>();
 
-    /**
-     *  Follows log in process all the way up to the page where we submit the MFA token, it leaves the browser open and ready for the token to be submitted.
-     * @param username
-     * @param password
-     * @return (hopefully) stateful browser session
-     * @throws InterruptedException
-     */
-    public OtjDriver prepareBrowser(String username, String password) throws InterruptedException {
-        driver.get(LOGIN_URL);
-        waitForElement(driver, By.name("emailOrUsername")).sendKeys(username + Keys.RETURN);
-        waitForElement(driver, By.name("username")).sendKeys(Keys.RETURN);
-        waitForElement(driver, By.id("password")).sendKeys(password, Keys.RETURN);
-        waitForElement(driver, By.id("otp"));
-
-        return this;
-    }
-
-    /**
-     * Use mfa token to sign in, when this exits, we should be fully authenticated and logged in.
-     * @param mfaToken
-     * @throws InterruptedException
-     */
-    public void submitMfaToken(String mfaToken) throws InterruptedException {
-        String originalUrl = driver.getCurrentUrl();
-        waitForElement(driver, By.id("otp")).sendKeys(mfaToken + Keys.RETURN);
-
-        long deadline = System.currentTimeMillis() + 10_000;
-        while (System.currentTimeMillis() < deadline) {
-            if (!driver.getCurrentUrl().equals(originalUrl)) return;
-            try {
-                WebElement error = driver.findElement(By.id("error_message"));
-                if (error.isDisplayed()) throw new IllegalStateException("MFA code was incorrect: " + error.getText());
-            } catch (NoSuchElementException ignored) {}
-            Thread.sleep(500);
+        @Override
+        public synchronized void saveFromResponse(HttpUrl url, List<Cookie> cookies) {
+            for (Cookie incoming : cookies) {
+                store.removeIf(existing ->
+                        existing.name().equals(incoming.name()) &&
+                        existing.domain().equals(incoming.domain()) &&
+                        existing.path().equals(incoming.path()));
+                store.add(incoming);
+            }
         }
-        throw new TimeoutException("MFA timed out — URL did not change within 30s");
+
+        @Override
+        public synchronized List<Cookie> loadForRequest(HttpUrl url) {
+            return store.stream().filter(c -> c.matches(url)).toList();
+        }
     }
 
     /**
-     * Get all unposted OTJs from Mongo and post them one by one to the OTJ API using the
-     * authenticated browser session cookies.
+     * Performs the multi-step Keycloak OIDC login flow over plain HTTP, stopping at the
+     * TOTP/MFA page. The session cookies and the MFA form action URL are retained in
+     * this instance so the caller can supply the OTP code separately.
+     */
+    public OtjDriver prepareBrowser(String username, String password) throws IOException {
+        boolean isEmail = username.contains("@");
+
+        Request initialRequest = new Request.Builder()
+                .url(DISCOVER_URL)
+                .header("User-Agent", USER_AGENT)
+                .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+                .header("Accept-Language", "en-US,en;q=0.9")
+                .build();
+
+        Response resp = httpClient.newCall(initialRequest).execute();
+        String currentUrl = resp.request().url().toString();
+        String currentBody = resp.body().string();
+        resp.close();
+
+        for (int step = 1; step <= 5; step++) {
+            Document doc = Jsoup.parse(currentBody, currentUrl);
+
+            if (doc.selectFirst("input[name=otp]") != null) {
+                Element form = doc.selectFirst("form");
+                if (form == null) throw new IOException("MFA page has no form — URL: " + currentUrl);
+                mfaActionUrl = form.absUrl("action");
+                log.info("MFA page reached after {} step(s), action={}", step - 1, mfaActionUrl);
+                return this;
+            }
+
+            Element form = doc.selectFirst("form");
+            if (form == null) {
+                throw new IOException("No form found at step " + step + " — URL: " + currentUrl);
+            }
+
+            FormBody.Builder formBody = new FormBody.Builder();
+            for (Element input : form.select("input")) {
+                String name = input.attr("name");
+                String type = input.attr("type").toLowerCase();
+                if (name.isEmpty()) continue;
+
+                if (type.equals("password")) {
+                    formBody.add(name, password);
+                } else if (name.equals("emailOrUsername")) {
+                    // The discovery page's JS renames this field to "email" or "username"
+                    // before submitting, depending on the format of the input value.
+                    formBody.add(isEmail ? "email" : "username", username);
+                } else if (name.equals("username")) {
+                    formBody.add(name, username);
+                } else if (type.equals("hidden")) {
+                    formBody.add(name, input.val());
+                }
+            }
+
+            String action = form.absUrl("action");
+            log.info("Step {} — POSTing to {}", step, action);
+
+            Request postRequest = new Request.Builder()
+                    .url(action)
+                    .header("User-Agent", USER_AGENT)
+                    .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+                    .post(formBody.build())
+                    .build();
+
+            resp = httpClient.newCall(postRequest).execute();
+            currentUrl = resp.request().url().toString();
+            currentBody = resp.body().string();
+            resp.close();
+        }
+
+        throw new IOException("Did not reach MFA page after 5 steps — last URL: " + currentUrl);
+    }
+
+    /**
+     * Completes login by POSTing the TOTP code to the stored MFA form action URL.
+     * Keycloak follows the OIDC callback chain and sets the final session cookies,
+     * which the cookie jar carries automatically into subsequent API calls.
+     */
+    public void submitMfaToken(String mfaToken) throws IOException {
+        if (mfaActionUrl == null) {
+            throw new IllegalStateException("No MFA action URL — call prepareBrowser first");
+        }
+
+        FormBody body = new FormBody.Builder().add("otp", mfaToken).build();
+        Request request = new Request.Builder()
+                .url(mfaActionUrl)
+                .header("User-Agent", USER_AGENT)
+                .post(body)
+                .build();
+
+        try (Response response = httpClient.newCall(request).execute()) {
+            response.body().string(); // consume to complete the redirect chain
+            log.info("MFA submitted, landing URL: {}", response.request().url());
+        }
+    }
+
+    /**
+     * Fetches all unposted OTJs from MongoDB and POSTs each one to the activity-log API.
+     * The httpClient already carries the authenticated session cookies from the login flow.
      */
     public OtjSubmitResult LogAllPendingOtjs(String userId) {
         List<ActivityLog> pending = activityLogRepository.getUnpostedActivityLogsFor(userId);
@@ -99,45 +180,41 @@ public class OtjDriver {
             return new OtjSubmitResult(List.of(), List.of());
         }
 
-        driver.get(TIMELOG_URL);
-        String cookieHeader = driver.manage().getCookies().stream()
-                .map(c -> c.getName() + "=" + c.getValue())
-                .collect(Collectors.joining("; "));
-
         String postUrl = String.format(ACTIVITY_LOG_API, pending.get(0).learnerId());
-        log.info("Submitting {}  pending OTJ(s) to {} for user {}", pending.size(), postUrl, userId);
+        log.info("Submitting {} pending OTJ(s) to {} for user {}", pending.size(), postUrl, userId);
 
         List<String> posted = new ArrayList<>();
         List<String> failed = new ArrayList<>();
 
-        for (ActivityLog log : pending) {
+        for (ActivityLog activityLog : pending) {
             try {
-                String json = mapper.writeValueAsString(buildPayload(log));
+                String json = mapper.writeValueAsString(buildPayload(activityLog));
 
                 Request request = new Request.Builder()
                         .url(postUrl)
-                        .addHeader("Cookie", cookieHeader)
-                        .addHeader("Content-Type", "application/json")
+                        .header("User-Agent", USER_AGENT)
                         .post(RequestBody.create(json, JSON_TYPE))
                         .build();
 
-                try (okhttp3.Response response = http.newCall(request).execute()) {
+                try (Response response = httpClient.newCall(request).execute()) {
                     if (response.isSuccessful()) {
-                        activityLogRepository.markAsPosted(log);
-                        posted.add(log.id());
-                        OtjDriver.log.info("Posted activity log {} ({})", log.id(), log.activityDate());
+                        activityLogRepository.markAsPosted(activityLog);
+                        posted.add(activityLog.id());
+                        log.info("Posted activity log {} ({})", activityLog.id(), activityLog.activityDate());
                     } else {
-                        failed.add(log.id());
-                        OtjDriver.log.warn("Failed to post activity log {} — HTTP {} body: {}", log.id(), response.code(), response.body() != null ? response.body().string() : "null");
+                        failed.add(activityLog.id());
+                        log.warn("Failed to post activity log {} — HTTP {} body: {}",
+                                activityLog.id(), response.code(),
+                                response.body() != null ? response.body().string() : "null");
                     }
                 }
             } catch (Exception e) {
-                failed.add(log.id());
-                OtjDriver.log.error("Exception posting activity log {}: {}", log.id(), e.getMessage());
+                failed.add(activityLog.id());
+                log.error("Exception posting activity log {}: {}", activityLog.id(), e.getMessage());
             }
         }
 
-        OtjDriver.log.info("Done — {}/{} posted, {} failed", posted.size(), pending.size(), failed.size());
+        log.info("Done — {}/{} posted, {} failed", posted.size(), pending.size(), failed.size());
         return new OtjSubmitResult(posted, failed);
     }
 
@@ -153,46 +230,5 @@ public class OtjDriver {
         payload.put("minutes", String.format("%02d", log.minutes()));
         OtjDriver.log.info("Posting payload: {}", payload);
         return payload;
-    }
-
-    private void waitForUrlChange(WebDriver driver, String originalUrl) throws InterruptedException {
-        waitForUrlChange(driver, originalUrl, 30, 500);
-    }
-
-    private void waitForUrlChange(WebDriver driver, String originalUrl, int timeoutSeconds, long pollIntervalMs) throws InterruptedException {
-        long deadline = System.currentTimeMillis() + timeoutSeconds * 1000L;
-        while (System.currentTimeMillis() < deadline) {
-            if (!driver.getCurrentUrl().equals(originalUrl)) {
-                return;
-            }
-            Thread.sleep(pollIntervalMs);
-        }
-        throw new TimeoutException("URL did not change from " + originalUrl + " within " + timeoutSeconds + "s — MFA may have failed or timed out");
-    }
-
-    private WebElement waitForElement(WebDriver driver, By by) throws InterruptedException {
-        return waitForElement(driver, by, 10, 250);
-    }
-
-    private WebElement waitForElement(WebDriver driver, Function<String, By> by, String selector) throws InterruptedException {
-        return waitForElement(driver, by.apply(selector), 10, 250);
-    }
-
-    private WebElement waitForElement(WebDriver driver, Function<String, By> by, String selector, int timeoutSeconds, long pollIntervalMs) throws InterruptedException {
-        return waitForElement(driver, by.apply(selector), timeoutSeconds, pollIntervalMs);
-    }
-
-    private WebElement waitForElement(WebDriver driver, By by, int timeoutSeconds, long pollIntervalMs) throws InterruptedException {
-        long deadline = System.currentTimeMillis() + timeoutSeconds * 1000L;
-        while (true) {
-            try {
-                return driver.findElement(by);
-            } catch (NoSuchElementException e) {
-                if (System.currentTimeMillis() > deadline) {
-                    throw new TimeoutException("Element '" + by + "' not found within " + timeoutSeconds + "s");
-                }
-                Thread.sleep(pollIntervalMs);
-            }
-        }
     }
 }

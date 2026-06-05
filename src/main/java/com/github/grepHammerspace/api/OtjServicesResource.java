@@ -68,7 +68,7 @@ public class OtjServicesResource {
      */
     @GET
     @Path("/prepare-browser")
-    public Response prepareBrowser(@Context HttpServletRequest request) throws InterruptedException {
+    public Response prepareBrowser(@Context HttpServletRequest request) {
         String userId;
         try {
             userId = resolveUserState(request);
@@ -76,12 +76,10 @@ public class OtjServicesResource {
             UserState userState = userStateStore.getStateForUser(userId);
             OtjDriver driver = otjDriverProvider.get();
             userState.setDriver(driver.prepareBrowser(user.username(), user.password()));
-
         } catch (IOException e) {
             return Response.status(Response.Status.UNAUTHORIZED).entity("{\"error\": \"" + e.getMessage() + "\"}").build();
         }
 
-        // TODO: Get username and password for user from Mongo, decrypt them and create OtjDriver and call prepareBrowser, store the driver in the UserState so it can be used for later steps
         return Response.ok("{\"status\": \"ready\"}").build();
     }
 
@@ -235,10 +233,9 @@ public class OtjServicesResource {
         } catch (IllegalStateException e) {
             return Response.status(Response.Status.BAD_REQUEST)
                     .entity("{\"error\": \"" + e.getMessage() + "\"}").build();
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
+        } catch (IOException e) {
             return Response.status(Response.Status.INTERNAL_SERVER_ERROR)
-                    .entity("{\"error\": \"Thread interrupted while waiting for MFA submission.\"}").build();
+                    .entity("{\"error\": \"MFA submission failed: " + e.getMessage() + "\"}").build();
         }
 
         OtjSubmitResult result = driver.LogAllPendingOtjs(userId);
