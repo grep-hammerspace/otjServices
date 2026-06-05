@@ -89,7 +89,7 @@ public class OtjServicesResource {
         try {
             String userId = resolveUserState(request);
             log.info("Received registration request from user {}, registering them with learnerId {}", userId, body.learnerId());
-            userRepository.save(new User(userId, body.username(), body.password(), body.learnerId()));
+            userRepository.save(new User(userId, body.username().strip(), body.password(), body.learnerId().strip()));
             userStateStore.createUserState(userId);
             return Response.status(Response.Status.CREATED).build();
         } catch (IOException e) {
