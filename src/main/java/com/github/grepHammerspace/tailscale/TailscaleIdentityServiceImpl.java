@@ -12,4 +12,5 @@ public class TailscaleIdentityServiceImpl implements TailscaleIdentityService {
     public String getUser(HttpServletRequest request) throws IOException {
         return TailscaleIdentityHelper.getUser(request);
     }
+
 }
