@@ -16,8 +16,10 @@ import com.github.grepHammerspace.llm.LlmService;
 import com.github.grepHammerspace.stateStore.UserState;
 import com.github.grepHammerspace.stateStore.UserStateStore;
 import com.github.grepHammerspace.tailscale.TailscaleIdentityService;
+import com.github.grepHammerspace.web.Driver;
 import com.github.grepHammerspace.web.OtjDriver;
 import com.github.grepHammerspace.web.OtjSubmitResult;
+import com.github.grepHammerspace.web.SmartAssessorDriver;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.ws.rs.*;
 import jakarta.ws.rs.core.Context;
@@ -45,19 +47,22 @@ public class OtjServicesResource {
     private final TailscaleIdentityService tailscaleIdentityService;
     private final LlmService llmService;
     private final Provider<OtjDriver> otjDriverProvider;
+    private final Provider<SmartAssessorDriver> smartAssessorDriverProvider;
 
     @Inject
     public OtjServicesResource(UserStateStore userStateStore, UserRepository userRepository,
                                TailscaleIdentityService tailscaleIdentityService,
                                ActivityLogRepository activityLogRepository,
                                LlmService llmService,
-                               Provider<OtjDriver> otjDriverProvider) {
+                               Provider<OtjDriver> otjDriverProvider,
+                               Provider<SmartAssessorDriver> smartAssessorDriverProvider) {
         this.userStateStore = userStateStore;
         this.userRepository = userRepository;
         this.activityLogRepository = activityLogRepository;
         this.tailscaleIdentityService = tailscaleIdentityService;
         this.llmService = llmService;
         this.otjDriverProvider = otjDriverProvider;
+        this.smartAssessorDriverProvider = smartAssessorDriverProvider;
     }
 
     /**
@@ -75,7 +80,7 @@ public class OtjServicesResource {
             User user = userRepository.findByUserId(userId);
             UserState userState = userStateStore.getStateForUser(userId);
             OtjDriver driver = otjDriverProvider.get();
-            userState.setDriver(driver.prepareBrowser(user.username(), user.password()));
+            userState.setDriver(driver.prepare(user.username(), user.password()));
         } catch (IOException e) {
             return Response.status(Response.Status.UNAUTHORIZED).entity("{\"error\": \"" + e.getMessage() + "\"}").build();
         }
@@ -214,7 +219,7 @@ public class OtjServicesResource {
     public Response useMfaCodeToSubmitUnSubmittedOTJs(@Valid SubmitWithMfaRequest body, @Context HttpServletRequest request){
 
         String userId;
-        OtjDriver driver;
+        Driver driver;
         try {
             userId = resolveUserState(request);
             log.info("Received submit-with-mfa request from user {} and mfa code {}", userId, body.mfaCode());
@@ -229,7 +234,7 @@ public class OtjServicesResource {
         }
 
         try {
-            driver.submitMfaToken(body.mfaCode());
+            driver.completeMfa(body.mfaCode());
         } catch (IllegalStateException e) {
             return Response.status(Response.Status.BAD_REQUEST)
                     .entity("{\"error\": \"" + e.getMessage() + "\"}").build();
@@ -238,7 +243,7 @@ public class OtjServicesResource {
                     .entity("{\"error\": \"" + e.getMessage() + "\"}").build();
         }
 
-        OtjSubmitResult result = driver.LogAllPendingOtjs(userId);
+        OtjSubmitResult result = driver.submitPendingOtjs(userId);
 
         if (result.nothingToPost()) {
             return Response.ok("{\"status\": \"nothing_to_post\", \"detail\": \"No unposted OTJs found.\"}").build();
@@ -253,6 +258,68 @@ public class OtjServicesResource {
         // partial success
         return Response.status(207)
                 .entity("{\"status\": \"partial\", \"posted\": " + result.posted().size() + ", \"failed\": " + result.failed().size() + "}").build();
+    }
+
+    /**
+     * Logs in to SmartAssessor via the QMUL Azure AD path.
+     * Sends a Microsoft Authenticator push notification to the user's phone and returns.
+     * Call {@code POST /smart-assessor/complete} once the user has approved the push.
+     */
+    @POST
+    @Path("/smart-assessor/prepare")
+    public Response smartAssessorPrepare(@Context HttpServletRequest request) {
+        String userId;
+        try {
+            userId = resolveUserState(request);
+            User user = userRepository.findByUserId(userId);
+            if (user == null) {
+                return Response.status(Response.Status.BAD_REQUEST)
+                        .entity("{\"error\": \"No registered user found — call POST /otj-services/register first\"}")
+                        .build();
+            }
+            SmartAssessorDriver driver = smartAssessorDriverProvider.get();
+            userStateStore.getStateForUser(userId).setDriver(driver.prepare(user.username(), user.password()));
+        } catch (IOException e) {
+            log.warn("SmartAssessor prepare failed: {}", e.getMessage());
+            return Response.status(Response.Status.BAD_REQUEST)
+                    .entity("{\"error\": \"" + e.getMessage() + "\"}").build();
+        }
+        return Response.ok("{\"status\": \"push_sent\", \"message\": \"Approve on your Microsoft Authenticator app, then call /smart-assessor/complete\"}").build();
+    }
+
+    /**
+     * Polls Microsoft until the phone push is approved, then completes the login.
+     * Blocks until approved (up to ~2 minutes) or times out.
+     */
+    @POST
+    @Path("/smart-assessor/complete")
+    public Response smartAssessorComplete(@Context HttpServletRequest request) {
+        String userId;
+        Driver driver;
+        try {
+            userId = resolveUserState(request);
+            driver = userStateStore.getStateForUser(userId).getDriver();
+            if (driver == null) {
+                return Response.status(Response.Status.BAD_REQUEST)
+                        .entity("{\"error\": \"No active session — call /smart-assessor/prepare first\"}").build();
+            }
+        } catch (IOException e) {
+            return Response.status(Response.Status.UNAUTHORIZED)
+                    .entity("{\"error\": \"" + e.getMessage() + "\"}").build();
+        }
+
+        try {
+            driver.completeMfa("");
+        } catch (IllegalStateException e) {
+            return Response.status(Response.Status.BAD_REQUEST)
+                    .entity("{\"error\": \"" + e.getMessage() + "\"}").build();
+        } catch (IOException e) {
+            log.warn("SmartAssessor complete failed: {}", e.getMessage());
+            return Response.status(Response.Status.BAD_REQUEST)
+                    .entity("{\"error\": \"" + e.getMessage() + "\"}").build();
+        }
+
+        return Response.ok("{\"status\": \"logged_in\"}").build();
     }
 
     /** Resolves the Tailscale login name and lazily initialises per-user state if it doesn't exist yet. */

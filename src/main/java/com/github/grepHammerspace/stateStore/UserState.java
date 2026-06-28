@@ -1,25 +1,22 @@
 package com.github.grepHammerspace.stateStore;
 
-import com.github.grepHammerspace.web.OtjDriver;
+import com.github.grepHammerspace.web.Driver;
 
-/**
- *  Data class to group useful information about a user and their web driver.
- */
 public class UserState {
     private final String userId;
-    private OtjDriver driver = null;
+    private Driver driver = null;
 
-    public UserState(String userId, OtjDriver driver){
+    public UserState(String userId, Driver driver){
         this.userId = userId;
         if (driver != null) {
             this.driver = driver;
         }
     }
 
-    public void setDriver(OtjDriver newDriver){
+    public void setDriver(Driver newDriver){
         this.driver = newDriver;
     }
-    public OtjDriver getDriver(){
+    public Driver getDriver(){
         return this.driver;
     }
 }

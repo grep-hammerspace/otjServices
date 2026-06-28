@@ -17,7 +17,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
-public class OtjDriver {
+public class OtjDriver implements Driver {
     private static final Logger log = LoggerFactory.getLogger(OtjDriver.class);
     private static final MediaType JSON_TYPE = MediaType.get("application/json");
 
@@ -80,7 +80,8 @@ public class OtjDriver {
      * TOTP/MFA page. The session cookies and the MFA form action URL are retained in
      * this instance so the caller can supply the OTP code separately.
      */
-    public OtjDriver prepareBrowser(String username, String password) throws IOException {
+    @Override
+    public OtjDriver prepare(String username, String password) throws IOException {
         boolean isEmail = username.contains("@");
 
         Request initialRequest = new Request.Builder()
@@ -154,9 +155,10 @@ public class OtjDriver {
      * Keycloak follows the OIDC callback chain and sets the final session cookies,
      * which the cookie jar carries automatically into subsequent API calls.
      */
-    public void submitMfaToken(String mfaToken) throws IOException {
+    @Override
+    public void completeMfa(String mfaToken) throws IOException {
         if (mfaActionUrl == null) {
-            throw new IllegalStateException("No MFA action URL — call prepareBrowser first");
+            throw new IllegalStateException("No MFA action URL — call prepare first");
         }
 
         FormBody body = new FormBody.Builder().add("otp", mfaToken).build();
@@ -181,7 +183,8 @@ public class OtjDriver {
      * Fetches all unposted OTJs from MongoDB and POSTs each one to the activity-log API.
      * The httpClient already carries the authenticated session cookies from the login flow.
      */
-    public OtjSubmitResult LogAllPendingOtjs(String userId) {
+    @Override
+    public OtjSubmitResult submitPendingOtjs(String userId) {
         List<ActivityLog> pending = activityLogRepository.getUnpostedActivityLogsFor(userId);
 
         if (pending.isEmpty()) {
