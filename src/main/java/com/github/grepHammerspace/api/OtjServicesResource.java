@@ -267,7 +267,7 @@ public class OtjServicesResource {
      * Sends a Microsoft Authenticator push notification to the user's phone and returns.
      * Call {@code POST /smart-assessor/complete} once the user has approved the push.
      */
-    @POST
+    @GET
     @Path("/smart-assessor/prepare")
     public Response smartAssessorPrepare(@Context HttpServletRequest request) {
         String userId;
@@ -300,7 +300,7 @@ public class OtjServicesResource {
      * Polls Microsoft until the phone push is approved, then completes the login.
      * Blocks until approved (up to ~2 minutes) or times out.
      */
-    @POST
+    @GET
     @Path("/smart-assessor/complete")
     public Response smartAssessorComplete(@Context HttpServletRequest request) {
         String userId;
