@@ -19,6 +19,7 @@ import com.github.grepHammerspace.tailscale.TailscaleIdentityService;
 import com.github.grepHammerspace.web.Driver;
 import com.github.grepHammerspace.web.OtjDriver;
 import com.github.grepHammerspace.web.OtjSubmitResult;
+import com.github.grepHammerspace.web.PrepareResult;
 import com.github.grepHammerspace.web.SmartAssessorDriver;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.ws.rs.*;
@@ -80,7 +81,8 @@ public class OtjServicesResource {
             User user = userRepository.findByUserId(userId);
             UserState userState = userStateStore.getStateForUser(userId);
             OtjDriver driver = otjDriverProvider.get();
-            userState.setDriver(driver.prepare(user.username(), user.password()));
+            driver.prepare(user.username(), user.password());
+            userState.setDriver(driver);
         } catch (IOException e) {
             return Response.status(Response.Status.UNAUTHORIZED).entity("{\"error\": \"" + e.getMessage() + "\"}").build();
         }
@@ -278,13 +280,20 @@ public class OtjServicesResource {
                         .build();
             }
             SmartAssessorDriver driver = smartAssessorDriverProvider.get();
-            userStateStore.getStateForUser(userId).setDriver(driver.prepare(user.username(), user.password()));
+            PrepareResult result = driver.prepare(user.username(), user.password());
+            userStateStore.getStateForUser(userId).setDriver(driver);
+            if (!result.requiresMfa()) {
+                return Response.ok("{\"status\": \"login_complete\", \"message\": \"" + result.userMessage() + "\"}").build();
+            }
+            String challengeField = result.status() == PrepareResult.Status.MFA_NUMBER_MATCH
+                    ? ", \"challengeNumber\": " + result.challengeNumber()
+                    : "";
+            return Response.ok("{\"status\": \"push_sent\", \"message\": \"" + result.userMessage() + "\"" + challengeField + "}").build();
         } catch (IOException e) {
             log.warn("SmartAssessor prepare failed: {}", e.getMessage());
             return Response.status(Response.Status.BAD_REQUEST)
                     .entity("{\"error\": \"" + e.getMessage() + "\"}").build();
         }
-        return Response.ok("{\"status\": \"push_sent\", \"message\": \"Approve on your Microsoft Authenticator app, then call /smart-assessor/complete\"}").build();
     }
 
     /**

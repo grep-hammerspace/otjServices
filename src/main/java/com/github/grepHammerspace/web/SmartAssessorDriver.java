@@ -158,7 +158,7 @@ public class SmartAssessorDriver implements Driver {
      * here and {@link #completeMfa(String)} becomes a no-op.
      */
     @Override
-    public SmartAssessorDriver prepare(String username, String password) throws IOException {
+    public PrepareResult prepare(String username, String password) throws IOException {
         this.mfaLogin = username;
         this.loginComplete = false;
 
@@ -253,7 +253,7 @@ public class SmartAssessorDriver implements Driver {
             log.info("Existing Microsoft SSO session detected — completing login without MFA");
             completeSamlChain(body, currentUrl);
             loginComplete = true;
-            return this;
+            return PrepareResult.loginComplete();
         }
 
         // ── Step 6: POST credentials to Microsoft login endpoint ────────────
@@ -310,7 +310,7 @@ public class SmartAssessorDriver implements Driver {
             log.info("Microsoft returned SAMLResponse directly — completing login without MFA");
             completeSamlChain(body, currentUrl);
             loginComplete = true;
-            return this;
+            return PrepareResult.loginComplete();
         }
 
         // ── Step 7: Extract MFA page state and send BeginAuth ────────────────
@@ -346,16 +346,28 @@ public class SmartAssessorDriver implements Driver {
                 .post(RequestBody.create(beginBody, JSON_TYPE))
                 .build();
 
+        PrepareResult result;
         try (Response beginResp = httpClient.newCall(beginReq).execute()) {
-            JsonNode json = decodeSasResponse(beginResp.body().string());
+            String rawBegin = beginResp.body().string();
+            log.debug("BeginAuth raw={}", rawBegin);
+            JsonNode json = decodeSasResponse(rawBegin);
             if (!json.path("Success").asBoolean()) {
-                throw new IOException("BeginAuth failed: " + json.path("ResultValue").asText());
+                String rv = json.path("ResultValue").asText();
+                String hint = "UserAuthFailedDuplicateRequest".equals(rv)
+                        ? " — a push is already pending; deny it on your phone (or wait ~60 s) then retry"
+                        : "";
+                throw new IOException("BeginAuth failed: " + rv + hint);
             }
             String updated = json.path("FlowToken").asText(null);
             if (updated != null && !updated.isEmpty()) mfaFlowToken = updated;
+
+            int entropy = json.path("Entropy").asInt(-1);
+            result = entropy >= 0
+                    ? PrepareResult.mfaNumberMatch(entropy)
+                    : PrepareResult.mfaPushSent();
         }
         log.info("Phone push sent — waiting for user to approve on Microsoft Authenticator");
-        return this;
+        return result;
     }
 
     /**
@@ -378,26 +390,37 @@ public class SmartAssessorDriver implements Driver {
         boolean approved = false;
 
         for (int poll = 1; poll <= MAX_POLL_ATTEMPTS; poll++) {
-            HttpUrl.Builder urlB = HttpUrl.parse(END_AUTH_URL).newBuilder()
-                    .addQueryParameter("authMethodId", "PhoneAppNotification")
-                    .addQueryParameter("pollCount",    String.valueOf(poll));
-            if (poll > 1) {
-                urlB.addQueryParameter("lastPollStart", String.valueOf(lastPollStart))
-                    .addQueryParameter("lastPollEnd",   String.valueOf(lastPollEnd));
-            }
-
             lastPollStart = System.currentTimeMillis();
+
+            java.util.Map<String, Object> endMap = new java.util.LinkedHashMap<>();
+            endMap.put("AuthMethodId", "PhoneAppNotification");
+            endMap.put("Method",       "EndAuth");
+            endMap.put("ctx",          mfaCtx);
+            endMap.put("flowToken",    mfaFlowToken);
+            endMap.put("PollCount",    poll);
+            endMap.put("sessionId",    mfaSessionId != null ? mfaSessionId : "");
+            if (poll > 1) {
+                endMap.put("lastPollStart", lastPollStart);
+                endMap.put("lastPollEnd",   lastPollEnd);
+            }
+            String endBody = mapper.writeValueAsString(endMap);
+            System.out.println("[DEBUG EndAuth poll=" + poll + "] body=" + endBody);
+
             Request pollReq = new Request.Builder()
-                    .url(urlB.build())
-                    .header("User-Agent",   USER_AGENT)
-                    .header("Accept",       "application/json")
-                    .header("hpgrequestid", mfaSessionId != null ? mfaSessionId : "")
-                    .header("canary",       mfaCanary    != null ? mfaCanary    : "")
-                    .get()
+                    .url(END_AUTH_URL)
+                    .header("User-Agent",        USER_AGENT)
+                    .header("Accept",            "application/json")
+                    .header("Content-type",      "application/json; charset=UTF-8")
+                    .header("hpgrequestid",      mfaSessionId != null ? mfaSessionId : "")
+                    .header("canary",            mfaCanary    != null ? mfaCanary    : "")
+                    .header("client-request-id", UUID.randomUUID().toString())
+                    .post(RequestBody.create(endBody, JSON_TYPE))
                     .build();
 
             try (Response pollResp = httpClient.newCall(pollReq).execute()) {
-                JsonNode json = decodeSasResponse(pollResp.body().string());
+                String rawPoll = pollResp.body().string();
+                System.out.println("[DEBUG EndAuth poll=" + poll + "] status=" + pollResp.code() + " raw=" + rawPoll);
+                JsonNode json = decodeSasResponse(rawPoll);
                 lastPollEnd = System.currentTimeMillis();
 
                 String updated = json.path("FlowToken").asText(null);
@@ -409,8 +432,10 @@ public class SmartAssessorDriver implements Driver {
                     break;
                 }
                 String result = json.path("ResultValue").asText();
+                System.out.println("[DEBUG EndAuth poll=" + poll + "] Success=" + json.path("Success") + " ResultValue=" + result);
                 if (!"AuthenticationPending".equals(result)) {
-                    throw new IOException("Unexpected MFA poll result: " + result);
+                    throw new IOException("Unexpected MFA poll result: " + result
+                            + " — full response: " + json.toPrettyString());
                 }
                 log.debug("Poll {}/{}: pending", poll, MAX_POLL_ATTEMPTS);
             }
@@ -486,11 +511,14 @@ public class SmartAssessorDriver implements Driver {
         return b.build();
     }
 
-    /** Decodes a base64-encoded Microsoft SAS API response into a JsonNode. */
+    /** Parses a Microsoft SAS API response body into a JsonNode. */
     private JsonNode decodeSasResponse(String raw) throws IOException {
-        // Microsoft SAS responses are base64-encoded JSON; use MIME decoder which is
-        // lenient about padding and whitespace.
-        byte[] bytes = Base64.getMimeDecoder().decode(raw.trim());
+        String trimmed = raw.trim();
+        if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+            return mapper.readTree(trimmed);
+        }
+        // Older behaviour: some endpoints return base64-encoded JSON.
+        byte[] bytes = Base64.getMimeDecoder().decode(trimmed);
         return mapper.readTree(bytes);
     }
 

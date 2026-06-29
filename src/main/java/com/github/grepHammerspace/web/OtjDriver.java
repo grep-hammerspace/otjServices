@@ -81,7 +81,7 @@ public class OtjDriver implements Driver {
      * this instance so the caller can supply the OTP code separately.
      */
     @Override
-    public OtjDriver prepare(String username, String password) throws IOException {
+    public PrepareResult prepare(String username, String password) throws IOException {
         boolean isEmail = username.contains("@");
 
         Request initialRequest = new Request.Builder()
@@ -104,7 +104,7 @@ public class OtjDriver implements Driver {
                 if (form == null) throw new IOException("MFA page has no form — URL: " + currentUrl);
                 mfaActionUrl = form.absUrl("action");
                 log.info("MFA page reached after {} step(s), action={}", step - 1, mfaActionUrl);
-                return this;
+                return PrepareResult.mfaPushSent();
             }
 
             Element form = doc.selectFirst("form");

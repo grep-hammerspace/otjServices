@@ -18,7 +18,6 @@ import java.util.List;
  */
 class SmartAssessorDriverManualTest {
 
-    // TODO: fill these in before running
     private static final String USERNAME = "ec24968@qmul.ac.uk";
     private static final String PASSWORD = "Apollocrocodile!";
 
@@ -27,11 +26,14 @@ class SmartAssessorDriverManualTest {
         SmartAssessorDriver driver = new SmartAssessorDriver();
 
         System.out.println("=== Step 1: logging in (email → Keycloak → Azure AD → credentials) ===");
-        driver.prepare(USERNAME, PASSWORD);
-        System.out.println("=== Push sent — approve on your Microsoft Authenticator app ===");
+        PrepareResult result = driver.prepare(USERNAME, PASSWORD);
+        System.out.println("=== prepare() status: " + result.status() + " ===");
+        System.out.println("=== " + result.userMessage() + " ===");
 
-        System.out.println("=== Step 2: polling for approval (up to 2 min) ===");
-        driver.completeMfa("");
+        if (result.requiresMfa()) {
+            System.out.println("=== Step 2: polling for approval (up to 2 min) ===");
+            driver.completeMfa("");
+        }
 
         System.out.println("=== Login complete. SmartAssessor cookies: ===");
         List<String> cookies = driver.cookiesFor("smartassessor.co.uk");
