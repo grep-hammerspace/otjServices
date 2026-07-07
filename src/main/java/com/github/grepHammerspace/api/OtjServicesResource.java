@@ -33,6 +33,10 @@ import javax.inject.Inject;
 import javax.inject.Provider;
 import java.io.IOException;
 import java.time.LocalDate;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 /** Primary JAX-RS resource for OTJ automation endpoints.
  */
@@ -288,10 +292,22 @@ public class OtjServicesResource {
             }
             SmartAssessorDriver driver = smartAssessorDriverProvider.get();
             PrepareResult result = driver.prepare(user.username(), user.password());
-            userStateStore.getStateForUser(userId).setDriver(driver);
+            UserState userState = userStateStore.getStateForUser(userId);
+            userState.setDriver(driver);
             if (!result.requiresMfa()) {
+                userState.setLoginFuture(CompletableFuture.completedFuture(null));
                 return Response.ok("{\"status\": \"login_complete\", \"message\": \"" + result.userMessage() + "\"}").build();
             }
+            CompletableFuture<Void> loginFuture = new CompletableFuture<>();
+            Thread.ofVirtual().start(() -> {
+                try {
+                    driver.completeMfa("");
+                    loginFuture.complete(null);
+                } catch (Exception e) {
+                    loginFuture.completeExceptionally(e);
+                }
+            });
+            userState.setLoginFuture(loginFuture);
             String challengeField = result.status() == PrepareResult.Status.MFA_NUMBER_MATCH
                     ? ", \"challengeNumber\": " + result.challengeNumber()
                     : "";
@@ -304,19 +320,19 @@ public class OtjServicesResource {
     }
 
     /**
-     * Polls Microsoft until the phone push is approved, then completes the login.
-     * Blocks until approved (up to ~2 minutes) or times out.
+     * Waits for the background EndAuth poll (started by /smart-assessor/prepare) to complete.
+     * Returns as soon as the user approves in Microsoft Authenticator.
      */
     @GET
     @Path("/smart-assessor/complete")
     public Response smartAssessorComplete(@Context HttpServletRequest request) {
         String userId;
-        Driver driver;
+        CompletableFuture<Void> loginFuture;
         try {
             userId = resolveUserState(request);
             log.info("Received request from user {} to do {}", userId, "smart-assessor/complete");
-            driver = userStateStore.getStateForUser(userId).getDriver();
-            if (driver == null) {
+            loginFuture = userStateStore.getStateForUser(userId).getLoginFuture();
+            if (loginFuture == null) {
                 return Response.status(Response.Status.BAD_REQUEST)
                         .entity("{\"error\": \"No active session — call /smart-assessor/prepare first\"}").build();
             }
@@ -326,17 +342,21 @@ public class OtjServicesResource {
         }
 
         try {
-            driver.completeMfa("");
-        } catch (IllegalStateException e) {
+            loginFuture.get(125, TimeUnit.SECONDS);
+            return Response.ok("{\"status\": \"logged_in\"}").build();
+        } catch (TimeoutException e) {
+            return Response.status(408)
+                    .entity("{\"error\": \"Timed out waiting for Microsoft Authenticator approval\"}").build();
+        } catch (ExecutionException e) {
+            Throwable cause = e.getCause();
+            log.warn("SmartAssessor complete failed: {}", cause.getMessage());
             return Response.status(Response.Status.BAD_REQUEST)
-                    .entity("{\"error\": \"" + e.getMessage() + "\"}").build();
-        } catch (IOException e) {
-            log.warn("SmartAssessor complete failed: {}", e.getMessage());
-            return Response.status(Response.Status.BAD_REQUEST)
-                    .entity("{\"error\": \"" + e.getMessage() + "\"}").build();
+                    .entity("{\"error\": \"" + cause.getMessage() + "\"}").build();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return Response.status(Response.Status.INTERNAL_SERVER_ERROR)
+                    .entity("{\"error\": \"Interrupted while waiting for approval\"}").build();
         }
-
-        return Response.ok("{\"status\": \"logged_in\"}").build();
     }
 
     /** Resolves the Tailscale login name and lazily initialises per-user state if it doesn't exist yet. */
