@@ -78,6 +78,7 @@ public class OtjServicesResource {
         String userId;
         try {
             userId = resolveUserState(request);
+            log.info("Received request from user {} to do {}", userId, "prepare-browser");
             User user = userRepository.findByUserId(userId);
             UserState userState = userStateStore.getStateForUser(userId);
             OtjDriver driver = otjDriverProvider.get();
@@ -95,7 +96,8 @@ public class OtjServicesResource {
     public Response register(@Valid RegisterRequest body, @Context HttpServletRequest request) {
         try {
             String userId = resolveUserState(request);
-            log.info("Received registration request from user {}, registering them with learnerId {}", userId, body.learnerId());
+            log.info("Received request from user {} to do {}", userId, "register");
+            log.info("Registering user {} with learnerId {}", userId, body.learnerId());
             userRepository.save(new User(userId, body.username().strip(), body.password(), body.learnerId().strip()));
             userStateStore.createUserState(userId);
             return Response.status(Response.Status.CREATED).build();
@@ -110,6 +112,7 @@ public class OtjServicesResource {
         String userId;
         try {
             userId = resolveUserState(request);
+            log.info("Received request from user {} to do {}", userId, "log-activities");
         } catch (IOException e) {
             return Response.status(Response.Status.UNAUTHORIZED)
                     .entity("{\"error\": \"" + e.getMessage() + "\"}").build();
@@ -188,6 +191,7 @@ public class OtjServicesResource {
         String userId;
         try {
             userId = resolveUserState(request);
+            log.info("Received request from user {} to do {}", userId, "delete-last-row");
         } catch (IOException e) {
             return Response.status(Response.Status.UNAUTHORIZED)
                     .entity("{\"error\": \"" + e.getMessage() + "\"}").build();
@@ -207,6 +211,7 @@ public class OtjServicesResource {
         String userId;
         try {
             userId = resolveUserState(request);
+            log.info("Received request from user {} to do {}", userId, "reset-notes");
         } catch (IOException e) {
             return Response.status(Response.Status.UNAUTHORIZED)
                     .entity("{\"error\": \"" + e.getMessage() + "\"}").build();
@@ -224,6 +229,7 @@ public class OtjServicesResource {
         Driver driver;
         try {
             userId = resolveUserState(request);
+            log.info("Received request from user {} to do {}", userId, "submit-with-mfa");
             log.info("Received submit-with-mfa request from user {} and mfa code {}", userId, body.mfaCode());
             driver = userStateStore.getStateForUser(userId).getDriver();
             if (driver == null) {
@@ -273,6 +279,7 @@ public class OtjServicesResource {
         String userId;
         try {
             userId = resolveUserState(request);
+            log.info("Received request from user {} to do {}", userId, "smart-assessor/prepare");
             User user = userRepository.findByUserId(userId);
             if (user == null) {
                 return Response.status(Response.Status.BAD_REQUEST)
@@ -307,6 +314,7 @@ public class OtjServicesResource {
         Driver driver;
         try {
             userId = resolveUserState(request);
+            log.info("Received request from user {} to do {}", userId, "smart-assessor/complete");
             driver = userStateStore.getStateForUser(userId).getDriver();
             if (driver == null) {
                 return Response.status(Response.Status.BAD_REQUEST)
