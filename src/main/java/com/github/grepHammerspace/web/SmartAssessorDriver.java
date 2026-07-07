@@ -404,7 +404,7 @@ public class SmartAssessorDriver implements Driver {
                 endMap.put("lastPollEnd",   lastPollEnd);
             }
             String endBody = mapper.writeValueAsString(endMap);
-            System.out.println("[DEBUG EndAuth poll=" + poll + "] body=" + endBody);
+            log.debug("EndAuth poll={} body={}", poll, endBody);
 
             Request pollReq = new Request.Builder()
                     .url(END_AUTH_URL)
@@ -419,7 +419,7 @@ public class SmartAssessorDriver implements Driver {
 
             try (Response pollResp = httpClient.newCall(pollReq).execute()) {
                 String rawPoll = pollResp.body().string();
-                System.out.println("[DEBUG EndAuth poll=" + poll + "] status=" + pollResp.code() + " raw=" + rawPoll);
+                log.debug("EndAuth poll={} status={} raw={}", poll, pollResp.code(), rawPoll);
                 JsonNode json = decodeSasResponse(rawPoll);
                 lastPollEnd = System.currentTimeMillis();
 
@@ -432,7 +432,7 @@ public class SmartAssessorDriver implements Driver {
                     break;
                 }
                 String result = json.path("ResultValue").asText();
-                System.out.println("[DEBUG EndAuth poll=" + poll + "] Success=" + json.path("Success") + " ResultValue=" + result);
+                log.debug("EndAuth poll={} Success={} ResultValue={}", poll, json.path("Success"), result);
                 if (!"AuthenticationPending".equals(result)) {
                     throw new IOException("Unexpected MFA poll result: " + result
                             + " — full response: " + json.toPrettyString());
