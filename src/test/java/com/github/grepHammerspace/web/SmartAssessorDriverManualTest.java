@@ -18,8 +18,7 @@ import java.util.List;
  */
 class SmartAssessorDriverManualTest {
 
-    private static final String USERNAME = "ec24968@qmul.ac.uk";
-    private static final String PASSWORD = "Apollocrocodile!";
+
 
     @Test
     void loginAndPrintSmartAssessorCookies() throws Exception {
