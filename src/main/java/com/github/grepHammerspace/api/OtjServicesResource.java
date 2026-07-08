@@ -320,7 +320,8 @@ public class OtjServicesResource {
     }
 
     /**
-     * Waits for the background EndAuth poll (started by /smart-assessor/prepare) to complete.
+     * Waits for the background EndAuth poll (started by /smart-assessor/prepare) to complete,
+     * then submits any unposted OTJs for the user.
      * Returns as soon as the user approves in Microsoft Authenticator.
      */
     @GET
@@ -343,7 +344,23 @@ public class OtjServicesResource {
 
         try {
             loginFuture.get(125, TimeUnit.SECONDS);
-            return Response.ok("{\"status\": \"logged_in\"}").build();
+
+            Driver driver = userStateStore.getStateForUser(userId).getDriver();
+            OtjSubmitResult result = driver.submitPendingOtjs(userId);
+
+            if (result.nothingToPost()) {
+                return Response.ok("{\"status\": \"nothing_to_post\", \"detail\": \"No unposted OTJs found.\"}").build();
+            }
+            if (result.allPosted()) {
+                return Response.ok("{\"status\": \"ok\", \"posted\": " + result.posted().size() + "}").build();
+            }
+            if (result.allFailed()) {
+                return Response.status(502)
+                        .entity("{\"status\": \"all_failed\", \"total\": " + result.failed().size() + ", \"failed\": " + result.failed().size() + "}").build();
+            }
+            // partial success
+            return Response.status(207)
+                    .entity("{\"status\": \"partial\", \"posted\": " + result.posted().size() + ", \"failed\": " + result.failed().size() + "}").build();
         } catch (TimeoutException e) {
             return Response.status(408)
                     .entity("{\"error\": \"Timed out waiting for Microsoft Authenticator approval\"}").build();

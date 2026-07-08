@@ -2,6 +2,8 @@ package com.github.grepHammerspace.web;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.github.grepHammerspace.db.ActivityLogRepository;
+import com.github.grepHammerspace.db.model.ActivityLog;
 import okhttp3.*;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
@@ -17,6 +19,7 @@ import java.security.MessageDigest;
 import java.security.SecureRandom;
 import java.util.ArrayList;
 import java.util.Base64;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -35,11 +38,16 @@ import java.util.regex.Pattern;
  *   1. prepare(username, password) — stops after sending the Microsoft Authenticator push
  *   2. completeMfa("") — polls until the user approves, then completes the redirect chain to SmartAssessor
  *      (no-op if an existing SSO session already finished login inside prepare)
+ *   3. submitPendingOtjs(userId) — posts unposted OTJs from Mongo to the cloud-education API
  */
 public class SmartAssessorDriver implements Driver {
     private static final Logger log = LoggerFactory.getLogger(SmartAssessorDriver.class);
 
     private static final MediaType JSON_TYPE = MediaType.get("application/json; charset=UTF-8");
+    private static final MediaType SUBMIT_JSON_TYPE = MediaType.get("application/json");
+
+    private static final String ACTIVITY_LOG_API =
+            "https://education.oneadvanced.com/api/cloud-education/v1/learner/%s/activity-log";
 
     // Keycloak OIDC endpoint for QMUL — bypasses OneAdvanced discover
     private static final String KEYCLOAK_AUTH_URL =
@@ -79,6 +87,7 @@ public class SmartAssessorDriver implements Driver {
     private final InMemoryCookieJar cookieJar;
     private final OkHttpClient httpClient;
     private final ObjectMapper mapper;
+    private final ActivityLogRepository activityLogRepository;
 
     // State held between prepare() and completeMfa()
     private String mfaCtx;
@@ -90,7 +99,8 @@ public class SmartAssessorDriver implements Driver {
     private boolean loginComplete = false;
 
     @Inject
-    public SmartAssessorDriver() {
+    public SmartAssessorDriver(ActivityLogRepository activityLogRepository) {
+        this.activityLogRepository = activityLogRepository;
         this.mapper = new ObjectMapper();
         this.cookieJar = new InMemoryCookieJar();
         this.httpClient = new OkHttpClient.Builder()
@@ -476,10 +486,72 @@ public class SmartAssessorDriver implements Driver {
         completeSamlChain(processHtml, processUrl);
     }
 
-    /** Not yet implemented — SmartAssessor OTJ submission API is pending analysis. */
+    /**
+     * Fetches all unposted OTJs from MongoDB and POSTs each one to the activity-log API.
+     * SmartAssessor's SSO and OtjDriver's OneAdvanced login both federate through the same
+     * Keycloak/identity.oneadvanced.com stack, so once completeMfa() lands on smartassessor.co.uk
+     * the cookie jar also carries a valid session for the shared cloud-education API.
+     */
     @Override
     public OtjSubmitResult submitPendingOtjs(String userId) {
-        throw new UnsupportedOperationException("SmartAssessor OTJ submission not yet implemented");
+        List<ActivityLog> pending = activityLogRepository.getUnpostedActivityLogsFor(userId);
+
+        if (pending.isEmpty()) {
+            log.info("No unposted OTJs found for user {}", userId);
+            return new OtjSubmitResult(List.of(), List.of());
+        }
+
+        String postUrl = String.format(ACTIVITY_LOG_API, pending.get(0).learnerId().strip());
+        log.info("Submitting {} pending OTJ(s) to {} for user {}", pending.size(), postUrl, userId);
+
+        List<String> posted = new ArrayList<>();
+        List<String> failed = new ArrayList<>();
+
+        for (ActivityLog activityLog : pending) {
+            try {
+                String json = mapper.writeValueAsString(buildPayload(activityLog));
+
+                Request request = new Request.Builder()
+                        .url(postUrl)
+                        .header("User-Agent", USER_AGENT)
+                        .post(RequestBody.create(json, SUBMIT_JSON_TYPE))
+                        .build();
+
+                try (Response response = httpClient.newCall(request).execute()) {
+                    if (response.isSuccessful()) {
+                        activityLogRepository.markAsPosted(activityLog);
+                        posted.add(activityLog.id());
+                        log.info("Posted activity log {} ({})", activityLog.id(), activityLog.activityDate());
+                    } else {
+                        failed.add(activityLog.id());
+                        log.warn("Failed to post activity log {} — HTTP {} WWW-Authenticate: [{}] body: {}",
+                                activityLog.id(), response.code(),
+                                response.header("WWW-Authenticate"),
+                                response.body() != null ? response.body().string() : "null");
+                    }
+                }
+            } catch (Exception e) {
+                failed.add(activityLog.id());
+                log.error("Exception posting activity log {}: {}", activityLog.id(), e.getMessage());
+            }
+        }
+
+        log.info("Done — {}/{} posted, {} failed", posted.size(), pending.size(), failed.size());
+        return new OtjSubmitResult(posted, failed);
+    }
+
+    private Map<String, Object> buildPayload(ActivityLog activityLog) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("learnerId", activityLog.learnerId().strip());
+        payload.put("activityImpact", activityLog.activityImpact());
+        payload.put("unitId", "ef974f73-5d9d-447e-8652-379ba9535229");
+        payload.put("activityDate", activityLog.activityDate().replace("/", "-"));
+        payload.put("activityTime", "T" + activityLog.activityTime() + ":00");
+        payload.put("activityType", activityLog.activityType());
+        payload.put("hours", activityLog.hours());
+        payload.put("minutes", String.format("%02d", activityLog.minutes()));
+        log.info("Posting payload: {}", payload);
+        return payload;
     }
 
     // ── Helpers ────────────────────────────────────────────────────────────────
