@@ -5,7 +5,7 @@ Feature: User registration
     Then the response status is 201
     And user "alice" in the users collection has fields:
       | username  | alice        |
-      | password  | pw1          |
+      | password  | ENC:         |
       | learnerId | learner-alice |
       | userId    | test-user-id |
 
@@ -25,5 +25,5 @@ Feature: User registration
     And  I POST "/otj-services/register" with username "carol", password "pw-changed", learnerId "learner-v2"
     Then the response status is 201
     And user "carol" in the users collection has fields:
-      | password  | pw-changed |
+      | password  | ENC:       |
       | learnerId | learner-v2 |

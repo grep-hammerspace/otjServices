@@ -1,5 +1,6 @@
 package com.github.grepHammerspace.db;
 
+import com.github.grepHammerspace.crypto.PasswordCipher;
 import com.github.grepHammerspace.db.model.User;
 import com.mongodb.client.MongoCollection;
 import com.mongodb.client.MongoDatabase;
@@ -20,10 +21,12 @@ public class UserRepository {
     private static final Logger log = LoggerFactory.getLogger(UserRepository.class);
 
     private final MongoCollection<Document> collection;
+    private final PasswordCipher passwordCipher;
 
     @Inject
-    public UserRepository(MongoDatabase database) {
+    public UserRepository(MongoDatabase database, PasswordCipher passwordCipher) {
         this.collection = database.getCollection("users");
+        this.passwordCipher = passwordCipher;
     }
 
     /** Upserts the user record — re-registering the same Tailscale user updates rather than duplicates. */
@@ -31,7 +34,7 @@ public class UserRepository {
         Document doc = new Document()
                 .append("userId", user.userId())
                 .append("username", user.username())
-                .append("password", user.password())
+                .append("password", passwordCipher.encrypt(user.password()))
                 .append("learnerId", user.learnerId());
 
         // upsert so re-registering the same Tailscale user updates rather than duplicates
@@ -50,7 +53,7 @@ public class UserRepository {
         return new User(
                 doc.getString("userId"),
                 doc.getString("username"),
-                doc.getString("password"),
+                passwordCipher.decrypt(doc.getString("password")),
                 doc.getString("learnerId")
         );
     }

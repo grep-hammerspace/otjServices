@@ -1,5 +1,6 @@
 package com.github.grepHammerspace.db;
 
+import com.github.grepHammerspace.crypto.PasswordCipher;
 import com.github.grepHammerspace.db.model.User;
 import com.mongodb.client.MongoClients;
 import com.mongodb.client.MongoDatabase;
@@ -20,7 +21,8 @@ class UserRepositoryIT {
     static void startMongo() {
         MONGO.start();
         database = MongoClients.create(MONGO.getConnectionString()).getDatabase("testdb");
-        repository = new UserRepository(database);
+        PasswordCipher cipher = new PasswordCipher("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=");
+        repository = new UserRepository(database, cipher);
     }
 
     @Test

@@ -58,6 +58,10 @@ public class RegistrationSteps {
      * in the DataTable matches the stored value. The DataTable is a two-column map of
      * {@code field | expected value} — only the listed fields are checked, so scenarios only
      * need to specify the fields they care about.
+     *
+     * <p>The {@code password} field is stored encrypted (see {@code PasswordCipher}) with a
+     * random IV each time, so it can never match an exact expected value — it is checked with
+     * {@code startsWith} instead of equality.
      */
     @And("user {string} in the users collection has fields:")
     public void userHasFields(String username, io.cucumber.datatable.DataTable table) {
@@ -66,8 +70,14 @@ public class RegistrationSteps {
             .find(new org.bson.Document("username", username))
             .first();
         assertNotNull(doc, "Expected user '" + username + "' in MongoDB but found none");
-        table.asMap().forEach((field, expected) ->
-            assertEquals(expected, doc.getString(field),
-                "Field '" + field + "' mismatch for user '" + username + "'"));
+        table.asMap().forEach((field, expected) -> {
+            if (field.equals("password")) {
+                assertTrue(doc.getString(field).startsWith(expected),
+                    "Field 'password' should start with '" + expected + "' for user '" + username + "'");
+            } else {
+                assertEquals(expected, doc.getString(field),
+                    "Field '" + field + "' mismatch for user '" + username + "'");
+            }
+        });
     }
 }

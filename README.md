@@ -22,8 +22,8 @@ systemd Quadlet unit — no docker-compose, no elevated container privileges.
 - **CI/CD**: `.github/workflows/ci-cd.yml` runs `mvn test` on GitHub-hosted runners,
   then a self-hosted runner installed on the VM itself builds the image and restarts
   the Quadlet unit on push to `master`. No inbound SSH from GitHub; secrets
-  (`MONGO_URI`, `ANTHROPIC_API_KEY`) live only in the VM's Quadlet `EnvironmentFile`,
-  never in GitHub Actions.
+  (`MONGO_URI`, `ANTHROPIC_API_KEY`, `PASSWORD_ENCRYPTION_KEY`) live only in the VM's
+  Quadlet `EnvironmentFile`, never in GitHub Actions.
 
 Full step-by-step migration plan, including the VM/Tailscale/runner setup that has to
 be done by hand once: [`deployment-migration-plan.html`](deployment-migration-plan.html).
@@ -41,6 +41,7 @@ podman build -t otj-hours-api:local -f docker/otjService.Dockerfile .
 podman run -d --name otj-test -p 127.0.0.1:8945:8945 \
   -e MONGO_URI="mongodb+srv://..." \
   -e ANTHROPIC_API_KEY="sk-ant-..." \
+  -e PASSWORD_ENCRYPTION_KEY="$(python3 -c 'import secrets, base64; print(base64.b64encode(secrets.token_bytes(32)).decode())')" \
   otj-hours-api:local
 curl -s http://127.0.0.1:8945/health
 ```
