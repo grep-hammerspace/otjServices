@@ -5,8 +5,8 @@ import org.slf4j.LoggerFactory;
 
 import  java.util.concurrent.ConcurrentHashMap;
 /**
- * Simple ConcurrentHashMap-based state store. It will be used to maintain state for active Users, we do this so that everyone cna have their own
- * WebDriver instance ready to use when they need to log in, this is mostly for speed because MFA tokens are only alive for 30 seconds.
+ * Simple ConcurrentHashMap-based state store. It will be used to maintain state for active Users, we do this so that everyone can have their own
+ * logged-in {@link com.github.grepHammerspace.web.Driver} session ready to use, this is mostly for speed because MFA tokens are only alive for 30 seconds.
  */
 
 public class UserStateStore {
