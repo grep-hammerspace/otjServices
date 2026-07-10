@@ -36,9 +36,6 @@ import java.util.stream.Collectors;
  */
 @Module
 public class TestAppModule {
-    // 32 zero bytes, base64-encoded — deterministic, test-only key.
-    private static final String TEST_PASSWORD_ENCRYPTION_KEY = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
-
     private final String mongoUri;
     private final String testUserId;
 
@@ -65,7 +62,7 @@ public class TestAppModule {
 
     @Provides @Singleton
     PasswordCipher providePasswordCipher() {
-        return new PasswordCipher(TEST_PASSWORD_ENCRYPTION_KEY);
+        return new PasswordCipher(testutil.TestKeys.PASSWORD_ENCRYPTION_KEY);
     }
 
     /**

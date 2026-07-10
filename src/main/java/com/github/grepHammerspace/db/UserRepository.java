@@ -34,7 +34,7 @@ public class UserRepository {
         Document doc = new Document()
                 .append("userId", user.userId())
                 .append("username", user.username())
-                .append("password", passwordCipher.encrypt(user.password()))
+                .append("password", passwordCipher.encrypt(user.password(), user.userId()))
                 .append("learnerId", user.learnerId());
 
         // upsert so re-registering the same Tailscale user updates rather than duplicates
@@ -53,7 +53,7 @@ public class UserRepository {
         return new User(
                 doc.getString("userId"),
                 doc.getString("username"),
-                passwordCipher.decrypt(doc.getString("password")),
+                passwordCipher.decrypt(doc.getString("password"), userId),
                 doc.getString("learnerId")
         );
     }

@@ -21,7 +21,7 @@ class UserRepositoryIT {
     static void startMongo() {
         MONGO.start();
         database = MongoClients.create(MONGO.getConnectionString()).getDatabase("testdb");
-        PasswordCipher cipher = new PasswordCipher("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=");
+        PasswordCipher cipher = new PasswordCipher(testutil.TestKeys.PASSWORD_ENCRYPTION_KEY);
         repository = new UserRepository(database, cipher);
     }
 
