@@ -1,5 +1,6 @@
 package integration;
 
+import com.github.grepHammerspace.crypto.PasswordCipher;
 import com.github.grepHammerspace.db.model.ActivityLog;
 import com.github.grepHammerspace.llm.LlmResult;
 import com.github.grepHammerspace.llm.LlmService;
@@ -27,6 +28,8 @@ import java.util.stream.Collectors;
  *   <li><b>{@link com.github.grepHammerspace.tailscale.TailscaleIdentityService}</b> — replaced
  *       with a lambda that returns a fixed {@code testUserId}, so tests do not require a running
  *       Tailscale daemon. All scenarios therefore appear to come from the same user.</li>
+ *   <li><b>{@link com.github.grepHammerspace.crypto.PasswordCipher}</b> — constructed with a fixed
+ *       test-only key instead of reading {@code PASSWORD_ENCRYPTION_KEY} from the environment.</li>
  * </ul>
  * All other bindings ({@link com.github.grepHammerspace.stateStore.UserStateStore},
  * {@link com.github.grepHammerspace.db.UserRepository}, etc.) are the real production classes.
@@ -55,6 +58,11 @@ public class TestAppModule {
     @Provides @Singleton
     TailscaleIdentityService provideTailscaleIdentityService() {
         return request -> testUserId;
+    }
+
+    @Provides @Singleton
+    PasswordCipher providePasswordCipher() {
+        return new PasswordCipher(testutil.TestKeys.PASSWORD_ENCRYPTION_KEY);
     }
 
     /**

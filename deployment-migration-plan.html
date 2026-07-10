@@ -1,0 +1,706 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>otjServices Deployment Migration Plan</title>
+<style>
+  :root {
+    --paper: #eef1ef;
+    --paper-raised: #e4e9e6;
+    --ink: #182422;
+    --ink-soft: #47524f;
+    --line: rgba(24, 36, 34, 0.14);
+    --line-strong: rgba(24, 36, 34, 0.28);
+    --accent: #1f6f78;
+    --accent-ink: #ffffff;
+    --warm: #a85f24;
+    --warm-bg: rgba(168, 95, 36, 0.1);
+    --code-bg: #1b2624;
+    --code-ink: #d8e6e2;
+    --code-accent: #7fd4c9;
+    --pill-code-bg: rgba(31, 111, 120, 0.12);
+    --pill-code-ink: #175961;
+    --pill-manual-bg: rgba(168, 95, 36, 0.12);
+    --pill-manual-ink: #8a4c1c;
+    --shadow: 0 1px 2px rgba(24, 36, 34, 0.06), 0 8px 24px -12px rgba(24, 36, 34, 0.18);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper: #10181a;
+      --paper-raised: #17211f;
+      --ink: #e7eeec;
+      --ink-soft: #a9b8b4;
+      --line: rgba(231, 238, 236, 0.14);
+      --line-strong: rgba(231, 238, 236, 0.26);
+      --accent: #62c8ce;
+      --accent-ink: #0b1615;
+      --warm: #e3a968;
+      --warm-bg: rgba(227, 169, 104, 0.12);
+      --code-bg: #0b1413;
+      --code-ink: #d8e6e2;
+      --code-accent: #8fe0d4;
+      --pill-code-bg: rgba(98, 200, 206, 0.14);
+      --pill-code-ink: #8fe0d4;
+      --pill-manual-bg: rgba(227, 169, 104, 0.14);
+      --pill-manual-ink: #e3a968;
+      --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 28px -12px rgba(0, 0, 0, 0.55);
+    }
+  }
+  :root[data-theme="dark"] {
+    --paper: #10181a;
+    --paper-raised: #17211f;
+    --ink: #e7eeec;
+    --ink-soft: #a9b8b4;
+    --line: rgba(231, 238, 236, 0.14);
+    --line-strong: rgba(231, 238, 236, 0.26);
+    --accent: #62c8ce;
+    --accent-ink: #0b1615;
+    --warm: #e3a968;
+    --warm-bg: rgba(227, 169, 104, 0.12);
+    --code-bg: #0b1413;
+    --code-ink: #d8e6e2;
+    --code-accent: #8fe0d4;
+    --pill-code-bg: rgba(98, 200, 206, 0.14);
+    --pill-code-ink: #8fe0d4;
+    --pill-manual-bg: rgba(227, 169, 104, 0.14);
+    --pill-manual-ink: #e3a968;
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 28px -12px rgba(0, 0, 0, 0.55);
+  }
+  :root[data-theme="light"] {
+    --paper: #eef1ef;
+    --paper-raised: #e4e9e6;
+    --ink: #182422;
+    --ink-soft: #47524f;
+    --line: rgba(24, 36, 34, 0.14);
+    --line-strong: rgba(24, 36, 34, 0.28);
+    --accent: #1f6f78;
+    --accent-ink: #ffffff;
+    --warm: #a85f24;
+    --warm-bg: rgba(168, 95, 36, 0.1);
+    --code-bg: #1b2624;
+    --code-ink: #d8e6e2;
+    --code-accent: #7fd4c9;
+    --pill-code-bg: rgba(31, 111, 120, 0.12);
+    --pill-code-ink: #175961;
+    --pill-manual-bg: rgba(168, 95, 36, 0.12);
+    --pill-manual-ink: #8a4c1c;
+    --shadow: 0 1px 2px rgba(24, 36, 34, 0.06), 0 8px 24px -12px rgba(24, 36, 34, 0.18);
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: Charter, "Bitstream Charter", "Sitka Text", Cambria, Georgia, serif;
+    font-size: 17px;
+    line-height: 1.62;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  code, pre, .mono {
+    font-family: "SF Mono", "Cascadia Code", "JetBrains Mono", Consolas, "Liberation Mono", monospace;
+  }
+
+  a { color: var(--accent); }
+  a:focus-visible, button:focus-visible, summary:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+
+  .shell {
+    max-width: 1180px;
+    margin: 0 auto;
+    padding: 0 clamp(20px, 4vw, 56px) 96px;
+    display: grid;
+    grid-template-columns: 240px minmax(0, 1fr);
+    gap: clamp(24px, 4vw, 64px);
+  }
+
+  header.masthead {
+    max-width: 1180px;
+    margin: 0 auto;
+    padding: clamp(36px, 6vw, 64px) clamp(20px, 4vw, 56px) clamp(28px, 4vw, 40px);
+    border-bottom: 1px solid var(--line);
+  }
+
+  .eyebrow {
+    font-family: "SF Mono", Consolas, monospace;
+    font-size: 12.5px;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin: 0 0 14px;
+  }
+
+  h1.title {
+    font-family: "Avenir Next", "Segoe UI Semibold", "Helvetica Neue", Arial, sans-serif;
+    font-weight: 700;
+    font-size: clamp(28px, 4.4vw, 42px);
+    line-height: 1.12;
+    letter-spacing: -0.01em;
+    margin: 0 0 12px;
+    text-wrap: balance;
+    max-width: 18ch;
+  }
+
+  .dek {
+    font-size: 18px;
+    color: var(--ink-soft);
+    max-width: 56ch;
+    margin: 0 0 20px;
+  }
+
+  .meta-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px 22px;
+    font-family: "SF Mono", Consolas, monospace;
+    font-size: 12.5px;
+    color: var(--ink-soft);
+  }
+  .meta-row span b { color: var(--ink); font-weight: 600; }
+
+  nav.toc {
+    position: sticky;
+    top: 28px;
+    align-self: start;
+    font-family: "Avenir Next", "Segoe UI Semibold", "Helvetica Neue", Arial, sans-serif;
+    font-size: 13.5px;
+    padding-top: 40px;
+  }
+  nav.toc .toc-label {
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    font-size: 11.5px;
+    color: var(--ink-soft);
+    margin: 0 0 12px;
+    font-weight: 600;
+  }
+  nav.toc ol {
+    list-style: none;
+    margin: 0 0 22px;
+    padding: 0;
+    border-left: 1px solid var(--line);
+  }
+  nav.toc li { margin: 0; }
+  nav.toc a {
+    display: block;
+    padding: 6px 0 6px 14px;
+    margin-left: -1px;
+    border-left: 2px solid transparent;
+    color: var(--ink-soft);
+    text-decoration: none;
+    line-height: 1.35;
+  }
+  nav.toc a:hover { color: var(--ink); border-left-color: var(--line-strong); }
+  nav.toc .toc-num { color: var(--accent); font-family: "SF Mono", Consolas, monospace; margin-right: 6px; }
+
+  main { min-width: 0; padding-top: 40px; }
+
+  section.block { margin: 0 0 52px; }
+  section.block:last-child { margin-bottom: 0; }
+
+  h2.h-context {
+    font-family: "Avenir Next", "Segoe UI Semibold", "Helvetica Neue", Arial, sans-serif;
+    font-size: 22px;
+    font-weight: 700;
+    margin: 0 0 16px;
+  }
+
+  p { margin: 0 0 16px; }
+  p:last-child { margin-bottom: 0; }
+
+  .lede-card {
+    background: var(--paper-raised);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 22px 24px;
+    box-shadow: var(--shadow);
+  }
+
+  .decisions {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+    gap: 1px;
+    background: var(--line);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    overflow: hidden;
+    margin: 22px 0 0;
+  }
+  .decision {
+    background: var(--paper);
+    padding: 18px 20px;
+  }
+  .decision .k {
+    font-family: "SF Mono", Consolas, monospace;
+    font-size: 11px;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+    margin: 0 0 8px;
+  }
+  .decision .v {
+    font-family: "Avenir Next", "Segoe UI Semibold", "Helvetica Neue", Arial, sans-serif;
+    font-size: 15.5px;
+    font-weight: 600;
+    line-height: 1.35;
+    color: var(--ink);
+  }
+
+  .step {
+    display: grid;
+    grid-template-columns: 44px minmax(0, 1fr);
+    gap: 18px;
+    padding: 30px 0;
+    border-top: 1px solid var(--line);
+    scroll-margin-top: 24px;
+  }
+  section.block .step:first-of-type { border-top: none; padding-top: 4px; }
+
+  .step-num {
+    font-family: "SF Mono", Consolas, monospace;
+    font-size: 15px;
+    color: var(--accent);
+    padding-top: 2px;
+  }
+
+  .step-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 10px 14px;
+    margin-bottom: 10px;
+  }
+
+  h3.step-title {
+    font-family: "Avenir Next", "Segoe UI Semibold", "Helvetica Neue", Arial, sans-serif;
+    font-size: 19px;
+    font-weight: 700;
+    margin: 0;
+    letter-spacing: -0.005em;
+  }
+
+  .pill {
+    font-family: "SF Mono", Consolas, monospace;
+    font-size: 11px;
+    letter-spacing: 0.04em;
+    padding: 3px 9px;
+    border-radius: 999px;
+    white-space: nowrap;
+  }
+  .pill.code { background: var(--pill-code-bg); color: var(--pill-code-ink); }
+  .pill.manual { background: var(--pill-manual-bg); color: var(--pill-manual-ink); }
+
+  .step-body :first-child { margin-top: 0; }
+
+  pre {
+    background: var(--code-bg);
+    color: var(--code-ink);
+    border-radius: 8px;
+    padding: 16px 18px;
+    overflow-x: auto;
+    font-size: 13.3px;
+    line-height: 1.55;
+    margin: 14px 0;
+    box-shadow: var(--shadow);
+  }
+  pre code { font-family: inherit; color: inherit; background: none; padding: 0; }
+  code.inline, .step-body code {
+    font-family: "SF Mono", Consolas, monospace;
+    font-size: 0.87em;
+    background: var(--paper-raised);
+    padding: 0.1em 0.4em;
+    border-radius: 4px;
+    border: 1px solid var(--line);
+  }
+  pre code.inline, pre code { background: none; border: none; padding: 0; }
+
+  .callout {
+    display: flex;
+    gap: 12px;
+    background: var(--warm-bg);
+    border: 1px solid rgba(168, 95, 36, 0.35);
+    border-radius: 8px;
+    padding: 14px 16px;
+    margin: 16px 0;
+    font-size: 15px;
+  }
+  .callout .flag {
+    font-family: "SF Mono", Consolas, monospace;
+    font-size: 11px;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--warm);
+    font-weight: 700;
+    flex: none;
+    padding-top: 2px;
+  }
+  .callout ul { margin: 6px 0 0; padding-left: 18px; }
+  .callout li { margin: 4px 0; }
+
+  .checklist { list-style: none; margin: 16px 0 0; padding: 0; display: grid; gap: 10px; }
+  .checklist li {
+    display: flex;
+    gap: 12px;
+    align-items: baseline;
+    padding: 12px 14px;
+    background: var(--paper-raised);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+  }
+  .checklist .box {
+    flex: none;
+    width: 16px; height: 16px;
+    border: 1.5px solid var(--line-strong);
+    border-radius: 4px;
+    margin-top: 3px;
+  }
+
+  table.files {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 14px;
+    font-size: 14.5px;
+  }
+  table.files th {
+    text-align: left;
+    font-family: "Avenir Next", "Segoe UI Semibold", "Helvetica Neue", Arial, sans-serif;
+    font-size: 11.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--ink-soft);
+    padding: 0 12px 8px 0;
+    border-bottom: 1px solid var(--line-strong);
+  }
+  table.files td {
+    padding: 10px 12px 10px 0;
+    border-bottom: 1px solid var(--line);
+    vertical-align: top;
+  }
+  table.files tr:last-child td { border-bottom: none; }
+  .files-wrap { overflow-x: auto; }
+
+  footer.foot {
+    max-width: 1180px;
+    margin: 0 auto;
+    padding: 28px clamp(20px, 4vw, 56px) 60px;
+    color: var(--ink-soft);
+    font-size: 13px;
+    font-family: "SF Mono", Consolas, monospace;
+    border-top: 1px solid var(--line);
+  }
+
+  @media (max-width: 880px) {
+    .shell { grid-template-columns: 1fr; }
+    nav.toc { position: static; padding-top: 0; margin-bottom: 8px; }
+    nav.toc ol { columns: 2; column-gap: 24px; }
+  }
+</style>
+</head>
+<body>
+
+<header class="masthead">
+  <p class="eyebrow">Deployment plan &middot; otjServices</p>
+  <h1 class="title">Off the laptop, onto the tailnet properly</h1>
+  <p class="dek">A working plan to retire docker-compose, run hours-api without elevated container privileges, and get GitHub Actions deploying it automatically.</p>
+  <div class="meta-row">
+    <span>Repo <b>grep-hammerspace/otjServices</b></span>
+    <span>Status <b>Approved &middot; not yet fully implemented</b></span>
+  </div>
+</header>
+
+<div class="shell">
+  <nav class="toc" aria-label="Table of contents">
+    <p class="toc-label">Steps</p>
+    <ol>
+      <li><a href="#context"><span class="toc-num">&middot;</span>Context</a></li>
+      <li><a href="#s1"><span class="toc-num">01</span>MongoDB Atlas</a></li>
+      <li><a href="#s2"><span class="toc-num">02</span>Identity header rewrite</a></li>
+      <li><a href="#s3"><span class="toc-num">03</span>New Dockerfile</a></li>
+      <li><a href="#s4"><span class="toc-num">04</span>Local smoke test</a></li>
+      <li><a href="#s5"><span class="toc-num">05</span>Provision the VM</a></li>
+      <li><a href="#s6"><span class="toc-num">06</span>Podman Quadlet</a></li>
+      <li><a href="#s7"><span class="toc-num">07</span>tailscale serve</a></li>
+      <li><a href="#s8"><span class="toc-num">08</span>E2E verification</a></li>
+      <li><a href="#s9"><span class="toc-num">09</span>Actions runner</a></li>
+      <li><a href="#s10"><span class="toc-num">10</span>CI/CD workflow</a></li>
+      <li><a href="#s11"><span class="toc-num">11</span>Cleanup</a></li>
+      <li><a href="#verify"><span class="toc-num">&middot;</span>Verification</a></li>
+      <li><a href="#files"><span class="toc-num">&middot;</span>Critical files</a></li>
+    </ol>
+  </nav>
+
+  <main>
+    <section class="block" id="context">
+      <h2 class="h-context">Context</h2>
+      <div class="lede-card">
+        <p>otjServices currently runs on a home-lab laptop via <code class="inline">deploy/docker-compose.yml</code> (mongo + mongo-express + the <code class="inline">app</code>/hours-api container). The <code class="inline">app</code> container needs <code class="inline">NET_ADMIN</code>/<code class="inline">NET_RAW</code>, <code class="inline">/dev/net/tun</code>, and elevated sysctls <em>only</em> because <code class="inline">tailscaled</code> runs inside it &mdash; <code class="inline">docker/start.sh</code> starts <code class="inline">tailscaled</code>, mints an ephemeral Tailscale auth key, joins the tailnet as its own node, and only then execs the Java app. The app identifies callers by having <code class="inline">TailscaleIdentityHelper.java</code> dial tailscaled's local Unix-socket API (<code class="inline">whois</code> on the raw TCP peer address) &mdash; this is what forces the container to be a full tailnet node with elevated privileges.</p>
+        <p><code class="inline">notes.md</code> already flags &ldquo;Upgrade to AWS, with free tier, not sure how that looks with running privileged containers though&rdquo; as an open question &mdash; this plan resolves it.</p>
+      </div>
+
+      <div class="decisions">
+        <div class="decision"><p class="k">Hosting</p><p class="v">Cloud VM &mdash; AWS EC2 free tier or equivalent VPS</p></div>
+        <div class="decision"><p class="k">Runtime</p><p class="v">Podman + systemd Quadlets, rootless</p></div>
+        <div class="decision"><p class="k">CI/CD deploy</p><p class="v">Self-hosted GitHub Actions runner on the VM</p></div>
+        <div class="decision"><p class="k">Database</p><p class="v">MongoDB Atlas free tier (M0)</p></div>
+      </div>
+
+      <p style="margin-top:22px">The key unlock for &ldquo;no elevated privileges&rdquo;: move <code class="inline">tailscaled</code> out of the app container entirely and onto the <strong>host</strong> as a normal systemd service &mdash; that needs root at the OS level, same as any VPN daemon, and doesn't undermine the app container's lack of privileges. The host then runs <code class="inline">tailscale serve</code> to reverse-proxy tailnet traffic to the app container's loopback-only port, injecting an identity header (<code class="inline">Tailscale-User-Login</code>) into forwarded requests. <code class="inline">TailscaleIdentityHelper.java</code> reads that header instead of calling tailscaled's <code class="inline">whois</code> API directly &mdash; same method signature, nothing else in the app changes.</p>
+      <p>Also discovered along the way: the current Dockerfile installs Firefox + geckodriver, but neither <code class="inline">OtjDriver.java</code> nor <code class="inline">SmartAssessorDriver.java</code> use Selenium/WebDriver &mdash; <code class="inline">&quot;Firefox/151.0&quot;</code> only appears as a hardcoded User-Agent string. Dead weight, dropped from the new image. Same for <code class="inline">start.sh</code>'s CSV bootstrap &mdash; zero references anywhere in <code class="inline">src/</code>.</p>
+    </section>
+
+    <section class="block">
+      <div class="step" id="s1">
+        <div class="step-num">01</div>
+        <div class="step-body">
+          <div class="step-head"><h3 class="step-title">MongoDB Atlas</h3><span class="pill manual">Manual &middot; console</span></div>
+          <p>Create a free-tier M0 cluster, a DB user scoped to <code class="inline">otjdb</code>, and get the SRV connection string.</p>
+          <pre><code>mongodb+srv://&lt;user&gt;:&lt;pass&gt;@&lt;cluster&gt;.mongodb.net/otjdb?retryWrites=true&amp;w=majority</code></pre>
+          <p>No code change needed &mdash; <code class="inline">AppModule.provideMongoClient()</code> (<code class="inline">bind/AppModule.java:40-44</code>) already does <code class="inline">MongoClients.create(System.getenv("MONGO_URI"))</code>; swapping the env var value is a pure config change. Verify Atlas SRV DNS resolution from inside the container during the step 4 smoke test &mdash; don't assume it silently works.</p>
+          <p><code class="inline">mongo</code> and <code class="inline">mongo-express</code> disappear entirely &mdash; no Quadlet units for either.</p>
+        </div>
+      </div>
+
+      <div class="step" id="s2">
+        <div class="step-num">02</div>
+        <div class="step-body">
+          <div class="step-head"><h3 class="step-title">Rewrite <code class="inline">TailscaleIdentityHelper.java</code></h3><span class="pill code">Code change &mdash; done</span></div>
+          <p><code class="inline">src/main/java/com/github/grepHammerspace/tailscale/TailscaleIdentityHelper.java</code></p>
+          <p>Deleted the <code class="inline">TAILSCALE_SOCKET</code> constant, the static <code class="inline">OkHttpClient</code> with its custom <code class="inline">SocketFactory</code>/dummy <code class="inline">Dns</code>, the whois HTTP call, and the entire inner <code class="inline">UnixSocket</code> class &mdash; nothing else referenced any of it.</p>
+          <pre><code>public class TailscaleIdentityHelper {
+    private static final String IDENTITY_HEADER = "Tailscale-User-Login"; // verify against current docs
+
+    public static String getUser(HttpServletRequest request) throws IOException {
+        String user = request.getHeader(IDENTITY_HEADER);
+        if (user == null || user.isBlank()) {
+            throw new SecurityException(
+                "Missing " + IDENTITY_HEADER + " header — request did not arrive via tailscale serve");
+        }
+        return user;
+    }
+}</code></pre>
+          <p>Signature stays <code class="inline">getUser(HttpServletRequest): String throws IOException</code> &mdash; <code class="inline">TailscaleIdentityService</code>, its impl, <code class="inline">AppModule.java</code>, and <code class="inline">OtjServicesResource.resolveUserState()</code> needed zero changes. Tests are unaffected &mdash; <code class="inline">TestAppModule</code> already stubs the service with a fixed user.</p>
+          <div class="callout">
+            <span class="flag">Invariant</span>
+            <p style="margin:0">This header is only trustworthy because the app container is reachable <em>exclusively</em> on <code class="inline">127.0.0.1</code> &mdash; the only thing that can reach it is the host's <code class="inline">tailscale serve</code> process, which is what actually sets this header. If the bind address or network topology ever changes, re-examine this assumption.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step" id="s3">
+        <div class="step-num">03</div>
+        <div class="step-body">
+          <div class="step-head"><h3 class="step-title">New Dockerfile</h3><span class="pill code">Code change</span></div>
+          <p>Replace <code class="inline">docker/otjService.Dockerfile</code>:</p>
+          <pre><code>FROM maven:3.9-eclipse-temurin-25 AS build
+WORKDIR /app
+COPY pom.xml .
+RUN mvn dependency:go-offline -q
+COPY src/ ./src/
+RUN mvn package -DskipTests -q
+
+FROM eclipse-temurin:25-jre
+RUN useradd --system --create-home --uid 10001 appuser
+WORKDIR /app
+COPY --from=build /app/target/app.jar app.jar
+USER appuser
+EXPOSE 8945
+ENTRYPOINT ["java", "-jar", "/app/app.jar"]</code></pre>
+          <p>No Firefox/geckodriver, no <code class="inline">curl jq gnupg</code>/Mozilla apt repo, no tailscale binary stage. Runs as non-root <code class="inline">appuser</code> as defense-in-depth on top of rootless Podman. Delete <code class="inline">docker/start.sh</code> entirely &mdash; nothing left to wrap.</p>
+        </div>
+      </div>
+
+      <div class="step" id="s4">
+        <div class="step-num">04</div>
+        <div class="step-body">
+          <div class="step-head"><h3 class="step-title">Local rootless-Podman smoke test</h3><span class="pill manual">Manual &middot; local</span></div>
+          <p>Before touching AWS at all:</p>
+          <pre><code>podman build -t otj-hours-api:local -f docker/otjService.Dockerfile .
+podman run -d --name otj-test -p 127.0.0.1:8945:8945 \
+  -e MONGO_URI="mongodb+srv://...atlas.../otjdb?..." \
+  -e ANTHROPIC_API_KEY="sk-ant-..." \
+  otj-hours-api:local
+
+curl -s http://127.0.0.1:8945/health                       # expect 200
+curl -s -H "Tailscale-User-Login: test@example.com" \
+  http://127.0.0.1:8945/otj-services/...                    # simulate the proxy header
+podman inspect otj-test | grep -A5 CapAdd                  # expect empty</code></pre>
+          <p>Confirms the Atlas connection, the header-based identity shim, and that rootless Podman needs zero <code class="inline">cap_add</code>/devices/sysctls once tailscaled is out of the container.</p>
+        </div>
+      </div>
+
+      <div class="step" id="s5">
+        <div class="step-num">05</div>
+        <div class="step-body">
+          <div class="step-head"><h3 class="step-title">Provision the EC2 VM</h3><span class="pill manual">Manual &middot; console</span></div>
+          <p>Launch an Ubuntu/Debian LTS instance. Security group: SSH (22, restricted to your IP) only &mdash; <strong>no inbound rule for 8945</strong>, since all app traffic arrives via the tailnet, not the public internet. Allocate an Elastic IP (needed for the Atlas allowlist). Install Podman. Install Tailscale on the host and bring it up with a persistent, non-ephemeral auth:</p>
+          <pre><code>curl -fsSL https://tailscale.com/install.sh | sh
+sudo tailscale up --hostname=hours-api</code></pre>
+          <div class="callout">
+            <span class="flag">Sizing</span>
+            <p style="margin:0">Free-tier <code class="inline">t2.micro</code>/<code class="inline">t3.micro</code> (1&nbsp;GiB RAM) may be tight running a JVM + Podman + tailscaled concurrently &mdash; confirm budget for <code class="inline">t3.small</code> (2&nbsp;GiB), or tune JVM heap flags if staying strictly free-tier.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step" id="s6">
+        <div class="step-num">06</div>
+        <div class="step-body">
+          <div class="step-head"><h3 class="step-title">Podman Quadlet unit</h3><span class="pill manual">Manual &middot; VM</span></div>
+          <p>Dedicated non-root user, lingering enabled so <code class="inline">systemd --user</code> survives logout/reboot:</p>
+          <pre><code>sudo useradd -m -s /bin/bash otjapp
+sudo loginctl enable-linger otjapp</code></pre>
+          <p>As <code class="inline">otjapp</code>, <code class="inline">~/.config/containers/systemd/hours-api.container</code>:</p>
+          <pre><code>[Unit]
+Description=otjServices hours-api
+After=network-online.target
+Wants=network-online.target
+
+[Container]
+Image=localhost/otj-hours-api:latest
+ContainerName=hours-api
+PublishPort=127.0.0.1:8945:8945
+EnvironmentFile=%h/otj-hours-api.env
+HealthCmd=curl -f http://localhost:8945/health || exit 1
+HealthInterval=15s
+HealthRetries=3
+
+[Service]
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target</code></pre>
+          <p><code class="inline">EnvironmentFile</code> points at <code class="inline">/home/otjapp/otj-hours-api.env</code> (<code class="inline">chmod 600</code>, holding <code class="inline">MONGO_URI=</code>/<code class="inline">ANTHROPIC_API_KEY=</code>) &mdash; managed out-of-band on the VM, never in the repo, never touched by CI. No <code class="inline">.network</code>/<code class="inline">.volume</code> Quadlet files needed.</p>
+          <pre><code>systemctl --user daemon-reload
+systemctl --user enable --now hours-api.service</code></pre>
+          <p>Confirm posture: <code class="inline">podman inspect hours-api | jq '.[0].HostConfig.CapAdd, .[0].HostConfig.Privileged'</code> &rarr; empty array / <code class="inline">false</code>.</p>
+        </div>
+      </div>
+
+      <div class="step" id="s7">
+        <div class="step-num">07</div>
+        <div class="step-body">
+          <div class="step-head"><h3 class="step-title">Host-level <code class="inline">tailscale serve</code></h3><span class="pill manual">Manual &middot; VM</span></div>
+          <pre><code>sudo tailscale serve --bg --https=443 / http://127.0.0.1:8945</code></pre>
+          <p>Exposes the service at <code class="inline">https://hours-api.&lt;tailnet&gt;.ts.net/</code> to tailnet devices, with the host's <code class="inline">tailscaled</code> terminating TLS, forwarding to the loopback app, and injecting the identity header on the way in.</p>
+          <div class="callout">
+            <span class="flag">Verify, don't assume</span>
+            <ul>
+              <li>Exact identity header name/casing Tailscale currently injects &mdash; confirm against current <code class="inline">tailscale serve</code>/Funnel docs.</li>
+              <li>MagicDNS + HTTPS Certificates enabled on the tailnet (required for <code class="inline">--https</code> to mint a cert).</li>
+              <li>Current Tailscale plan tier supports identity-header injection (historically free &ldquo;Personal&rdquo; tier does).</li>
+              <li>Whether the <code class="inline">serve</code> config persists across a host reboot, or needs a small startup script.</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+
+      <div class="step" id="s8">
+        <div class="step-num">08</div>
+        <div class="step-body">
+          <div class="step-head"><h3 class="step-title">End-to-end verification</h3><span class="pill manual">Manual</span></div>
+          <p>From a tailnet-joined device: <code class="inline">curl https://hours-api.&lt;tailnet&gt;.ts.net/health</code> and a real API call, then check app logs to confirm <code class="inline">resolveUserState()</code> resolves the actual tailnet identity rather than throwing <code class="inline">SecurityException</code>. Do this before wiring CI/CD.</p>
+        </div>
+      </div>
+
+      <div class="step" id="s9">
+        <div class="step-num">09</div>
+        <div class="step-body">
+          <div class="step-head"><h3 class="step-title">Self-hosted GitHub Actions runner</h3><span class="pill manual">Manual &middot; one-time</span></div>
+          <p>As the <code class="inline">otjapp</code> user on the VM (simplest: same user that owns the Quadlet unit, avoiding cross-user <code class="inline">systemctl --user</code> permission issues): register via repo Settings &rarr; Actions &rarr; Runners &rarr; &ldquo;New self-hosted runner&rdquo;, label it <code class="inline">otj-vm</code>, install as a systemd service (<code class="inline">svc.sh install &amp;&amp; svc.sh start</code>). This is inherently manual &mdash; GitHub's registration token is short-lived/single-use by design, so it can't be scripted into the workflow itself.</p>
+        </div>
+      </div>
+
+      <div class="step" id="s10">
+        <div class="step-num">10</div>
+        <div class="step-body">
+          <div class="step-head"><h3 class="step-title">GitHub Actions workflow</h3><span class="pill code">Code change</span></div>
+          <p><code class="inline">.github/workflows/ci-cd.yml</code></p>
+          <pre><code>name: CI/CD
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: '25', cache: maven }
+      - run: mvn -B test
+
+  deploy:
+    needs: build-and-test
+    if: github.ref == 'refs/heads/master' &amp;&amp; github.event_name == 'push'
+    runs-on: [self-hosted, otj-vm]
+    steps:
+      - uses: actions/checkout@v4
+      - run: podman build -t localhost/otj-hours-api:latest -f docker/otjService.Dockerfile .
+      - run: systemctl --user restart hours-api.service
+      - run: |
+          for i in $(seq 1 30); do
+            curl -sf http://127.0.0.1:8945/health &amp;&amp; exit 0
+            sleep 2
+          done
+          echo "Service did not become healthy" &gt;&amp;2; exit 1</code></pre>
+          <p><code class="inline">build-and-test</code> runs on GitHub-hosted runners &mdash; <code class="inline">mvn test</code> doesn't need Testcontainers/Docker-in-Docker since <code class="inline">pom.xml</code> has no failsafe plugin wiring <code class="inline">*IT.java</code> into the <code class="inline">test</code> phase. <code class="inline">deploy</code> only fires on push to <code class="inline">master</code> after tests pass. No secrets flow through GitHub Actions &mdash; the container picks up env from the Quadlet's <code class="inline">EnvironmentFile</code> on the VM, managed out-of-band.</p>
+          <div class="callout">
+            <span class="flag">Likely rough edge</span>
+            <p style="margin:0"><code class="inline">systemctl --user restart</code> invoked from the runner's service context needs <code class="inline">XDG_RUNTIME_DIR</code>/<code class="inline">DBUS_SESSION_BUS_ADDRESS</code> set correctly. Running the runner as <code class="inline">otjapp</code> with lingering enabled should cover it &mdash; verify on the first real deploy.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step" id="s11">
+        <div class="step-num">11</div>
+        <div class="step-body">
+          <div class="step-head"><h3 class="step-title">Cleanup</h3><span class="pill code">Code change</span></div>
+          <p>Delete <code class="inline">deploy/docker-compose.yml</code>, <code class="inline">deploy/bootstrap.sh</code>, <code class="inline">deploy/shell.nix</code>, <code class="inline">docker/start.sh</code> &mdash; nothing else references these. Update <code class="inline">notes.md</code> to remove/check off the &ldquo;Upgrade to AWS&rdquo; item. Add a short <code class="inline">README.md</code> documenting the new topology (Atlas + host tailscaled/<code class="inline">tailscale serve</code> + rootless Podman Quadlet + self-hosted runner), since the operational model is no longer self-explanatory from <code class="inline">bootstrap.sh</code> alone.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="block" id="verify">
+      <h2 class="h-context">Verification</h2>
+      <ul class="checklist">
+        <li><span class="box"></span><span><code class="inline">curl https://hours-api.&lt;tailnet&gt;.ts.net/health</code> &rarr; 200.</span></li>
+        <li><span class="box"></span><span>Real tailnet identity resolves correctly via app logs on a register/log-activity call, not just &ldquo;no 401&rdquo;.</span></li>
+        <li><span class="box"></span><span><code class="inline">podman inspect hours-api</code> &rarr; no <code class="inline">CapAdd</code>, <code class="inline">Privileged: false</code>; <code class="inline">podman info</code> as <code class="inline">otjapp</code> confirms rootless.</span></li>
+        <li><span class="box"></span><span><code class="inline">systemctl --user status hours-api.service</code> &rarr; active + enabled; survives a VM reboot (test once).</span></li>
+        <li><span class="box"></span><span>Push a trivial commit to <code class="inline">master</code>: both jobs green, <code class="inline">podman ps</code> shows a fresh start timestamp, <code class="inline">/health</code> stays green throughout.</span></li>
+        <li><span class="box"></span><span>Tighten the Atlas IP access list to just the VM's Elastic IP.</span></li>
+        <li><span class="box"></span><span>VM security group has no inbound rule for 8945/5005 &mdash; reachable only via Tailscale.</span></li>
+      </ul>
+    </section>
+
+    <section class="block" id="files">
+      <h2 class="h-context">Critical files</h2>
+      <div class="files-wrap">
+        <table class="files">
+          <thead><tr><th>Path</th><th>Change</th></tr></thead>
+          <tbody>
+            <tr><td class="mono">docker/otjService.Dockerfile</td><td>Rewritten &middot; step 03</td></tr>
+            <tr><td class="mono">docker/start.sh</td><td>Deleted &middot; step 03</td></tr>
+            <tr><td class="mono">src/.../tailscale/TailscaleIdentityHelper.java</td><td>Rewritten &middot; step 02 (done)</td></tr>
+            <tr><td class="mono">deploy/docker-compose.yml, bootstrap.sh, shell.nix</td><td>Deleted &middot; step 11</td></tr>
+            <tr><td class="mono">.github/workflows/ci-cd.yml</td><td>New &middot; step 10</td></tr>
+            <tr><td class="mono">notes.md</td><td>Updated &middot; step 11</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+</div>
+
+<footer class="foot">otjServices &middot; deployment migration plan &middot; keep this file updated as steps land</footer>
+</body>
+</html>
