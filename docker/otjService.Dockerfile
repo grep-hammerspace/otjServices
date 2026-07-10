@@ -1,5 +1,5 @@
 # Stage 1 — build
-FROM maven:3.9-eclipse-temurin-25 AS build
+FROM docker.io/library/maven:3.9-eclipse-temurin-25 AS build
 
 WORKDIR /app
 COPY pom.xml .
@@ -10,36 +10,18 @@ RUN mvn dependency:go-offline -q
 COPY src/ ./src/
 RUN mvn package -DskipTests -q
 
-# Stage 2 — Tailscale binaries
-FROM tailscale/tailscale:latest AS tailscale
+# Stage 2 — runtime
+FROM docker.io/library/eclipse-temurin:25-jre
 
-# Stage 3 — runtime
-FROM eclipse-temurin:25-jre
-
-RUN apt-get update -q && \
-    apt-get install -y -q curl jq gnupg && \
-    install -d -m 0755 /etc/apt/keyrings && \
-    curl -fsSL https://packages.mozilla.org/apt/repo-signing-key.gpg \
-        -o /etc/apt/keyrings/packages.mozilla.org.asc && \
-    echo "deb [signed-by=/etc/apt/keyrings/packages.mozilla.org.asc] https://packages.mozilla.org/apt mozilla main" \
-        > /etc/apt/sources.list.d/mozilla.list && \
-    printf 'Package: *\nPin: origin packages.mozilla.org\nPin-Priority: 1000\n' \
-        > /etc/apt/preferences.d/mozilla && \
-    apt-get update -q && \
-    apt-get install -y -q firefox && \
-    rm -rf /var/lib/apt/lists/*
-
-RUN curl -sL "https://github.com/mozilla/geckodriver/releases/download/v0.35.0/geckodriver-v0.35.0-linux64.tar.gz" \
-        | tar -xz -C /usr/local/bin
-
-COPY --from=tailscale /usr/local/bin/tailscale /usr/local/bin/tailscale
-COPY --from=tailscale /usr/local/bin/tailscaled /usr/local/bin/tailscaled
+RUN useradd --system --create-home --uid 10001 appuser
 
 WORKDIR /app
 
 COPY --from=build /app/target/app.jar app.jar
 COPY docker/start.sh /start.sh
-RUN chmod +x /start.sh
+RUN chmod +x /start.sh && chown appuser:appuser /app/app.jar
+
+USER appuser
 
 EXPOSE 8945
 

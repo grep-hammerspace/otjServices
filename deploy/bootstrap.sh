@@ -9,7 +9,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-COMPOSE_FILE="$SCRIPT_DIR/docker-compose.yml"
+COMPOSE_FILE="$SCRIPT_DIR/podman-compose.yaml"
 ENV_FILE="$SCRIPT_DIR/../.env"
 
 APP_PORT=8945
@@ -37,11 +37,20 @@ wait_for() {
   die "$name did not become ready in time."
 }
 
+# True if `tailscale serve` can run as $USER without sudo (operator delegated once via
+# `tailscale set --operator=$USER`). See deploy/README.md for why this is needed.
+tailscale_operator_set() {
+  command -v tailscale &>/dev/null || return 1
+  local operator
+  operator=$(tailscale debug prefs 2>/dev/null | jq -r '.OperatorUser // empty')
+  [ -n "$operator" ] && [ "$operator" = "$USER" ]
+}
+
 # ── --stop shortcut ───────────────────────────────────────────────────────────
 
 if [[ "${1:-}" == "--stop" ]]; then
   info "Stopping all containers..."
-  docker-compose -f "$COMPOSE_FILE" down
+  podman-compose -f "$COMPOSE_FILE" down
   echo "Done. (Mongo data is preserved — run 'clean-mongo' to wipe it.)"
   exit 0
 fi
@@ -74,21 +83,24 @@ fi
 
 # ── Pre-flight ────────────────────────────────────────────────────────────────
 
-require docker
-require docker-compose
+require podman
+require podman-compose
 
 [ -f "$ENV_FILE" ] || die ".env not found at $ENV_FILE"
 set -a; source "$ENV_FILE"; set +a
 
 # ── Build app image ───────────────────────────────────────────────────────────
 
-info "Building app image (Maven build runs inside Docker)..."
-docker-compose -f "$COMPOSE_FILE" build app
+info "Building app image (Maven build runs inside Podman, rootless)..."
+podman-compose -f "$COMPOSE_FILE" build app
 
 # ── Start stack ───────────────────────────────────────────────────────────────
 
 info "Starting full stack (mode: $MODE)..."
-docker-compose -f "$COMPOSE_FILE" up -d
+podman-compose -f "$COMPOSE_FILE" up -d
+
+info "Containers started — current status:"
+podman-compose -f "$COMPOSE_FILE" ps
 
 # ── Wait for services ─────────────────────────────────────────────────────────
 
@@ -110,8 +122,29 @@ if [ "$MODE" = "debug" ]; then
 echo "  debugger       →  localhost:$DEBUG_PORT  (attach IDE remote debugger)"
 fi
 echo ""
-echo "  Logs:  docker-compose -f deploy/docker-compose.yml logs -f app"
+echo "  Logs:  podman-compose -f deploy/podman-compose.yaml logs -f app"
 echo "  Stop:  bash deploy/bootstrap.sh --stop"
 echo "  Wipe:  clean-mongo  (removes Mongo data volume)"
-echo "  Deploy just mongo: docker compose -f deploy/docker-compose.yml up mongo -d (now you can run the server in debug mode)"
+echo "  Deploy just mongo: podman-compose -f deploy/podman-compose.yaml up mongo -d (now you can run the server in debug mode)"
 echo ""
+
+# ── tailscale serve (optional — makes the app reachable from the tailnet) ─────
+
+if command -v tailscale &>/dev/null; then
+  if tailscale_operator_set; then
+    info "Wiring up tailscale serve (operator already delegated to $USER)..."
+    if tailscale serve --bg --https=443 "http://127.0.0.1:$APP_PORT" >/tmp/otj-tailscale-serve.log 2>&1; then
+      TS_NAME=$(tailscale status --self --json 2>/dev/null | jq -r '.Self.DNSName' | sed 's/\.$//')
+      echo "  tailnet        →  https://$TS_NAME/otj-services"
+    else
+      echo "  WARNING: 'tailscale serve' failed — see /tmp/otj-tailscale-serve.log"
+      cat /tmp/otj-tailscale-serve.log
+    fi
+  else
+    echo "  NOTE: tailscale operator is not set for '$USER' — 'tailscale serve' needs root without it."
+    echo "        Run this once (one-time sudo, never needed again):"
+    echo "          sudo tailscale set --operator=$USER"
+    echo "        Then re-run this script to wire up tailscale serve automatically."
+  fi
+  echo ""
+fi
