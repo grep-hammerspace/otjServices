@@ -9,7 +9,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-COMPOSE_FILE="$SCRIPT_DIR/docker-compose.yml"
+COMPOSE_FILE="$SCRIPT_DIR/podman-compose.yaml"
 ENV_FILE="$SCRIPT_DIR/../.env"
 
 APP_PORT=8945
@@ -41,7 +41,7 @@ wait_for() {
 
 if [[ "${1:-}" == "--stop" ]]; then
   info "Stopping all containers..."
-  docker-compose -f "$COMPOSE_FILE" down
+  podman-compose -f "$COMPOSE_FILE" down
   echo "Done. (Mongo data is preserved — run 'clean-mongo' to wipe it.)"
   exit 0
 fi
@@ -74,21 +74,21 @@ fi
 
 # ── Pre-flight ────────────────────────────────────────────────────────────────
 
-require docker
-require docker-compose
+require podman
+require podman-compose
 
 [ -f "$ENV_FILE" ] || die ".env not found at $ENV_FILE"
 set -a; source "$ENV_FILE"; set +a
 
 # ── Build app image ───────────────────────────────────────────────────────────
 
-info "Building app image (Maven build runs inside Docker)..."
-docker-compose -f "$COMPOSE_FILE" build app
+info "Building app image (Maven build runs inside Podman, rootless)..."
+podman-compose -f "$COMPOSE_FILE" build app
 
 # ── Start stack ───────────────────────────────────────────────────────────────
 
 info "Starting full stack (mode: $MODE)..."
-docker-compose -f "$COMPOSE_FILE" up -d
+podman-compose -f "$COMPOSE_FILE" up -d
 
 # ── Wait for services ─────────────────────────────────────────────────────────
 
@@ -110,8 +110,8 @@ if [ "$MODE" = "debug" ]; then
 echo "  debugger       →  localhost:$DEBUG_PORT  (attach IDE remote debugger)"
 fi
 echo ""
-echo "  Logs:  docker-compose -f deploy/docker-compose.yml logs -f app"
+echo "  Logs:  podman-compose -f deploy/podman-compose.yaml logs -f app"
 echo "  Stop:  bash deploy/bootstrap.sh --stop"
 echo "  Wipe:  clean-mongo  (removes Mongo data volume)"
-echo "  Deploy just mongo: docker compose -f deploy/docker-compose.yml up mongo -d (now you can run the server in debug mode)"
+echo "  Deploy just mongo: podman-compose -f deploy/podman-compose.yaml up mongo -d (now you can run the server in debug mode)"
 echo ""

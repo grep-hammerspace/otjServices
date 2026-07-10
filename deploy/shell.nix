@@ -1,8 +1,11 @@
-{ pkgs ? import <nixpkgs> {} }:
+{ pkgs ? import (builtins.fetchTarball {
+    url = "https://channels.nixos.org/nixos-25.05/nixexprs.tar.xz";
+  }) {} }:
 
 pkgs.mkShell {
   buildInputs = with pkgs; [
-    docker-compose
+    podman-compose
+    podman
     curl
     jq
   ];
@@ -23,7 +26,7 @@ pkgs.mkShell {
 
     clean-mongo() {
       echo "Stopping containers and removing Mongo data volume..."
-      docker compose --file "$DEPLOY_DIR/docker-compose.yml" down -v
+      podman-compose --file "$DEPLOY_DIR/podman-compose.yaml" down -v
       echo "Done. Mongo data wiped."
     }
     export -f clean-mongo
