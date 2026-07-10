@@ -5,8 +5,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 /**
- * Unit tests for {@link PasswordCipher}. Pure in-memory crypto — no Docker/Testcontainers needed,
- * so this is a good place to step through {@code encrypt}/{@code decrypt} in a debugger.
+ * Unit tests for {@link PasswordCipher}.
  */
 public class PasswordCipherTest {
 
