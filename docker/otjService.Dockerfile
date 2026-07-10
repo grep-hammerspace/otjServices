@@ -1,5 +1,5 @@
 # Stage 1 — build
-FROM maven:3.9-eclipse-temurin-25 AS build
+FROM docker.io/library/maven:3.9-eclipse-temurin-25 AS build
 
 WORKDIR /app
 COPY pom.xml .
@@ -11,7 +11,7 @@ COPY src/ ./src/
 RUN mvn package -DskipTests -q
 
 # Stage 2 — runtime
-FROM eclipse-temurin:25-jre
+FROM docker.io/library/eclipse-temurin:25-jre
 
 RUN useradd --system --create-home --uid 10001 appuser
 

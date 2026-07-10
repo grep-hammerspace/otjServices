@@ -37,6 +37,15 @@ wait_for() {
   die "$name did not become ready in time."
 }
 
+# True if `tailscale serve` can run as $USER without sudo (operator delegated once via
+# `tailscale set --operator=$USER`). See deploy/README.md for why this is needed.
+tailscale_operator_set() {
+  command -v tailscale &>/dev/null || return 1
+  local operator
+  operator=$(tailscale debug prefs 2>/dev/null | jq -r '.OperatorUser // empty')
+  [ -n "$operator" ] && [ "$operator" = "$USER" ]
+}
+
 # ── --stop shortcut ───────────────────────────────────────────────────────────
 
 if [[ "${1:-}" == "--stop" ]]; then
@@ -90,6 +99,9 @@ podman-compose -f "$COMPOSE_FILE" build app
 info "Starting full stack (mode: $MODE)..."
 podman-compose -f "$COMPOSE_FILE" up -d
 
+info "Containers started — current status:"
+podman-compose -f "$COMPOSE_FILE" ps
+
 # ── Wait for services ─────────────────────────────────────────────────────────
 
 if [ "$MODE" = "debug" ]; then
@@ -115,3 +127,24 @@ echo "  Stop:  bash deploy/bootstrap.sh --stop"
 echo "  Wipe:  clean-mongo  (removes Mongo data volume)"
 echo "  Deploy just mongo: podman-compose -f deploy/podman-compose.yaml up mongo -d (now you can run the server in debug mode)"
 echo ""
+
+# ── tailscale serve (optional — makes the app reachable from the tailnet) ─────
+
+if command -v tailscale &>/dev/null; then
+  if tailscale_operator_set; then
+    info "Wiring up tailscale serve (operator already delegated to $USER)..."
+    if tailscale serve --bg --https=443 "http://127.0.0.1:$APP_PORT" >/tmp/otj-tailscale-serve.log 2>&1; then
+      TS_NAME=$(tailscale status --self --json 2>/dev/null | jq -r '.Self.DNSName' | sed 's/\.$//')
+      echo "  tailnet        →  https://$TS_NAME/otj-services"
+    else
+      echo "  WARNING: 'tailscale serve' failed — see /tmp/otj-tailscale-serve.log"
+      cat /tmp/otj-tailscale-serve.log
+    fi
+  else
+    echo "  NOTE: tailscale operator is not set for '$USER' — 'tailscale serve' needs root without it."
+    echo "        Run this once (one-time sudo, never needed again):"
+    echo "          sudo tailscale set --operator=$USER"
+    echo "        Then re-run this script to wire up tailscale serve automatically."
+  fi
+  echo ""
+fi

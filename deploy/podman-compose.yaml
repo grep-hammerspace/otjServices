@@ -1,6 +1,6 @@
 services:
   mongo:
-    image: mongo:8
+    image: docker.io/library/mongo:8
     restart: unless-stopped
     ports:
       - "27017:27017"
@@ -13,14 +13,14 @@ services:
     networks:
       - otj-net
     healthcheck:
-      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')", "--quiet"]
+      test: ["CMD-SHELL", "mongosh --quiet --eval 'db.adminCommand(\"ping\")' || exit 1"]
       interval: 3s
       timeout: 5s
       retries: 10
       start_period: 5s
 
   mongo-express:
-    image: mongo-express:latest
+    image: docker.io/library/mongo-express:latest
     restart: unless-stopped
     ports:
       - "8081:8081"
@@ -46,6 +46,7 @@ services:
     environment:
       MONGO_URI: mongodb://${MONGO_USER}:${MONGO_PASSWORD}@mongo:27017/otjdb?authSource=admin
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      PASSWORD_ENCRYPTION_KEY: ${PASSWORD_ENCRYPTION_KEY}
       JAVA_DEBUG: ${JAVA_DEBUG:-true}
     depends_on:
       mongo:
