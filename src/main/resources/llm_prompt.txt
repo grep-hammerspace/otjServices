@@ -24,7 +24,7 @@ Rules:
 4. MISSING DESCRIPTION: If a line has no activity description, return {"error": "missing_description", "raw": "<original line>"}.
 5. INVALID DURATION: If a line has a duration which starts before 09:00 am and 18:00 pm, return {"error": "invalid duration, hours must be logged in working hours", "raw": "<original line>"}
 
-Process each line of the input independently. Do not apply any scheduling constraints, business-hour windows, daily caps, or day-of-week rules.
+Process each line of the input independently. Apply all rules to each line separately.
 
 Return only the JSON array. Example of valid output:
 [
