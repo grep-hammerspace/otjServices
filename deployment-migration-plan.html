@@ -406,11 +406,11 @@
 
 <header class="masthead">
   <p class="eyebrow">Deployment plan &middot; otjServices</p>
-  <h1 class="title">Off the laptop, onto the tailnet properly</h1>
-  <p class="dek">A working plan to retire docker-compose, run hours-api without elevated container privileges, and get GitHub Actions deploying it automatically.</p>
+  <h1 class="title">Sudo's gone. The laptop isn't (yet).</h1>
+  <p class="dek">Phase 1 shipped: rootless Podman and no-sudo <code class="inline">tailscale serve</code>, still running on the home-lab machine. Phase 2 &mdash; Atlas, an EC2 VM, Quadlets, and GitHub Actions &mdash; is still just a plan.</p>
   <div class="meta-row">
     <span>Repo <b>grep-hammerspace/otjServices</b></span>
-    <span>Status <b>Approved &middot; not yet fully implemented</b></span>
+    <span>Status <b>Phase 1 (local, rootless) shipped &middot; Phase 2 (cloud + CI/CD) not started</b></span>
   </div>
 </header>
 
@@ -439,30 +439,30 @@
     <section class="block" id="context">
       <h2 class="h-context">Context</h2>
       <div class="lede-card">
-        <p>otjServices currently runs on a home-lab laptop via <code class="inline">deploy/docker-compose.yml</code> (mongo + mongo-express + the <code class="inline">app</code>/hours-api container). The <code class="inline">app</code> container needs <code class="inline">NET_ADMIN</code>/<code class="inline">NET_RAW</code>, <code class="inline">/dev/net/tun</code>, and elevated sysctls <em>only</em> because <code class="inline">tailscaled</code> runs inside it &mdash; <code class="inline">docker/start.sh</code> starts <code class="inline">tailscaled</code>, mints an ephemeral Tailscale auth key, joins the tailnet as its own node, and only then execs the Java app. The app identifies callers by having <code class="inline">TailscaleIdentityHelper.java</code> dial tailscaled's local Unix-socket API (<code class="inline">whois</code> on the raw TCP peer address) &mdash; this is what forces the container to be a full tailnet node with elevated privileges.</p>
-        <p><code class="inline">notes.md</code> already flags &ldquo;Upgrade to AWS, with free tier, not sure how that looks with running privileged containers though&rdquo; as an open question &mdash; this plan resolves it.</p>
+        <p><strong>Where this started:</strong> otjServices ran on a home-lab laptop via <code class="inline">deploy/docker-compose.yml</code> (mongo + mongo-express + the <code class="inline">app</code>/hours-api container). The <code class="inline">app</code> container needed <code class="inline">NET_ADMIN</code>/<code class="inline">NET_RAW</code>, <code class="inline">/dev/net/tun</code>, and elevated sysctls <em>only</em> because <code class="inline">tailscaled</code> ran inside it &mdash; <code class="inline">docker/start.sh</code> started <code class="inline">tailscaled</code>, minted an ephemeral Tailscale auth key, joined the tailnet as its own node, and only then exec'd the Java app. The app identified callers by having <code class="inline">TailscaleIdentityHelper.java</code> dial tailscaled's local Unix-socket API (<code class="inline">whois</code> on the raw TCP peer address) &mdash; this is what forced the container to be a full tailnet node with elevated privileges.</p>
+        <p><strong>What actually shipped</strong> (<code class="inline">f497f31</code>, &ldquo;sudo-must-go&rdquo;, PR #4): the container-privileges problem is solved, and so is the sudo problem &mdash; but by a smaller path than originally planned. The app still runs locally on the home-lab machine, not on an EC2 VM; orchestration is <code class="inline">podman-compose</code> (<code class="inline">deploy/podman-compose.yaml</code>, renamed from the old compose file), not systemd Quadlets; and Mongo/mongo-express still run as local containers, not Atlas. <code class="inline">notes.md</code>'s &ldquo;Upgrade to AWS&rdquo; item is still explicitly un-checked &mdash; that part of this plan hasn't started.</p>
       </div>
 
       <div class="decisions">
-        <div class="decision"><p class="k">Hosting</p><p class="v">Cloud VM &mdash; AWS EC2 free tier or equivalent VPS</p></div>
-        <div class="decision"><p class="k">Runtime</p><p class="v">Podman + systemd Quadlets, rootless</p></div>
-        <div class="decision"><p class="k">CI/CD deploy</p><p class="v">Self-hosted GitHub Actions runner on the VM</p></div>
-        <div class="decision"><p class="k">Database</p><p class="v">MongoDB Atlas free tier (M0)</p></div>
+        <div class="decision"><p class="k">Hosting</p><p class="v">Home-lab laptop <em>(planned: AWS EC2 free tier or equivalent VPS)</em></p></div>
+        <div class="decision"><p class="k">Runtime</p><p class="v">Rootless Podman + podman-compose, done <em>(planned: systemd Quadlets on a VM)</em></p></div>
+        <div class="decision"><p class="k">CI/CD deploy</p><p class="v">None yet <em>(planned: self-hosted GitHub Actions runner)</em></p></div>
+        <div class="decision"><p class="k">Database</p><p class="v">Local Mongo container via compose <em>(planned: MongoDB Atlas free tier, M0)</em></p></div>
       </div>
 
-      <p style="margin-top:22px">The key unlock for &ldquo;no elevated privileges&rdquo;: move <code class="inline">tailscaled</code> out of the app container entirely and onto the <strong>host</strong> as a normal systemd service &mdash; that needs root at the OS level, same as any VPN daemon, and doesn't undermine the app container's lack of privileges. The host then runs <code class="inline">tailscale serve</code> to reverse-proxy tailnet traffic to the app container's loopback-only port, injecting an identity header (<code class="inline">Tailscale-User-Login</code>) into forwarded requests. <code class="inline">TailscaleIdentityHelper.java</code> reads that header instead of calling tailscaled's <code class="inline">whois</code> API directly &mdash; same method signature, nothing else in the app changes.</p>
-      <p>Also discovered along the way: the current Dockerfile installs Firefox + geckodriver, but neither <code class="inline">OtjDriver.java</code> nor <code class="inline">SmartAssessorDriver.java</code> use Selenium/WebDriver &mdash; <code class="inline">&quot;Firefox/151.0&quot;</code> only appears as a hardcoded User-Agent string. Dead weight, dropped from the new image. Same for <code class="inline">start.sh</code>'s CSV bootstrap &mdash; zero references anywhere in <code class="inline">src/</code>.</p>
+      <p style="margin-top:22px"><strong>The unlock that shipped:</strong> <code class="inline">tailscaled</code> runs on the host (already tailnet-joined), not inside the app container, and <code class="inline">tailscale serve</code> reverse-proxies tailnet traffic to the app container's loopback-only port, injecting an identity header (<code class="inline">Tailscale-User-Login</code>) into forwarded requests. <code class="inline">TailscaleIdentityHelper.java</code> reads that header instead of calling tailscaled's <code class="inline">whois</code> API directly &mdash; same method signature, nothing else in the app changed. Where it diverged from the original plan: instead of eliminating the remaining sudo requirement by standing up <code class="inline">tailscaled</code> as a fresh systemd unit on an EC2 VM, <code class="inline">deploy/bootstrap.sh</code> delegates Tailscale's local operator role to the current user with a single one-time <code class="inline">sudo tailscale set --operator=$USER</code>. After that one-time step, <code class="inline">tailscale serve</code> itself never needs sudo again, and <code class="inline">bootstrap.sh</code> wires it up automatically on every run.</p>
+      <p>Also discovered along the way: the old Dockerfile installed Firefox + geckodriver, but neither <code class="inline">OtjDriver.java</code> nor <code class="inline">SmartAssessorDriver.java</code> use Selenium/WebDriver &mdash; <code class="inline">&quot;Firefox/151.0&quot;</code> only appears as a hardcoded User-Agent string. Dead weight, dropped from the new image as planned. <code class="inline">start.sh</code>'s CSV bootstrap logic was removed too, and its <code class="inline">tailscaled</code>-launching logic was stripped out &mdash; but the script itself was <strong>kept</strong>, not deleted as the original plan assumed, since it still needs to toggle the <code class="inline">JAVA_DEBUG</code> remote-debugging flag before exec'ing the jar.</p>
     </section>
 
     <section class="block">
       <div class="step" id="s1">
         <div class="step-num">01</div>
         <div class="step-body">
-          <div class="step-head"><h3 class="step-title">MongoDB Atlas</h3><span class="pill manual">Manual &middot; console</span></div>
-          <p>Create a free-tier M0 cluster, a DB user scoped to <code class="inline">otjdb</code>, and get the SRV connection string.</p>
+          <div class="step-head"><h3 class="step-title">MongoDB Atlas</h3><span class="pill manual">Manual &middot; not started</span></div>
+          <p>Not started &mdash; <code class="inline">deploy/podman-compose.yaml</code> still runs <code class="inline">mongo</code> and <code class="inline">mongo-express</code> as local containers, unchanged from the original docker-compose setup. Create a free-tier M0 cluster, a DB user scoped to <code class="inline">otjdb</code>, and get the SRV connection string.</p>
           <pre><code>mongodb+srv://&lt;user&gt;:&lt;pass&gt;@&lt;cluster&gt;.mongodb.net/otjdb?retryWrites=true&amp;w=majority</code></pre>
           <p>No code change needed &mdash; <code class="inline">AppModule.provideMongoClient()</code> (<code class="inline">bind/AppModule.java:40-44</code>) already does <code class="inline">MongoClients.create(System.getenv("MONGO_URI"))</code>; swapping the env var value is a pure config change. Verify Atlas SRV DNS resolution from inside the container during the step 4 smoke test &mdash; don't assume it silently works.</p>
-          <p><code class="inline">mongo</code> and <code class="inline">mongo-express</code> disappear entirely &mdash; no Quadlet units for either.</p>
+          <p>Once this lands, <code class="inline">mongo</code> and <code class="inline">mongo-express</code> disappear entirely &mdash; no Quadlet units for either.</p>
         </div>
       </div>
 
@@ -471,20 +471,27 @@
         <div class="step-body">
           <div class="step-head"><h3 class="step-title">Rewrite <code class="inline">TailscaleIdentityHelper.java</code></h3><span class="pill code">Code change &mdash; done</span></div>
           <p><code class="inline">src/main/java/com/github/grepHammerspace/tailscale/TailscaleIdentityHelper.java</code></p>
-          <p>Deleted the <code class="inline">TAILSCALE_SOCKET</code> constant, the static <code class="inline">OkHttpClient</code> with its custom <code class="inline">SocketFactory</code>/dummy <code class="inline">Dns</code>, the whois HTTP call, and the entire inner <code class="inline">UnixSocket</code> class &mdash; nothing else referenced any of it.</p>
+          <p>Deleted the <code class="inline">TAILSCALE_SOCKET</code> constant, the static <code class="inline">OkHttpClient</code> with its custom <code class="inline">SocketFactory</code>/dummy <code class="inline">Dns</code>, the whois HTTP call, and the entire inner <code class="inline">UnixSocket</code> class &mdash; nothing else referenced any of it. This is the actual current file content, verified against <code class="inline">src/main/java/com/github/grepHammerspace/tailscale/TailscaleIdentityHelper.java</code>:</p>
           <pre><code>public class TailscaleIdentityHelper {
-    private static final String IDENTITY_HEADER = "Tailscale-User-Login"; // verify against current docs
+    private static final String IDENTITY_HEADER = "Tailscale-User-Login";
 
+    /**
+     * Reads the identity injected by the host's {@code tailscale serve} process. Trustworthy only
+     * because the app is reachable exclusively via 127.0.0.1 — tailscale serve is the sole process
+     * that can reach that loopback port and set this header.
+     *
+     * @throws IOException if the header is missing or blank, meaning the request did not arrive via tailscale serve
+     */
     public static String getUser(HttpServletRequest request) throws IOException {
         String user = request.getHeader(IDENTITY_HEADER);
         if (user == null || user.isBlank()) {
-            throw new SecurityException(
-                "Missing " + IDENTITY_HEADER + " header — request did not arrive via tailscale serve");
+            throw new IOException(
+                    "Missing " + IDENTITY_HEADER + " header — request did not arrive via tailscale serve");
         }
         return user;
     }
 }</code></pre>
-          <p>Signature stays <code class="inline">getUser(HttpServletRequest): String throws IOException</code> &mdash; <code class="inline">TailscaleIdentityService</code>, its impl, <code class="inline">AppModule.java</code>, and <code class="inline">OtjServicesResource.resolveUserState()</code> needed zero changes. Tests are unaffected &mdash; <code class="inline">TestAppModule</code> already stubs the service with a fixed user.</p>
+          <p>Signature stays <code class="inline">getUser(HttpServletRequest): String throws IOException</code> &mdash; note it throws plain <code class="inline">IOException</code>, not <code class="inline">SecurityException</code>. <code class="inline">TailscaleIdentityService</code>, its impl, <code class="inline">AppModule.java</code>, and <code class="inline">OtjServicesResource.resolveUserState()</code> needed zero changes. Tests are unaffected &mdash; <code class="inline">TestAppModule</code> already stubs the service with a fixed user.</p>
           <div class="callout">
             <span class="flag">Invariant</span>
             <p style="margin:0">This header is only trustworthy because the app container is reachable <em>exclusively</em> on <code class="inline">127.0.0.1</code> &mdash; the only thing that can reach it is the host's <code class="inline">tailscale serve</code> process, which is what actually sets this header. If the bind address or network topology ever changes, re-examine this assumption.</p>
@@ -495,49 +502,63 @@
       <div class="step" id="s3">
         <div class="step-num">03</div>
         <div class="step-body">
-          <div class="step-head"><h3 class="step-title">New Dockerfile</h3><span class="pill code">Code change</span></div>
-          <p>Replace <code class="inline">docker/otjService.Dockerfile</code>:</p>
-          <pre><code>FROM maven:3.9-eclipse-temurin-25 AS build
+          <div class="step-head"><h3 class="step-title">New Dockerfile</h3><span class="pill code">Code change &mdash; done</span></div>
+          <p>Current <code class="inline">docker/otjService.Dockerfile</code>:</p>
+          <pre><code>FROM docker.io/library/maven:3.9-eclipse-temurin-25 AS build
 WORKDIR /app
 COPY pom.xml .
 RUN mvn dependency:go-offline -q
 COPY src/ ./src/
 RUN mvn package -DskipTests -q
 
-FROM eclipse-temurin:25-jre
+FROM docker.io/library/eclipse-temurin:25-jre
 RUN useradd --system --create-home --uid 10001 appuser
 WORKDIR /app
 COPY --from=build /app/target/app.jar app.jar
+COPY docker/start.sh /start.sh
+RUN chmod +x /start.sh &amp;&amp; chown appuser:appuser /app/app.jar
 USER appuser
 EXPOSE 8945
-ENTRYPOINT ["java", "-jar", "/app/app.jar"]</code></pre>
-          <p>No Firefox/geckodriver, no <code class="inline">curl jq gnupg</code>/Mozilla apt repo, no tailscale binary stage. Runs as non-root <code class="inline">appuser</code> as defense-in-depth on top of rootless Podman. Delete <code class="inline">docker/start.sh</code> entirely &mdash; nothing left to wrap.</p>
+CMD ["/start.sh"]</code></pre>
+          <p>No Firefox/geckodriver, no <code class="inline">curl jq gnupg</code>/Mozilla apt repo, no tailscale binary stage. Runs as non-root <code class="inline">appuser</code> as defense-in-depth on top of rootless Podman. <code class="inline">docker/start.sh</code> was <strong>kept</strong>, not deleted as originally planned &mdash; the tailscaled-launching and CSV-bootstrap logic was stripped, but it still owns the <code class="inline">JAVA_DEBUG</code> toggle:</p>
+          <pre><code>#!/usr/bin/env bash
+set -eou pipefail
+
+JAVA_OPTS=""
+if [ "${JAVA_DEBUG:-false}" = "true" ]; then
+  JAVA_OPTS="-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=*:5005"
+  echo "Debug mode enabled — listening on port 5005"
+fi
+
+exec java $JAVA_OPTS -jar /app/app.jar</code></pre>
         </div>
       </div>
 
       <div class="step" id="s4">
         <div class="step-num">04</div>
         <div class="step-body">
-          <div class="step-head"><h3 class="step-title">Local rootless-Podman smoke test</h3><span class="pill manual">Manual &middot; local</span></div>
-          <p>Before touching AWS at all:</p>
-          <pre><code>podman build -t otj-hours-api:local -f docker/otjService.Dockerfile .
-podman run -d --name otj-test -p 127.0.0.1:8945:8945 \
-  -e MONGO_URI="mongodb+srv://...atlas.../otjdb?..." \
-  -e ANTHROPIC_API_KEY="sk-ant-..." \
-  otj-hours-api:local
+          <div class="step-head"><h3 class="step-title">Local rootless-Podman smoke test</h3><span class="pill manual">Manual &middot; done, now the daily workflow</span></div>
+          <p>This shipped as the actual local dev/deploy loop &mdash; <code class="inline">deploy/shell.nix</code> provisions <code class="inline">podman</code>/<code class="inline">podman-compose</code>/<code class="inline">curl</code>/<code class="inline">jq</code>, and <code class="inline">deploy/bootstrap.sh</code> drives <code class="inline">deploy/podman-compose.yaml</code>:</p>
+          <pre><code>cd deploy &amp;&amp; nix-shell        # provides podman, podman-compose, curl, jq
+bash bootstrap.sh              # build + start (debug mode by default)
+bash bootstrap.sh --prod       # production mode, detaches from the SSH session
+bash bootstrap.sh --stop       # tear down (Mongo data preserved)
+clean-mongo                    # stop + wipe the Mongo data volume
 
 curl -s http://127.0.0.1:8945/health                       # expect 200
-curl -s -H "Tailscale-User-Login: test@example.com" \
-  http://127.0.0.1:8945/otj-services/...                    # simulate the proxy header
-podman inspect otj-test | grep -A5 CapAdd                  # expect empty</code></pre>
-          <p>Confirms the Atlas connection, the header-based identity shim, and that rootless Podman needs zero <code class="inline">cap_add</code>/devices/sysctls once tailscaled is out of the container.</p>
+podman inspect hours-api | grep -A5 CapAdd                 # expect empty</code></pre>
+          <p>Confirms rootless Podman needs zero <code class="inline">cap_add</code>/devices/sysctls once tailscaled is out of the container. <code class="inline">bootstrap.sh</code> also auto-wires <code class="inline">tailscale serve</code> at the end of a successful start (see step 07) &mdash; no separate manual step needed once the one-time operator delegation is done. Still using local Mongo, not Atlas, so there's no SRV connection string to swap in yet.</p>
         </div>
       </div>
 
       <div class="step" id="s5">
         <div class="step-num">05</div>
         <div class="step-body">
-          <div class="step-head"><h3 class="step-title">Provision the EC2 VM</h3><span class="pill manual">Manual &middot; console</span></div>
+          <div class="step-head"><h3 class="step-title">Provision the EC2 VM</h3><span class="pill manual">Manual &middot; not started</span></div>
+          <div class="callout">
+            <span class="flag">Not started</span>
+            <p style="margin:0">otjServices still runs on the home-lab laptop. The rootless-privileges and no-sudo problems this VM migration was meant to unblock are already solved locally (steps 02&ndash;04, 07) via <code class="inline">podman-compose</code> + operator-delegated <code class="inline">tailscale serve</code> &mdash; so this step is now purely about moving hosts, not about privileges.</p>
+          </div>
           <p>Launch an Ubuntu/Debian LTS instance. Security group: SSH (22, restricted to your IP) only &mdash; <strong>no inbound rule for 8945</strong>, since all app traffic arrives via the tailnet, not the public internet. Allocate an Elastic IP (needed for the Atlas allowlist). Install Podman. Install Tailscale on the host and bring it up with a persistent, non-ephemeral auth:</p>
           <pre><code>curl -fsSL https://tailscale.com/install.sh | sh
 sudo tailscale up --hostname=hours-api</code></pre>
@@ -551,7 +572,11 @@ sudo tailscale up --hostname=hours-api</code></pre>
       <div class="step" id="s6">
         <div class="step-num">06</div>
         <div class="step-body">
-          <div class="step-head"><h3 class="step-title">Podman Quadlet unit</h3><span class="pill manual">Manual &middot; VM</span></div>
+          <div class="step-head"><h3 class="step-title">Podman Quadlet unit</h3><span class="pill manual">Manual &middot; not started</span></div>
+          <div class="callout">
+            <span class="flag">Not started</span>
+            <p style="margin:0">Today's interim substitute is <code class="inline">deploy/podman-compose.yaml</code> driven by <code class="inline">deploy/bootstrap.sh</code> (step 04) &mdash; no systemd unit, no dedicated <code class="inline">otjapp</code> user, restart-on-crash comes from compose's <code class="inline">restart: unless-stopped</code>, not a <code class="inline">[Service]</code> block. This Quadlet design remains the target for whenever the VM move happens.</p>
+          </div>
           <p>Dedicated non-root user, lingering enabled so <code class="inline">systemd --user</code> survives logout/reboot:</p>
           <pre><code>sudo useradd -m -s /bin/bash otjapp
 sudo loginctl enable-linger otjapp</code></pre>
@@ -586,9 +611,25 @@ systemctl --user enable --now hours-api.service</code></pre>
       <div class="step" id="s7">
         <div class="step-num">07</div>
         <div class="step-body">
-          <div class="step-head"><h3 class="step-title">Host-level <code class="inline">tailscale serve</code></h3><span class="pill manual">Manual &middot; VM</span></div>
-          <pre><code>sudo tailscale serve --bg --https=443 / http://127.0.0.1:8945</code></pre>
-          <p>Exposes the service at <code class="inline">https://hours-api.&lt;tailnet&gt;.ts.net/</code> to tailnet devices, with the host's <code class="inline">tailscaled</code> terminating TLS, forwarding to the loopback app, and injecting the identity header on the way in.</p>
+          <div class="step-head"><h3 class="step-title">Host-level <code class="inline">tailscale serve</code>, no sudo</h3><span class="pill code">Code + manual &middot; done (locally)</span></div>
+          <p>Shipped in <code class="inline">f497f31</code> (&ldquo;sudo-must-go&rdquo;) &mdash; differs from the original plan of running <code class="inline">tailscale serve</code> under sudo from a fresh systemd unit. Instead, a <strong>one-time</strong> manual delegation of Tailscale's local operator role:</p>
+          <pre><code>sudo tailscale set --operator=$USER   # once, ever</code></pre>
+          <p>After that, <code class="inline">deploy/bootstrap.sh</code> checks for it and wires up <code class="inline">tailscale serve</code> automatically, with no sudo, on every run:</p>
+          <pre><code># True if `tailscale serve` can run as $USER without sudo (operator delegated once via
+# `tailscale set --operator=$USER`).
+tailscale_operator_set() {
+  command -v tailscale &amp;>/dev/null || return 1
+  local operator
+  operator=$(tailscale debug prefs 2>/dev/null | jq -r '.OperatorUser // empty')
+  [ -n "$operator" ] &amp;&amp; [ "$operator" = "$USER" ]
+}
+
+if tailscale_operator_set; then
+  tailscale serve --bg --https=443 "http://127.0.0.1:$APP_PORT"
+else
+  echo "NOTE: run 'sudo tailscale set --operator=$USER' once, then re-run this script."
+fi</code></pre>
+          <p>Exposes the service at <code class="inline">https://&lt;hostname&gt;.&lt;tailnet&gt;.ts.net/</code> to tailnet devices, with the host's <code class="inline">tailscaled</code> terminating TLS, forwarding to the loopback app, and injecting the identity header on the way in. See <code class="inline">deploy/README.md</code> for the write-up of this trust model. The EC2-hosted version of this step (steps 05&ndash;06) will reuse the same operator-delegation mechanism &mdash; it isn't tied to the laptop.</p>
           <div class="callout">
             <span class="flag">Verify, don't assume</span>
             <ul>
@@ -604,15 +645,15 @@ systemctl --user enable --now hours-api.service</code></pre>
       <div class="step" id="s8">
         <div class="step-num">08</div>
         <div class="step-body">
-          <div class="step-head"><h3 class="step-title">End-to-end verification</h3><span class="pill manual">Manual</span></div>
-          <p>From a tailnet-joined device: <code class="inline">curl https://hours-api.&lt;tailnet&gt;.ts.net/health</code> and a real API call, then check app logs to confirm <code class="inline">resolveUserState()</code> resolves the actual tailnet identity rather than throwing <code class="inline">SecurityException</code>. Do this before wiring CI/CD.</p>
+          <div class="step-head"><h3 class="step-title">End-to-end verification</h3><span class="pill manual">Manual &middot; done locally, VM pending</span></div>
+          <p>Local tailnet reachability (phone &rarr; container) was already verified during earlier work on the tailnet join. Remaining: from a tailnet-joined device against the future EC2 host, <code class="inline">curl https://hours-api.&lt;tailnet&gt;.ts.net/health</code> and a real API call, then check app logs to confirm <code class="inline">resolveUserState()</code> resolves the actual tailnet identity rather than throwing <code class="inline">IOException</code>. Do this before wiring CI/CD.</p>
         </div>
       </div>
 
       <div class="step" id="s9">
         <div class="step-num">09</div>
         <div class="step-body">
-          <div class="step-head"><h3 class="step-title">Self-hosted GitHub Actions runner</h3><span class="pill manual">Manual &middot; one-time</span></div>
+          <div class="step-head"><h3 class="step-title">Self-hosted GitHub Actions runner</h3><span class="pill manual">Manual &middot; not started</span></div>
           <p>As the <code class="inline">otjapp</code> user on the VM (simplest: same user that owns the Quadlet unit, avoiding cross-user <code class="inline">systemctl --user</code> permission issues): register via repo Settings &rarr; Actions &rarr; Runners &rarr; &ldquo;New self-hosted runner&rdquo;, label it <code class="inline">otj-vm</code>, install as a systemd service (<code class="inline">svc.sh install &amp;&amp; svc.sh start</code>). This is inherently manual &mdash; GitHub's registration token is short-lived/single-use by design, so it can't be scripted into the workflow itself.</p>
         </div>
       </div>
@@ -620,8 +661,8 @@ systemctl --user enable --now hours-api.service</code></pre>
       <div class="step" id="s10">
         <div class="step-num">10</div>
         <div class="step-body">
-          <div class="step-head"><h3 class="step-title">GitHub Actions workflow</h3><span class="pill code">Code change</span></div>
-          <p><code class="inline">.github/workflows/ci-cd.yml</code></p>
+          <div class="step-head"><h3 class="step-title">GitHub Actions workflow</h3><span class="pill code">Code change &mdash; not started</span></div>
+          <p>No <code class="inline">.github/workflows/</code> directory exists yet. Proposed <code class="inline">.github/workflows/ci-cd.yml</code>:</p>
           <pre><code>name: CI/CD
 on:
   push:
@@ -663,18 +704,24 @@ jobs:
       <div class="step" id="s11">
         <div class="step-num">11</div>
         <div class="step-body">
-          <div class="step-head"><h3 class="step-title">Cleanup</h3><span class="pill code">Code change</span></div>
-          <p>Delete <code class="inline">deploy/docker-compose.yml</code>, <code class="inline">deploy/bootstrap.sh</code>, <code class="inline">deploy/shell.nix</code>, <code class="inline">docker/start.sh</code> &mdash; nothing else references these. Update <code class="inline">notes.md</code> to remove/check off the &ldquo;Upgrade to AWS&rdquo; item. Add a short <code class="inline">README.md</code> documenting the new topology (Atlas + host tailscaled/<code class="inline">tailscale serve</code> + rootless Podman Quadlet + self-hosted runner), since the operational model is no longer self-explanatory from <code class="inline">bootstrap.sh</code> alone.</p>
+          <div class="step-head"><h3 class="step-title">Cleanup</h3><span class="pill code">Code change &mdash; partially done</span></div>
+          <p>What actually happened is different from the original ask: <code class="inline">deploy/docker-compose.yml</code> was <strong>renamed</strong> to <code class="inline">deploy/podman-compose.yaml</code> (not deleted &mdash; still in active use), and <code class="inline">deploy/bootstrap.sh</code>/<code class="inline">deploy/shell.nix</code>/<code class="inline">docker/start.sh</code> were <strong>updated and kept</strong>, not deleted, since they're the mechanism for the current local rootless setup rather than dead weight from a superseded Docker workflow. <code class="inline">deploy/README.md</code> was added (documenting the rootless-Podman/no-sudo/header-identity model) &mdash; this part is done, though it describes the current local topology, not the eventual Atlas + EC2 + Quadlet + self-hosted-runner one. <code class="inline">notes.md</code>'s &ldquo;Upgrade to AWS&rdquo; item is still <strong>un-checked</strong> &mdash; that cleanup can't happen until steps 01, 05, 06, 09, 10 actually land.</p>
         </div>
       </div>
     </section>
 
     <section class="block" id="verify">
       <h2 class="h-context">Verification</h2>
+      <p style="font-weight:600; margin-bottom:8px">Done, locally</p>
       <ul class="checklist">
-        <li><span class="box"></span><span><code class="inline">curl https://hours-api.&lt;tailnet&gt;.ts.net/health</code> &rarr; 200.</span></li>
+        <li><span class="box" style="background:var(--accent); border-color:var(--accent)"></span><span><code class="inline">podman inspect hours-api</code> (or the compose-managed <code class="inline">app</code> container) &rarr; no <code class="inline">CapAdd</code>, <code class="inline">Privileged: false</code>; <code class="inline">podman info</code> confirms rootless.</span></li>
+        <li><span class="box" style="background:var(--accent); border-color:var(--accent)"></span><span>Tailnet reachability confirmed from a phone to the container (verified during earlier tailnet-join work).</span></li>
+        <li><span class="box" style="background:var(--accent); border-color:var(--accent)"></span><span>After the one-time <code class="inline">sudo tailscale set --operator=$USER</code>, <code class="inline">bootstrap.sh</code> wires up <code class="inline">tailscale serve</code> with zero further sudo calls.</span></li>
+      </ul>
+      <p style="font-weight:600; margin:20px 0 8px">Still open</p>
+      <ul class="checklist">
+        <li><span class="box"></span><span><code class="inline">curl https://hours-api.&lt;tailnet&gt;.ts.net/health</code> &rarr; 200, against the future EC2 host.</span></li>
         <li><span class="box"></span><span>Real tailnet identity resolves correctly via app logs on a register/log-activity call, not just &ldquo;no 401&rdquo;.</span></li>
-        <li><span class="box"></span><span><code class="inline">podman inspect hours-api</code> &rarr; no <code class="inline">CapAdd</code>, <code class="inline">Privileged: false</code>; <code class="inline">podman info</code> as <code class="inline">otjapp</code> confirms rootless.</span></li>
         <li><span class="box"></span><span><code class="inline">systemctl --user status hours-api.service</code> &rarr; active + enabled; survives a VM reboot (test once).</span></li>
         <li><span class="box"></span><span>Push a trivial commit to <code class="inline">master</code>: both jobs green, <code class="inline">podman ps</code> shows a fresh start timestamp, <code class="inline">/health</code> stays green throughout.</span></li>
         <li><span class="box"></span><span>Tighten the Atlas IP access list to just the VM's Elastic IP.</span></li>
@@ -688,12 +735,15 @@ jobs:
         <table class="files">
           <thead><tr><th>Path</th><th>Change</th></tr></thead>
           <tbody>
-            <tr><td class="mono">docker/otjService.Dockerfile</td><td>Rewritten &middot; step 03</td></tr>
-            <tr><td class="mono">docker/start.sh</td><td>Deleted &middot; step 03</td></tr>
+            <tr><td class="mono">docker/otjService.Dockerfile</td><td>Rewritten &middot; step 03 (done)</td></tr>
+            <tr><td class="mono">docker/start.sh</td><td>Simplified &amp; kept, not deleted &middot; step 03 (done)</td></tr>
             <tr><td class="mono">src/.../tailscale/TailscaleIdentityHelper.java</td><td>Rewritten &middot; step 02 (done)</td></tr>
-            <tr><td class="mono">deploy/docker-compose.yml, bootstrap.sh, shell.nix</td><td>Deleted &middot; step 11</td></tr>
-            <tr><td class="mono">.github/workflows/ci-cd.yml</td><td>New &middot; step 10</td></tr>
-            <tr><td class="mono">notes.md</td><td>Updated &middot; step 11</td></tr>
+            <tr><td class="mono">deploy/docker-compose.yml</td><td>Renamed &rarr; <code class="inline">deploy/podman-compose.yaml</code> &middot; step 11 (done)</td></tr>
+            <tr><td class="mono">deploy/bootstrap.sh</td><td>Updated for podman-compose + no-sudo tailscale serve &middot; steps 04, 07 (done)</td></tr>
+            <tr><td class="mono">deploy/shell.nix</td><td>Updated, kept as the local provisioning shell &middot; step 04 (done)</td></tr>
+            <tr><td class="mono">deploy/README.md</td><td>Added &middot; step 11 (done, describes current local setup)</td></tr>
+            <tr><td class="mono">.github/workflows/ci-cd.yml</td><td>New &middot; step 10 (not started)</td></tr>
+            <tr><td class="mono">notes.md</td><td>&ldquo;Upgrade to AWS&rdquo; item still open &middot; step 11 (not started)</td></tr>
           </tbody>
         </table>
       </div>

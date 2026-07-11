@@ -106,4 +106,30 @@ class ActivityLogRepositoryIT {
         assertFalse(deleted, "no unposted logs to delete");
         // posted log still exists — markAsPosted already removed it from unposted query, so just verify the delete returned false
     }
+
+    @Test
+    void getAllLogsFor_returnsBothPostedAndUnposted_sortedByDate() {
+        ActivityLog later = new ActivityLog("user-6", "learner-x", "Later work", "",
+                "2026/06/02", "09:00", 0, 1, 0, false, null);
+        ActivityLog earlier = new ActivityLog("user-6", "learner-x", "Earlier work", "",
+                "2026/06/01", "09:00", 0, 1, 0, false, null);
+        repository.saveActivityLog(later);
+        repository.saveActivityLog(earlier);
+        ActivityLog toPost = repository.getUnpostedActivityLogsFor("user-6").stream()
+                .filter(log -> log.activityDate().equals("2026/06/01"))
+                .findFirst().orElseThrow();
+        repository.markAsPosted(toPost);
+
+        List<ActivityLog> all = repository.getAllLogsFor("user-6");
+
+        assertEquals(2, all.size(), "should include both the posted and unposted log");
+        assertEquals("2026/06/01", all.get(0).activityDate(), "should be sorted ascending by date");
+        assertEquals("2026/06/02", all.get(1).activityDate());
+    }
+
+    @Test
+    void getAllLogsFor_scopedToUser_emptyWhenNoLogs() {
+        List<ActivityLog> all = repository.getAllLogsFor("user-with-no-logs-at-all");
+        assertTrue(all.isEmpty());
+    }
 }
