@@ -3,6 +3,8 @@ package com.github.grepHammerspace.bind;
 import com.anthropic.client.AnthropicClient;
 import com.anthropic.client.okhttp.AnthropicOkHttpClient;
 import com.github.grepHammerspace.crypto.PasswordCipher;
+import com.github.grepHammerspace.llm.KsbMatcherService;
+import com.github.grepHammerspace.llm.KsbMatcherServiceImpl;
 import com.github.grepHammerspace.llm.LlmService;
 import com.github.grepHammerspace.llm.LlmServiceImpl;
 import com.github.grepHammerspace.stateStore.UserStateStore;
@@ -59,6 +61,12 @@ public class AppModule {
     @Provides
     @Singleton
     LlmService provideLlmService(LlmServiceImpl impl) {
+        return impl;
+    }
+
+    @Provides
+    @Singleton
+    KsbMatcherService provideKsbMatcherService(KsbMatcherServiceImpl impl) {
         return impl;
     }
 

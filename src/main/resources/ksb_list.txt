@@ -1,0 +1,6 @@
+K1: Understand the core principles and concepts of the occupational standard.
+K2: Understand relevant tools, techniques and methodologies used in the role.
+S1: Apply technical skills to complete tasks to the required standard.
+S2: Communicate effectively with colleagues and stakeholders.
+B1: Demonstrate a proactive and professional approach to work.
+B2: Show commitment to continuous learning and self-improvement.
