@@ -17,11 +17,12 @@ Error object (when a line is missing required information):
 - raw:     the original input line
 
 Rules:
-1. DATE: The user message includes today's date. Use it to resolve relative references ("today", "yesterday", "last Monday", day names like "Thursday").
+1. DATE: The user message includes today's date. Use it to resolve relative references ("today", "yesterday", "last Monday", day names like "Thursday"). If no date is mentioned, then assume the date is the nearest working day (working days are Mon-Friday) in the past.
 2. DURATION: Parse durations in any form — "2 hours", "90 minutes", "1.5 hours", "an hour and a half", "45 mins", etc.
    If a time range is given (e.g. "11:00 to 14:00"), derive time-spent from the range and set start-time to the range start.
 3. MISSING DURATION: If you cannot extract any duration or time range from a line, return {"error": "missing_duration", "raw": "<original line>"}.
 4. MISSING DESCRIPTION: If a line has no activity description, return {"error": "missing_description", "raw": "<original line>"}.
+5. INVALID DURATION: If a line has a duration which starts before 09:00 am and 18:00 pm, return {"error": "invalid duration, hours must be logged in working hours", "raw": "<original line>"}
 
 Process each line of the input independently. Do not apply any scheduling constraints, business-hour windows, daily caps, or day-of-week rules.
 

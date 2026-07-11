@@ -44,13 +44,13 @@ public class LlmServiceImpl implements LlmService {
 
         String userMessage = "Today's date: " + today + "\n\nNew activity content to log:\n" + diff;
 
-        log.info("Sending request to LLM (model: {})", Model.CLAUDE_HAIKU_4_5);
+        log.info("Sending request to LLM (model: {})", Model.CLAUDE_SONNET_4_6);
         log.debug("User message sent to LLM:\n{}", userMessage);
 
         String responseText;
         try {
             MessageCreateParams params = MessageCreateParams.builder()
-                    .model(Model.CLAUDE_HAIKU_4_5)
+                    .model(Model.CLAUDE_SONNET_4_6)
                     .maxTokens(2048)
                     .system(systemPrompt)
                     .addUserMessage(userMessage)
