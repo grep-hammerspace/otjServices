@@ -238,7 +238,9 @@ public class OtjDriver implements Driver {
         payload.put("unitId", "ef974f73-5d9d-447e-8652-379ba9535229");
         payload.put("activityDate", log.activityDate().replace("/", "-"));
         payload.put("activityTime", "T" + log.activityTime() + ":00");
-        payload.put("activityType", log.activityType());
+        // ActivityLog.activityType() is always 0 (never set by the LLM parser) — the
+        // real OneAdvanced activity-log API expects a fixed code here, confirmed working at 16.
+        payload.put("activityType", 16);
         payload.put("hours", log.hours());
         payload.put("minutes", String.format("%02d", log.minutes()));
         OtjDriver.log.info("Posting payload: {}", payload);

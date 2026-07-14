@@ -6,4 +6,5 @@
 3) Upgrade to AWS, with free tier, not sure how that looks with running privileged containers though, will have to do some more digging
 4) Change activity log diffing code to care only about additions, this will solve the issue of previous states being cleared
 5) Add a sweeper proc, this will run every once in a while (or on request) and match your activity logs to KSBs and return you some data on how your activities related to the KSBs.
-6) ~~Decide whether or not we should keep Mongo or switch to sthg AWS native, maybe DocumentDB. It may be cheaper than ingress~~ no need, Atlas free tier has plenty of money
+6) ~~Decide whether or not we should keep Mongo or switch to sthg AWS native, maybe DocumentDB. It may be cheaper than ingress~~ no need, Atlas free tier has plenty of space
+7) smarter session tracking: ie if someone tries a login with azure id and soon after tries another, they will alr be logged in, which case we dont need to return a challenge code, and we dont need to return the thing about an exisiting push (which is sorta inaccurate)

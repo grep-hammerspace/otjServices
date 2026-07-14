@@ -2,6 +2,8 @@ package com.github.grepHammerspace.web;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.github.grepHammerspace.db.ActivityLogRepository;
+import com.github.grepHammerspace.db.model.ActivityLog;
 import okhttp3.*;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
@@ -17,6 +19,7 @@ import java.security.MessageDigest;
 import java.security.SecureRandom;
 import java.util.ArrayList;
 import java.util.Base64;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -24,20 +27,24 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Drives the SmartAssessor login via the QMUL Azure AD federation path:
- *   PKCE bypass → Keycloak OIDC → Azure AD broker → Microsoft login → MFA push → SmartAssessor
+ * Drives login to OneAdvanced's cloud-education platform via the QMUL Azure AD federation path:
+ *   PKCE bypass → Keycloak OIDC → Azure AD broker → Microsoft login → MFA push → education.oneadvanced.com
  *
  * The OneAdvanced discover endpoint only recognises {@code se24.qmul.ac.uk} emails, not
  * {@code qmul.ac.uk}, so we replicate what discover does: generate PKCE code_verifier/challenge,
  * inject STATE and CODE_VERIFIER cookies, and go straight to Keycloak.
  *
+ * Once logged in, {@link #submitPendingOtjs} posts to the same JSON activity-log API as
+ * {@link OtjDriver}, reusing the cookies collected during this login instead of OtjDriver's
+ * direct (non-federated) Keycloak login.
+ *
  * Usage:
  *   1. prepare(username, password) — stops after sending the Microsoft Authenticator push
- *   2. completeMfa("") — polls until the user approves, then completes the redirect chain to SmartAssessor
+ *   2. completeMfa("") — polls until the user approves, then completes the redirect chain to education.oneadvanced.com
  *      (no-op if an existing SSO session already finished login inside prepare)
  */
-public class SmartAssessorDriver implements Driver {
-    private static final Logger log = LoggerFactory.getLogger(SmartAssessorDriver.class);
+public class AzureIdDriver implements Driver {
+    private static final Logger log = LoggerFactory.getLogger(AzureIdDriver.class);
 
     private static final MediaType JSON_TYPE = MediaType.get("application/json; charset=UTF-8");
 
@@ -50,13 +57,21 @@ public class SmartAssessorDriver implements Driver {
             "https://auth.identity.oneadvanced.com/auth/redirect";
 
     // STATE cookie value sent by the discover endpoint; we inject it ourselves.
-    // Encodes: {"clientId":"advancedsso","redirectUri":"https://www.smartassessor.co.uk/Account",
-    //           "organizationRef":"queen-mary-university-london","authenticationDomain":"smartassessor.co.uk"}
+    // Encodes: {"clientId":"advancedsso","redirectUri":"https://education.oneadvanced.com/parseauth?redirectUri=https://education.oneadvanced.com/",
+    //           "organizationRef":"queen-mary-university-london"}
+    // redirectUri matches OtjDriver's DISCOVER_URL target exactly (confirmed against a captured
+    // HAR of a real login).
+    //
+    // No "authenticationDomain" field here — a live IT run proved that including one routes
+    // auth.identity.oneadvanced.com/auth/redirect to https://authcookies.<authenticationDomain>/auth/authenticate,
+    // a per-customer cookie-bounce host that only exists for third-party apps (confirmed against
+    // the original SmartAssessor HAR: authcookies.smartassessor.co.uk). education.oneadvanced.com
+    // is a first-party OneAdvanced app — OtjDriver's DISCOVER_URL never sends authenticationDomain
+    // either — so omitting it here routes straight to auth.identity.oneadvanced.com/auth/authenticate.
     private static final String STATE_JSON =
             "{\"clientId\":\"advancedsso\","
-            + "\"redirectUri\":\"https://www.smartassessor.co.uk/Account\","
-            + "\"organizationRef\":\"queen-mary-university-london\","
-            + "\"authenticationDomain\":\"smartassessor.co.uk\"}";
+            + "\"redirectUri\":\"https://education.oneadvanced.com/parseauth?redirectUri=https://education.oneadvanced.com/\","
+            + "\"organizationRef\":\"queen-mary-university-london\"}";
 
     private static final String MS_SAML_URL =
             "https://login.microsoftonline.com/569df091-b013-40e3-86ee-bd9cb9e25814/saml2";
@@ -76,9 +91,15 @@ public class SmartAssessorDriver implements Driver {
     private static final int MAX_POLL_ATTEMPTS = 40; // 40 × 3 s = 2 min
     private static final long POLL_INTERVAL_MS = 3_000L;
 
+    // Same JSON activity-log API OtjDriver posts to — reachable once the Azure AD login
+    // above lands us on education.oneadvanced.com with a valid session.
+    private static final String ACTIVITY_LOG_API =
+            "https://education.oneadvanced.com/api/cloud-education/v1/learner/%s/activity-log";
+
     private final InMemoryCookieJar cookieJar;
     private final OkHttpClient httpClient;
     private final ObjectMapper mapper;
+    private final ActivityLogRepository activityLogRepository;
 
     // State held between prepare() and completeMfa()
     private String mfaCtx;
@@ -90,7 +111,8 @@ public class SmartAssessorDriver implements Driver {
     private boolean loginComplete = false;
 
     @Inject
-    public SmartAssessorDriver() {
+    public AzureIdDriver(ActivityLogRepository activityLogRepository) {
+        this.activityLogRepository = activityLogRepository;
         this.mapper = new ObjectMapper();
         this.cookieJar = new InMemoryCookieJar();
         this.httpClient = new OkHttpClient.Builder()
@@ -372,7 +394,7 @@ public class SmartAssessorDriver implements Driver {
 
     /**
      * Polls Microsoft until the phone push is approved, then completes the
-     * Keycloak → SmartAssessor redirect chain. Blocks for up to ~2 minutes.
+     * Keycloak → education.oneadvanced.com redirect chain. Blocks for up to ~2 minutes.
      * The {@code ignoredToken} parameter is not used.
      */
     @Override
@@ -476,16 +498,79 @@ public class SmartAssessorDriver implements Driver {
         completeSamlChain(processHtml, processUrl);
     }
 
-    /** Not yet implemented — SmartAssessor OTJ submission API is pending analysis. */
+    /**
+     * Fetches all unposted OTJs from MongoDB and POSTs each one to the activity-log API —
+     * identical to {@link OtjDriver#submitPendingOtjs}, just reusing the session cookies
+     * this driver collected via the Azure AD login instead of a direct Keycloak login.
+     */
     @Override
     public OtjSubmitResult submitPendingOtjs(String userId) {
-        throw new UnsupportedOperationException("SmartAssessor OTJ submission not yet implemented");
+        List<ActivityLog> pending = activityLogRepository.getUnpostedActivityLogsFor(userId);
+
+        if (pending.isEmpty()) {
+            log.info("No unposted OTJs found for user {}", userId);
+            return new OtjSubmitResult(List.of(), List.of());
+        }
+
+        String postUrl = String.format(ACTIVITY_LOG_API, pending.get(0).learnerId().strip());
+        log.info("Submitting {} pending OTJ(s) to {} for user {}", pending.size(), postUrl, userId);
+
+        List<String> posted = new ArrayList<>();
+        List<String> failed = new ArrayList<>();
+
+        for (ActivityLog activityLog : pending) {
+            try {
+                String json = mapper.writeValueAsString(buildPayload(activityLog));
+
+                Request request = new Request.Builder()
+                        .url(postUrl)
+                        .header("User-Agent", USER_AGENT)
+                        .post(RequestBody.create(json, JSON_TYPE))
+                        .build();
+
+                try (Response response = httpClient.newCall(request).execute()) {
+                    if (response.isSuccessful()) {
+                        activityLogRepository.markAsPosted(activityLog);
+                        posted.add(activityLog.id());
+                        log.info("Posted activity log {} ({})", activityLog.id(), activityLog.activityDate());
+                    } else {
+                        failed.add(activityLog.id());
+                        log.warn("Failed to post activity log {} — HTTP {} WWW-Authenticate: [{}] body: {}",
+                                activityLog.id(), response.code(),
+                                response.header("WWW-Authenticate"),
+                                response.body() != null ? response.body().string() : "null");
+                    }
+                }
+            } catch (Exception e) {
+                failed.add(activityLog.id());
+                log.error("Exception posting activity log {}: {}", activityLog.id(), e.getMessage());
+            }
+        }
+
+        log.info("Done — {}/{} posted, {} failed", posted.size(), pending.size(), failed.size());
+        return new OtjSubmitResult(posted, failed);
+    }
+
+    private Map<String, Object> buildPayload(ActivityLog activityLog) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("learnerId", activityLog.learnerId().strip());
+        payload.put("activityImpact", activityLog.activityImpact());
+        payload.put("unitId", "ef974f73-5d9d-447e-8652-379ba9535229");
+        payload.put("activityDate", activityLog.activityDate().replace("/", "-"));
+        payload.put("activityTime", "T" + activityLog.activityTime() + ":00");
+        // ActivityLog.activityType() is always 0 (never set by the LLM parser) — the
+        // real OneAdvanced activity-log API expects a fixed code here, confirmed working at 16.
+        payload.put("activityType", 16);
+        payload.put("hours", activityLog.hours());
+        payload.put("minutes", String.format("%02d", activityLog.minutes()));
+        log.info("Posting payload: {}", payload);
+        return payload;
     }
 
     // ── Helpers ────────────────────────────────────────────────────────────────
 
     /** Scrapes the SAMLResponse auto-submit form and POSTs it to Keycloak, then follows
-     *  the full redirect chain to SmartAssessor. */
+     *  the full redirect chain to education.oneadvanced.com. */
     private void completeSamlChain(String html, String baseUrl) throws IOException {
         Document doc = Jsoup.parse(html, baseUrl);
         Element samlForm = doc.selectFirst("form");
@@ -497,7 +582,7 @@ public class SmartAssessorDriver implements Driver {
         finalResp.close();
 
         log.info("Login complete — landing URL: {}", landingUrl);
-        if (!landingUrl.contains("smartassessor.co.uk")) {
+        if (!landingUrl.contains("education.oneadvanced.com")) {
             throw new IOException("Login failed — unexpected landing URL: " + landingUrl);
         }
     }

@@ -20,7 +20,7 @@ import com.github.grepHammerspace.web.Driver;
 import com.github.grepHammerspace.web.OtjDriver;
 import com.github.grepHammerspace.web.OtjSubmitResult;
 import com.github.grepHammerspace.web.PrepareResult;
-import com.github.grepHammerspace.web.SmartAssessorDriver;
+import com.github.grepHammerspace.web.AzureIdDriver;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.ws.rs.*;
 import jakarta.ws.rs.core.Context;
@@ -52,7 +52,7 @@ public class OtjServicesResource {
     private final TailscaleIdentityService tailscaleIdentityService;
     private final LlmService llmService;
     private final Provider<OtjDriver> otjDriverProvider;
-    private final Provider<SmartAssessorDriver> smartAssessorDriverProvider;
+    private final Provider<AzureIdDriver> azureIdDriverProvider;
 
     @Inject
     public OtjServicesResource(UserStateStore userStateStore, UserRepository userRepository,
@@ -60,14 +60,14 @@ public class OtjServicesResource {
                                ActivityLogRepository activityLogRepository,
                                LlmService llmService,
                                Provider<OtjDriver> otjDriverProvider,
-                               Provider<SmartAssessorDriver> smartAssessorDriverProvider) {
+                               Provider<AzureIdDriver> azureIdDriverProvider) {
         this.userStateStore = userStateStore;
         this.userRepository = userRepository;
         this.activityLogRepository = activityLogRepository;
         this.tailscaleIdentityService = tailscaleIdentityService;
         this.llmService = llmService;
         this.otjDriverProvider = otjDriverProvider;
-        this.smartAssessorDriverProvider = smartAssessorDriverProvider;
+        this.azureIdDriverProvider = azureIdDriverProvider;
     }
 
     /**
@@ -273,24 +273,24 @@ public class OtjServicesResource {
     }
 
     /**
-     * Logs in to SmartAssessor via the QMUL Azure AD path.
+     * Logs in to OneAdvanced's cloud-education platform via the QMUL Azure AD path.
      * Sends a Microsoft Authenticator push notification to the user's phone and returns.
-     * Call {@code POST /smart-assessor/complete} once the user has approved the push.
+     * Call {@code POST /azure-id/complete} once the user has approved the push.
      */
     @GET
-    @Path("/smart-assessor/prepare")
-    public Response smartAssessorPrepare(@Context HttpServletRequest request) {
+    @Path("/azure-id/prepare")
+    public Response azureIdPrepare(@Context HttpServletRequest request) {
         String userId;
         try {
             userId = resolveUserState(request);
-            log.info("Received request from user {} to do {}", userId, "smart-assessor/prepare");
+            log.info("Received request from user {} to do {}", userId, "azure-id/prepare");
             User user = userRepository.findByUserId(userId);
             if (user == null) {
                 return Response.status(Response.Status.BAD_REQUEST)
                         .entity("{\"error\": \"No registered user found — call POST /otj-services/register first\"}")
                         .build();
             }
-            SmartAssessorDriver driver = smartAssessorDriverProvider.get();
+            AzureIdDriver driver = azureIdDriverProvider.get();
             PrepareResult result = driver.prepare(user.username(), user.password());
             UserState userState = userStateStore.getStateForUser(userId);
             userState.setDriver(driver);
@@ -313,28 +313,31 @@ public class OtjServicesResource {
                     : "";
             return Response.ok("{\"status\": \"push_sent\", \"message\": \"" + result.userMessage() + "\"" + challengeField + "}").build();
         } catch (IOException e) {
-            log.warn("SmartAssessor prepare failed: {}", e.getMessage());
+            log.warn("Azure ID prepare failed: {}", e.getMessage());
             return Response.status(Response.Status.BAD_REQUEST)
                     .entity("{\"error\": \"" + e.getMessage() + "\"}").build();
         }
     }
 
     /**
-     * Waits for the background EndAuth poll (started by /smart-assessor/prepare) to complete.
+     * Waits for the background EndAuth poll (started by /azure-id/prepare) to complete.
      * Returns as soon as the user approves in Microsoft Authenticator.
      */
     @GET
-    @Path("/smart-assessor/complete")
-    public Response smartAssessorComplete(@Context HttpServletRequest request) {
+    @Path("/azure-id/complete")
+    public Response azureIdComplete(@Context HttpServletRequest request) {
         String userId;
         CompletableFuture<Void> loginFuture;
+        Driver driver;
         try {
             userId = resolveUserState(request);
-            log.info("Received request from user {} to do {}", userId, "smart-assessor/complete");
-            loginFuture = userStateStore.getStateForUser(userId).getLoginFuture();
+            log.info("Received request from user {} to do {}", userId, "azure-id/complete");
+            UserState userState = userStateStore.getStateForUser(userId);
+            loginFuture = userState.getLoginFuture();
+            driver = userState.getDriver();
             if (loginFuture == null) {
                 return Response.status(Response.Status.BAD_REQUEST)
-                        .entity("{\"error\": \"No active session — call /smart-assessor/prepare first\"}").build();
+                        .entity("{\"error\": \"No active session — call /azure-id/prepare first\"}").build();
             }
         } catch (IOException e) {
             return Response.status(Response.Status.UNAUTHORIZED)
@@ -343,13 +346,12 @@ public class OtjServicesResource {
 
         try {
             loginFuture.get(125, TimeUnit.SECONDS);
-            return Response.ok("{\"status\": \"logged_in\"}").build();
         } catch (TimeoutException e) {
             return Response.status(408)
                     .entity("{\"error\": \"Timed out waiting for Microsoft Authenticator approval\"}").build();
         } catch (ExecutionException e) {
             Throwable cause = e.getCause();
-            log.warn("SmartAssessor complete failed: {}", cause.getMessage());
+            log.warn("Azure ID complete failed: {}", cause.getMessage());
             return Response.status(Response.Status.BAD_REQUEST)
                     .entity("{\"error\": \"" + cause.getMessage() + "\"}").build();
         } catch (InterruptedException e) {
@@ -357,6 +359,22 @@ public class OtjServicesResource {
             return Response.status(Response.Status.INTERNAL_SERVER_ERROR)
                     .entity("{\"error\": \"Interrupted while waiting for approval\"}").build();
         }
+
+        OtjSubmitResult result = driver.submitPendingOtjs(userId);
+
+        if (result.nothingToPost()) {
+            return Response.ok("{\"status\": \"nothing_to_post\", \"detail\": \"No unposted OTJs found.\"}").build();
+        }
+        if (result.allPosted()) {
+            return Response.ok("{\"status\": \"ok\", \"posted\": " + result.posted().size() + "}").build();
+        }
+        if (result.allFailed()) {
+            return Response.status(502)
+                    .entity("{\"status\": \"all_failed\", \"total\": " + result.failed().size() + ", \"failed\": " + result.failed().size() + "}").build();
+        }
+        // partial success
+        return Response.status(207)
+                .entity("{\"status\": \"partial\", \"posted\": " + result.posted().size() + ", \"failed\": " + result.failed().size() + "}").build();
     }
 
     /** Resolves the Tailscale login name and lazily initialises per-user state if it doesn't exist yet. */

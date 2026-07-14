@@ -15,7 +15,7 @@ import java.util.Base64;
  * Encrypts/decrypts user passwords at rest with AES-256-GCM.
  *
  * <p>Passwords must be recoverable (not just verifiable) because they are replayed into
- * the OneAdvanced login flow (see {@code SmartAssessorDriver}), which rules out one-way hashing.
+ * the OneAdvanced login flow (see {@code AzureIdDriver}, {@code OtjDriver}), which rules out one-way hashing.
  *
  * <p>Stored format is {@code ENC:1:<base64(iv || ciphertext)>}. The version segment leaves
  * room for future key rotation. The ciphertext is authenticated against the owning user's

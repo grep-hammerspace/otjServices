@@ -1,0 +1,105 @@
+package com.github.grepHammerspace.web;
+
+import com.github.grepHammerspace.db.ActivityLogRepository;
+import com.github.grepHammerspace.db.model.ActivityLog;
+import com.mongodb.client.MongoClients;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Test;
+import org.testcontainers.containers.MongoDBContainer;
+
+import java.util.List;
+
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assumptions.assumeFalse;
+
+/**
+ * Manual, live end-to-end run of the Azure AD login + OTJ submission flow.
+ *
+ * <p>This hits the real QMUL Azure AD / OneAdvanced endpoints and blocks waiting for a real
+ * Microsoft Authenticator approval on your phone, so it is intentionally named {@code *IT}
+ * (this project has no failsafe plugin configured, so {@code mvn test} never picks it up) and
+ * must be run by hand, e.g.:
+ *
+ * <pre>mvn test -Dtest=AzureIdDriverIT</pre>
+ *
+ * Fill in {@link #PASSWORD} locally before running — do not commit a real password.
+ */
+class AzureIdDriverIT {
+
+    // ── Hardcoded test credentials — fill in locally, never commit a real password ──
+    private static final String USERNAME = "ec24598@qmul.ac.uk";
+    private static final String PASSWORD = "";
+
+    // Known-working learnerId for USERNAME, confirmed against the real activity-log API
+    // (sourced from ellie_login.har's captured API calls).
+    private static final String LEARNER_ID = "b34c56c6-4fac-4616-8f03-3b7a5c2c5da7";
+
+    private static final String TEST_USER_ID = "azure-id-it-user";
+
+    static final MongoDBContainer MONGO = new MongoDBContainer("mongo:8");
+    static ActivityLogRepository repository;
+
+    @BeforeAll
+    static void seedMockedActivityLog() {
+        MONGO.start();
+        repository = new ActivityLogRepository(
+                MongoClients.create(MONGO.getConnectionString()).getDatabase("testdb")
+        );
+
+        // A mocked-up activity log — mirrors what LlmServiceImpl.toActivityLog() would produce.
+        ActivityLog mocked = new ActivityLog(
+                TEST_USER_ID,
+                LEARNER_ID,
+                "Reviewed and refactored the Azure AD OTJ submission integration.",
+                "",
+                "2026/07/13",
+                "09:00",
+                0,
+                1,
+                30,
+                false,
+                null
+        );
+        repository.saveActivityLog(mocked);
+        System.out.println("[IT] Seeded 1 mocked, unposted ActivityLog for user " + TEST_USER_ID);
+    }
+
+    @Test
+    void login_thenSubmitMockedActivityLog() throws Exception {
+        assumeFalse(PASSWORD.equals("REPLACE_ME_BEFORE_RUNNING"),
+                "Set a real PASSWORD constant before running this manual test");
+
+        AzureIdDriver driver = new AzureIdDriver(repository);
+
+        System.out.println("[IT] Step 1/3 — starting login for " + USERNAME + " (PKCE -> Keycloak -> Azure AD)...");
+        PrepareResult prepareResult = driver.prepare(USERNAME, PASSWORD);
+        System.out.println("[IT] prepare() returned status=" + prepareResult.status() + " — " + prepareResult.userMessage());
+
+        if (prepareResult.requiresMfa()) {
+            System.out.println("[IT] Step 2/3 — approve the push on Microsoft Authenticator now. "
+                    + "Waiting up to 2 minutes for approval...");
+            driver.completeMfa("");
+            System.out.println("[IT] MFA approved — education.oneadvanced.com session cookies acquired.");
+        } else {
+            System.out.println("[IT] Step 2/3 — existing Microsoft SSO session completed login, no MFA needed.");
+        }
+
+        System.out.println("[IT] Cookies on oneadvanced.com after login: " + driver.cookiesFor("oneadvanced"));
+
+        System.out.println("[IT] Step 3/3 — posting the 1 mocked activity log to the OneAdvanced activity-log API...");
+        OtjSubmitResult result = driver.submitPendingOtjs(TEST_USER_ID);
+
+        System.out.println("[IT] submitPendingOtjs() result — posted=" + result.posted() + " failed=" + result.failed());
+        if (result.allPosted()) {
+            System.out.println("[IT] SUCCESS — activity log posted and marked as posted in Mongo.");
+        } else if (result.allFailed()) {
+            System.out.println("[IT] FAILED — see AzureIdDriver logs above for the HTTP status. "
+                    + "This is expected to need a look on the very first live run per the submission plan's notes.");
+        }
+
+        assertFalse(result.nothingToPost(), "expected the driver to attempt posting the seeded mocked activity log");
+
+        List<ActivityLog> stillPending = repository.getUnpostedActivityLogsFor(TEST_USER_ID);
+        System.out.println("[IT] Unposted logs remaining for user after run: " + stillPending.size());
+    }
+}
