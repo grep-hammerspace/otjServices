@@ -49,8 +49,13 @@ export class GithubOidcStack extends cdk.Stack {
     });
 
     // Assume the roles `cdk bootstrap` already created — those carry exactly
-    // what `cdk deploy`/`cdk diff` need. (Direct ECR/SSM permissions for image
-    // publishing and box deploys are added separately below.)
+    // what `cdk deploy`/`cdk diff` need. file-publishing-role is required to
+    // upload the synthesized template to the bootstrap S3 bucket; easy to miss
+    // since a locally-run `cdk deploy` with AdministratorAccess creds silently
+    // falls back to direct bucket access when it can't assume this role, so the
+    // gap only surfaces once CI (with no such fallback) tries it. (Direct
+    // ECR/SSM permissions for image publishing and box deploys are added
+    // separately below.)
     const account = cdk.Stack.of(this).account;
     deployRole.addToPolicy(
       new iam.PolicyStatement({
@@ -58,6 +63,7 @@ export class GithubOidcStack extends cdk.Stack {
         resources: [
           `arn:aws:iam::${account}:role/cdk-${CDK_QUALIFIER}-deploy-role-${account}-${DEPLOY_REGION}`,
           `arn:aws:iam::${account}:role/cdk-${CDK_QUALIFIER}-lookup-role-${account}-${DEPLOY_REGION}`,
+          `arn:aws:iam::${account}:role/cdk-${CDK_QUALIFIER}-file-publishing-role-${account}-${DEPLOY_REGION}`,
         ],
       }),
     );
