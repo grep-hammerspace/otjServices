@@ -28,7 +28,7 @@ export class OtjServicesStack extends cdk.Stack {
     // plane/DERP relays, and MongoDB Atlas connectivity.
     const instanceSecurityGroup = new ec2.SecurityGroup(this, "InstanceSecurityGroup", {
       vpc,
-      description: "otjServices EC2 host — no inbound; SSM for admin, tailscale serve for app access",
+      description: "otjServices EC2 host - no inbound; SSM for admin, tailscale serve for app access",
       allowAllOutbound: true,
     });
 
