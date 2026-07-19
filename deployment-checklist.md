@@ -23,6 +23,12 @@ npx cdk deploy GithubOidcStack
 
 - [ ] Copy the `DeployRoleArn` output
 
+**Redeploy `GithubOidcStack` by hand (`npx cdk deploy GithubOidcStack`) any time
+`aws/lib/github-oidc-stack.ts` changes** — CI authenticates *using* the role this
+stack creates, so it can never be the one to update its own permissions. Required
+once now, since this stack was just extended with ECR push and SSM SendCommand
+permissions for step 6 below.
+
 ## 3. Wire up GitHub Actions (one-time)
 
 - [ ] GitHub repo → Settings → Secrets and variables → Actions → Variables →
@@ -60,12 +66,31 @@ On the box:
 - [ ] One-time: `sudo tailscale set --operator=$USER` (lets `tailscale serve`
       run without sudo)
 - [ ] Install Podman (`apt install podman` on Ubuntu 24.04)
-- [ ] Set up the Quadlet unit
-      (`~/.config/containers/systemd/hours-api.container`) and the
-      `EnvironmentFile` holding `MONGO_URI`, `ANTHROPIC_API_KEY`,
-      `PASSWORD_ENCRYPTION_KEY` — per `deployment-migration-plan.html` step 06,
-      not yet written as code
+- [ ] Install AWS CLI v2 (needed for `aws ecr get-login-password` — not covered
+      by `apt`'s stale v1):
+      ```
+      curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o awscliv2.zip
+      unzip awscliv2.zip && sudo ./aws/install
+      ```
+      No credentials to configure — it picks up the instance role automatically.
+- [ ] Create the `otjapp` user and enable lingering so `systemd --user` survives
+      logout/reboot:
+      ```
+      sudo useradd -m -s /bin/bash otjapp
+      sudo loginctl enable-linger otjapp
+      ```
+- [ ] As `otjapp`, create `~/otj-deploy/` and paste in the contents of
+      `deploy/prod/deploy.sh` and `deploy/prod/hours-api.container.template`
+      from this repo, then `chmod +x ~/otj-deploy/deploy.sh`
+- [ ] As `otjapp`, create `~/otj-hours-api.env` (`chmod 600`) holding
+      `MONGO_URI=`, `ANTHROPIC_API_KEY=`, `PASSWORD_ENCRYPTION_KEY=`
 - [ ] `tailscale serve --bg --https=443 http://127.0.0.1:8945`
+
+Once this is done, merges to `master` build the app image, push it to ECR
+tagged with the commit SHA, and run `deploy.sh` on the box via SSM
+automatically (see `.github/workflows/ci-cd.yml`) — no further manual steps
+for ordinary deploys. To roll back, re-run `deploy.sh` on the box (or via
+`aws ssm send-command`) pointed at an older SHA tag; ECR retains the last 20.
 
 ## 7. Verify end-to-end
 

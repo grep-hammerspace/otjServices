@@ -1,0 +1,20 @@
+[Unit]
+Description=otjServices hours-api
+After=network-online.target
+Wants=network-online.target
+
+[Container]
+Image=__IMAGE_URI__
+ContainerName=hours-api
+PublishPort=127.0.0.1:8945:8945
+EnvironmentFile=%h/otj-hours-api.env
+HealthCmd=curl -f http://localhost:8945/health || exit 1
+HealthInterval=15s
+HealthRetries=3
+
+[Service]
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

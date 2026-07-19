@@ -11,6 +11,7 @@ pkgs.mkShell {
     nodejs
     nodePackages.aws-cdk
     awscli2
+    ssm-session-manager-plugin
   ];
 
   JAVA_HOME = pkgs.jdk25.home;

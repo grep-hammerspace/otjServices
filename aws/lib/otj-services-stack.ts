@@ -2,6 +2,7 @@ import * as cdk from "aws-cdk-lib";
 import { Construct } from "constructs";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as iam from "aws-cdk-lib/aws-iam";
+import * as ecr from "aws-cdk-lib/aws-ecr";
 
 export class OtjServicesStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
@@ -66,10 +67,29 @@ export class OtjServicesStack extends cdk.Stack {
       instanceId: instance.instanceId,
     });
 
+    // Tag used to scope the GitHub Actions deploy role's SSM SendCommand permission
+    // (github-oidc-stack.ts) to this instance without hardcoding its ID there.
+    cdk.Tags.of(instance).add("otj:role", "app-host");
+
+    // Every tag is a commit SHA, pushed once by CI — immutable so a SHA can never
+    // silently be repointed at a different image.
+    const repository = new ecr.Repository(this, "AppRepository", {
+      repositoryName: "otj-hours-api", // keep in sync with ECR_REPOSITORY_NAME in github-oidc-stack.ts
+      imageScanOnPush: true,
+      imageTagMutability: ecr.TagMutability.IMMUTABLE,
+      lifecycleRules: [
+        { tagStatus: ecr.TagStatus.UNTAGGED, maxImageAge: cdk.Duration.days(1) },
+        { tagStatus: ecr.TagStatus.TAGGED, tagPatternList: ["*"], maxImageCount: 20 },
+      ],
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+    });
+    repository.grantPull(instanceRole);
+
     new cdk.CfnOutput(this, "InstanceId", { value: instance.instanceId });
     new cdk.CfnOutput(this, "ElasticIp", { value: elasticIp.ref });
     new cdk.CfnOutput(this, "SsmConnectCommand", {
       value: `aws ssm start-session --target ${instance.instanceId} --region eu-west-2`,
     });
+    new cdk.CfnOutput(this, "EcrRepositoryUri", { value: repository.repositoryUri });
   }
 }
