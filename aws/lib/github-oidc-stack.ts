@@ -106,7 +106,8 @@ export class GithubOidcStack extends cdk.Stack {
         actions: ["ssm:SendCommand"],
         resources: [
           `arn:aws:ec2:${DEPLOY_REGION}:${account}:instance/*`,
-          `arn:aws:ssm:${DEPLOY_REGION}:${account}:document/AWS-RunShellScript`,
+          // AWS-owned public document — empty account segment (note the double colon).
+          `arn:aws:ssm:${DEPLOY_REGION}::document/AWS-RunShellScript`,
         ],
         conditions: {
           StringEquals: { [`ssm:resourceTag/${EC2_TAG_KEY}`]: EC2_TAG_VALUE },
