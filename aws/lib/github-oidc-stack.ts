@@ -83,6 +83,10 @@ export class GithubOidcStack extends cdk.Stack {
           "ecr:InitiateLayerUpload",
           "ecr:UploadLayerPart",
           "ecr:CompleteLayerUpload",
+          // Lets CI skip re-pushing a SHA tag that already exists, so re-running
+          // a failed job (which re-runs the whole job, including this step)
+          // doesn't hit ECR's immutable-tag rejection on the second attempt.
+          "ecr:DescribeImages",
         ],
         resources: [`arn:aws:ecr:${DEPLOY_REGION}:${account}:repository/${ECR_REPOSITORY_NAME}`],
       }),

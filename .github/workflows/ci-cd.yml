@@ -55,7 +55,18 @@ jobs:
       - uses: aws-actions/amazon-ecr-login@v2
         id: ecr-login
 
+      - name: Check if image already pushed
+        id: image-check
+        run: |
+          if aws ecr describe-images --repository-name otj-hours-api \
+               --image-ids imageTag=${{ github.sha }} --region eu-west-2 >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Build and push image
+        if: steps.image-check.outputs.exists == 'false'
         env:
           ECR_REPO: ${{ steps.ecr-login.outputs.registry }}/otj-hours-api
         run: |
