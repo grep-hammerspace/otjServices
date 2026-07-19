@@ -104,18 +104,30 @@ export class GithubOidcStack extends cdk.Stack {
     // rather than instance ID since the instance doesn't exist yet at this
     // stack's first deploy either, and tag-scoping survives the instance being
     // replaced by a future `cdk deploy OtjServicesStack`.
+    //
+    // Two separate statements, per AWS's own guidance for tag-restricted
+    // SendCommand: ssm:SendCommand authorizes against every resource in the
+    // API call (both the target instance and the document) in one evaluation.
+    // Putting both resources under one statement with one tag condition fails
+    // closed — the AWS-owned document has no `otj:role` tag, so it never
+    // satisfies the condition and the whole call gets denied even when the
+    // instance itself is tagged correctly.
     deployRole.addToPolicy(
       new iam.PolicyStatement({
-        sid: "SsmTriggerDeploy",
+        sid: "SsmTriggerDeployInstance",
         actions: ["ssm:SendCommand"],
-        resources: [
-          `arn:aws:ec2:${DEPLOY_REGION}:${account}:instance/*`,
-          // AWS-owned public document — empty account segment (note the double colon).
-          `arn:aws:ssm:${DEPLOY_REGION}::document/AWS-RunShellScript`,
-        ],
+        resources: [`arn:aws:ec2:${DEPLOY_REGION}:${account}:instance/*`],
         conditions: {
           StringEquals: { [`ssm:resourceTag/${EC2_TAG_KEY}`]: EC2_TAG_VALUE },
         },
+      }),
+    );
+    deployRole.addToPolicy(
+      new iam.PolicyStatement({
+        sid: "SsmTriggerDeployDocument",
+        actions: ["ssm:SendCommand"],
+        // AWS-owned public document — empty account segment (note the double colon).
+        resources: [`arn:aws:ssm:${DEPLOY_REGION}::document/AWS-RunShellScript`],
       }),
     );
     deployRole.addToPolicy(
