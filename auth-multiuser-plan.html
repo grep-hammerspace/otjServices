@@ -1,0 +1,689 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>otjServices Auth &amp; Multi-User Plan</title>
+<style>
+  :root {
+    --paper: #eef1ef;
+    --paper-raised: #e4e9e6;
+    --ink: #182422;
+    --ink-soft: #47524f;
+    --line: rgba(24, 36, 34, 0.14);
+    --line-strong: rgba(24, 36, 34, 0.28);
+    --accent: #1f6f78;
+    --accent-ink: #ffffff;
+    --warm: #a85f24;
+    --warm-bg: rgba(168, 95, 36, 0.1);
+    --code-bg: #1b2624;
+    --code-ink: #d8e6e2;
+    --code-accent: #7fd4c9;
+    --pill-code-bg: rgba(31, 111, 120, 0.12);
+    --pill-code-ink: #175961;
+    --pill-manual-bg: rgba(168, 95, 36, 0.12);
+    --pill-manual-ink: #8a4c1c;
+    --shadow: 0 1px 2px rgba(24, 36, 34, 0.06), 0 8px 24px -12px rgba(24, 36, 34, 0.18);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper: #10181a;
+      --paper-raised: #17211f;
+      --ink: #e7eeec;
+      --ink-soft: #a9b8b4;
+      --line: rgba(231, 238, 236, 0.14);
+      --line-strong: rgba(231, 238, 236, 0.26);
+      --accent: #62c8ce;
+      --accent-ink: #0b1615;
+      --warm: #e3a968;
+      --warm-bg: rgba(227, 169, 104, 0.12);
+      --code-bg: #0b1413;
+      --code-ink: #d8e6e2;
+      --code-accent: #8fe0d4;
+      --pill-code-bg: rgba(98, 200, 206, 0.14);
+      --pill-code-ink: #8fe0d4;
+      --pill-manual-bg: rgba(227, 169, 104, 0.14);
+      --pill-manual-ink: #e3a968;
+      --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 28px -12px rgba(0, 0, 0, 0.55);
+    }
+  }
+  :root[data-theme="dark"] {
+    --paper: #10181a;
+    --paper-raised: #17211f;
+    --ink: #e7eeec;
+    --ink-soft: #a9b8b4;
+    --line: rgba(231, 238, 236, 0.14);
+    --line-strong: rgba(231, 238, 236, 0.26);
+    --accent: #62c8ce;
+    --accent-ink: #0b1615;
+    --warm: #e3a968;
+    --warm-bg: rgba(227, 169, 104, 0.12);
+    --code-bg: #0b1413;
+    --code-ink: #d8e6e2;
+    --code-accent: #8fe0d4;
+    --pill-code-bg: rgba(98, 200, 206, 0.14);
+    --pill-code-ink: #8fe0d4;
+    --pill-manual-bg: rgba(227, 169, 104, 0.14);
+    --pill-manual-ink: #e3a968;
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 28px -12px rgba(0, 0, 0, 0.55);
+  }
+  :root[data-theme="light"] {
+    --paper: #eef1ef;
+    --paper-raised: #e4e9e6;
+    --ink: #182422;
+    --ink-soft: #47524f;
+    --line: rgba(24, 36, 34, 0.14);
+    --line-strong: rgba(24, 36, 34, 0.28);
+    --accent: #1f6f78;
+    --accent-ink: #ffffff;
+    --warm: #a85f24;
+    --warm-bg: rgba(168, 95, 36, 0.1);
+    --code-bg: #1b2624;
+    --code-ink: #d8e6e2;
+    --code-accent: #7fd4c9;
+    --pill-code-bg: rgba(31, 111, 120, 0.12);
+    --pill-code-ink: #175961;
+    --pill-manual-bg: rgba(168, 95, 36, 0.12);
+    --pill-manual-ink: #8a4c1c;
+    --shadow: 0 1px 2px rgba(24, 36, 34, 0.06), 0 8px 24px -12px rgba(24, 36, 34, 0.18);
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: Charter, "Bitstream Charter", "Sitka Text", Cambria, Georgia, serif;
+    font-size: 17px;
+    line-height: 1.62;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  code, pre, .mono {
+    font-family: "SF Mono", "Cascadia Code", "JetBrains Mono", Consolas, "Liberation Mono", monospace;
+  }
+
+  a { color: var(--accent); }
+  a:focus-visible, button:focus-visible, summary:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+
+  .shell {
+    max-width: 1180px;
+    margin: 0 auto;
+    padding: 0 clamp(20px, 4vw, 56px) 96px;
+    display: grid;
+    grid-template-columns: 240px minmax(0, 1fr);
+    gap: clamp(24px, 4vw, 64px);
+  }
+
+  header.masthead {
+    max-width: 1180px;
+    margin: 0 auto;
+    padding: clamp(36px, 6vw, 64px) clamp(20px, 4vw, 56px) clamp(28px, 4vw, 40px);
+    border-bottom: 1px solid var(--line);
+  }
+
+  .eyebrow {
+    font-family: "SF Mono", Consolas, monospace;
+    font-size: 12.5px;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin: 0 0 14px;
+  }
+
+  h1.title {
+    font-family: "Avenir Next", "Segoe UI Semibold", "Helvetica Neue", Arial, sans-serif;
+    font-weight: 700;
+    font-size: clamp(28px, 4.4vw, 42px);
+    line-height: 1.12;
+    letter-spacing: -0.01em;
+    margin: 0 0 12px;
+    text-wrap: balance;
+    max-width: 18ch;
+  }
+
+  .dek {
+    font-size: 18px;
+    color: var(--ink-soft);
+    max-width: 56ch;
+    margin: 0 0 20px;
+  }
+
+  .meta-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px 22px;
+    font-family: "SF Mono", Consolas, monospace;
+    font-size: 12.5px;
+    color: var(--ink-soft);
+  }
+  .meta-row span b { color: var(--ink); font-weight: 600; }
+
+  nav.toc {
+    position: sticky;
+    top: 28px;
+    align-self: start;
+    font-family: "Avenir Next", "Segoe UI Semibold", "Helvetica Neue", Arial, sans-serif;
+    font-size: 13.5px;
+    padding-top: 40px;
+  }
+  nav.toc .toc-label {
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    font-size: 11.5px;
+    color: var(--ink-soft);
+    margin: 0 0 12px;
+    font-weight: 600;
+  }
+  nav.toc ol {
+    list-style: none;
+    margin: 0 0 22px;
+    padding: 0;
+    border-left: 1px solid var(--line);
+  }
+  nav.toc li { margin: 0; }
+  nav.toc a {
+    display: block;
+    padding: 6px 0 6px 14px;
+    margin-left: -1px;
+    border-left: 2px solid transparent;
+    color: var(--ink-soft);
+    text-decoration: none;
+    line-height: 1.35;
+  }
+  nav.toc a:hover { color: var(--ink); border-left-color: var(--line-strong); }
+  nav.toc .toc-num { color: var(--accent); font-family: "SF Mono", Consolas, monospace; margin-right: 6px; }
+
+  main { min-width: 0; padding-top: 40px; }
+
+  section.block { margin: 0 0 52px; }
+  section.block:last-child { margin-bottom: 0; }
+
+  h2.h-context {
+    font-family: "Avenir Next", "Segoe UI Semibold", "Helvetica Neue", Arial, sans-serif;
+    font-size: 22px;
+    font-weight: 700;
+    margin: 0 0 16px;
+  }
+
+  p { margin: 0 0 16px; }
+  p:last-child { margin-bottom: 0; }
+
+  .lede-card {
+    background: var(--paper-raised);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 22px 24px;
+    box-shadow: var(--shadow);
+  }
+
+  .decisions {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+    gap: 1px;
+    background: var(--line);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    overflow: hidden;
+    margin: 22px 0 0;
+  }
+  .decision {
+    background: var(--paper);
+    padding: 18px 20px;
+  }
+  .decision .k {
+    font-family: "SF Mono", Consolas, monospace;
+    font-size: 11px;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+    margin: 0 0 8px;
+  }
+  .decision .v {
+    font-family: "Avenir Next", "Segoe UI Semibold", "Helvetica Neue", Arial, sans-serif;
+    font-size: 15.5px;
+    font-weight: 600;
+    line-height: 1.35;
+    color: var(--ink);
+  }
+
+  .step {
+    display: grid;
+    grid-template-columns: 44px minmax(0, 1fr);
+    gap: 18px;
+    padding: 30px 0;
+    border-top: 1px solid var(--line);
+    scroll-margin-top: 24px;
+  }
+  section.block .step:first-of-type { border-top: none; padding-top: 4px; }
+
+  .step-num {
+    font-family: "SF Mono", Consolas, monospace;
+    font-size: 15px;
+    color: var(--accent);
+    padding-top: 2px;
+  }
+
+  .step-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 10px 14px;
+    margin-bottom: 10px;
+  }
+
+  h3.step-title {
+    font-family: "Avenir Next", "Segoe UI Semibold", "Helvetica Neue", Arial, sans-serif;
+    font-size: 19px;
+    font-weight: 700;
+    margin: 0;
+    letter-spacing: -0.005em;
+  }
+
+  .pill {
+    font-family: "SF Mono", Consolas, monospace;
+    font-size: 11px;
+    letter-spacing: 0.04em;
+    padding: 3px 9px;
+    border-radius: 999px;
+    white-space: nowrap;
+  }
+  .pill.code { background: var(--pill-code-bg); color: var(--pill-code-ink); }
+  .pill.manual { background: var(--pill-manual-bg); color: var(--pill-manual-ink); }
+
+  .step-body :first-child { margin-top: 0; }
+
+  pre {
+    background: var(--code-bg);
+    color: var(--code-ink);
+    border-radius: 8px;
+    padding: 16px 18px;
+    overflow-x: auto;
+    font-size: 13.3px;
+    line-height: 1.55;
+    margin: 14px 0;
+    box-shadow: var(--shadow);
+  }
+  pre code { font-family: inherit; color: inherit; background: none; padding: 0; }
+  code.inline, .step-body code {
+    font-family: "SF Mono", Consolas, monospace;
+    font-size: 0.87em;
+    background: var(--paper-raised);
+    padding: 0.1em 0.4em;
+    border-radius: 4px;
+    border: 1px solid var(--line);
+  }
+  pre code.inline, pre code { background: none; border: none; padding: 0; }
+
+  .callout {
+    display: flex;
+    gap: 12px;
+    background: var(--warm-bg);
+    border: 1px solid rgba(168, 95, 36, 0.35);
+    border-radius: 8px;
+    padding: 14px 16px;
+    margin: 16px 0;
+    font-size: 15px;
+  }
+  .callout .flag {
+    font-family: "SF Mono", Consolas, monospace;
+    font-size: 11px;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--warm);
+    font-weight: 700;
+    flex: none;
+    padding-top: 2px;
+  }
+  .callout ul { margin: 6px 0 0; padding-left: 18px; }
+  .callout li { margin: 4px 0; }
+
+  .checklist { list-style: none; margin: 16px 0 0; padding: 0; display: grid; gap: 10px; }
+  .checklist li {
+    display: flex;
+    gap: 12px;
+    align-items: baseline;
+    padding: 12px 14px;
+    background: var(--paper-raised);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+  }
+  .checklist .box {
+    flex: none;
+    width: 16px; height: 16px;
+    border: 1.5px solid var(--line-strong);
+    border-radius: 4px;
+    margin-top: 3px;
+  }
+
+  table.files {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 14px;
+    font-size: 14.5px;
+  }
+  table.files th {
+    text-align: left;
+    font-family: "Avenir Next", "Segoe UI Semibold", "Helvetica Neue", Arial, sans-serif;
+    font-size: 11.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--ink-soft);
+    padding: 0 12px 8px 0;
+    border-bottom: 1px solid var(--line-strong);
+  }
+  table.files td {
+    padding: 10px 12px 10px 0;
+    border-bottom: 1px solid var(--line);
+    vertical-align: top;
+  }
+  table.files tr:last-child td { border-bottom: none; }
+  .files-wrap { overflow-x: auto; }
+
+  footer.foot {
+    max-width: 1180px;
+    margin: 0 auto;
+    padding: 28px clamp(20px, 4vw, 56px) 60px;
+    color: var(--ink-soft);
+    font-size: 13px;
+    font-family: "SF Mono", Consolas, monospace;
+    border-top: 1px solid var(--line);
+  }
+
+  @media (max-width: 880px) {
+    .shell { grid-template-columns: 1fr; }
+    nav.toc { position: static; padding-top: 0; margin-bottom: 8px; }
+    nav.toc ol { columns: 2; column-gap: 24px; }
+  }
+</style>
+</head>
+<body>
+
+<header class="masthead">
+  <p class="eyebrow">Auth &amp; multi-user plan &middot; otjServices</p>
+  <h1 class="title">The tailnet was the password.</h1>
+  <p class="dek">Today the app has no authentication code at all &mdash; <code class="inline">tailscale serve</code> injects a header and the app trusts it. To put this in front of ~100&ndash;120 users on a public HTTPS endpoint, identity has to become something the app actually owns: an invite-gated account, a bcrypt password, and a sliding 30-day bearer token.</p>
+  <div class="meta-row">
+    <span>Repo <b>grep-hammerspace/otjServices</b></span>
+    <span>Base <b>master @ 940b85c</b></span>
+    <span>Status <b>Not started &middot; design agreed</b></span>
+  </div>
+</header>
+
+<div class="shell">
+  <nav class="toc" aria-label="Table of contents">
+    <p class="toc-label">Steps</p>
+    <ol>
+      <li><a href="#context"><span class="toc-num">&middot;</span>Context</a></li>
+      <li><a href="#s1"><span class="toc-num">01</span>Delete KSB matching</a></li>
+      <li><a href="#s2"><span class="toc-num">02</span>Session token core</a></li>
+      <li><a href="#s3"><span class="toc-num">03</span>User model &amp; bcrypt</a></li>
+      <li><a href="#s4"><span class="toc-num">04</span>Invite-gated signup</a></li>
+      <li><a href="#s5"><span class="toc-num">05</span>Stop storing creds</a></li>
+      <li><a href="#s6"><span class="toc-num">06</span>Rate limiting</a></li>
+      <li><a href="#s7"><span class="toc-num">07</span>LLM quota</a></li>
+      <li><a href="#s8"><span class="toc-num">08</span>Tests</a></li>
+      <li><a href="#s9"><span class="toc-num">09</span>Ingress &amp; infra</a></li>
+      <li><a href="#verify"><span class="toc-num">&middot;</span>Verification</a></li>
+      <li><a href="#files"><span class="toc-num">&middot;</span>Critical files</a></li>
+      <li><a href="#open"><span class="toc-num">&middot;</span>Still open</a></li>
+    </ol>
+  </nav>
+
+  <main>
+    <section class="block" id="context">
+      <h2 class="h-context">Context</h2>
+      <div class="lede-card">
+        <p><strong>Where this starts:</strong> there is no application-level auth in the codebase. <code class="inline">TailscaleIdentityHelper</code> reads a <code class="inline">Tailscale-User-Login</code> header, and that header is trustworthy <em>only</em> because the app binds to loopback and <code class="inline">tailscale serve</code> is the sole process that can reach it. Identity, transport encryption, and reachability are all the same mechanism. Every endpoint calls <code class="inline">resolveUserState(request)</code>, which is a header read plus a lazy state init.</p>
+        <p><strong>Why that has to change:</strong> a mobile app distributed to ~100&ndash;120 people can't require each of them to join a private tailnet. Moving to public HTTPS breaks the trust invariant completely &mdash; TLS gives <em>anyone</em> a secure pipe to the server, so the network stops authenticating callers and a per-user secret becomes mandatory. A username alone is an identifier, not a credential; without a token, anyone knowing <code class="inline">asad_yezdan</code> could call <code class="inline">/delete-last-row</code> as them.</p>
+        <p><strong>The compensating win:</strong> because OneAdvanced credentials are replayed into a browser login rather than verified, they currently have to be stored recoverably &mdash; hence <code class="inline">PasswordCipher</code>'s AES-256-GCM and the <code class="inline">PASSWORD_ENCRYPTION_KEY</code> it depends on. Moving those credentials onto the device (iOS Keychain / Android Keystore) and sending them per-call over TLS deletes that whole subsystem. After this plan the server stores <strong>no credential that logs in anywhere</strong> &mdash; only bcrypt hashes and SHA-256 token hashes. A full database compromise leaks nothing usable.</p>
+      </div>
+
+      <div class="decisions">
+        <div class="decision"><p class="k">Identity</p><p class="v">Username + bcrypt password &rarr; sliding 30-day bearer token</p></div>
+        <div class="decision"><p class="k">OneAdvanced creds</p><p class="v">Never stored. Device Keychain, sent per-call over TLS</p></div>
+        <div class="decision"><p class="k">Account creation</p><p class="v">Invite-code only &mdash; codes minted by hand in the Atlas UI</p></div>
+        <div class="decision"><p class="k">Ingress</p><p class="v">Caddy + Let's Encrypt on the EIP &middot; <code class="inline">tailscale serve</code> demoted to a dev tunnel</p></div>
+      </div>
+
+      <p style="margin-top:22px"><strong>Build order rationale:</strong> the KSB deletion goes first because it removes a resource, a service, five classes and two prompt files that every later step would otherwise have to be threaded through. Infra goes last because nothing in it is required to develop or test the auth work &mdash; the app runs fine on loopback throughout. Everything between is sequenced so the app compiles and the suite passes at each step.</p>
+
+      <div class="callout">
+        <span class="flag">Note</span>
+        <div>There is one uncommitted working-tree change on <code class="inline">master</code>, in <code class="inline">llm/KsbMatcherServiceImpl.java</code> &mdash; a file step 01 deletes. Look at it before it disappears; it is otherwise moot.</div>
+      </div>
+    </section>
+
+    <section class="block">
+      <div class="step" id="s1">
+        <div class="step-num">01</div>
+        <div class="step-body">
+          <div class="step-head"><h3 class="step-title">Delete the KSB matching service</h3><span class="pill code">Code change</span></div>
+          <p>The KSB-OTJ mapping report isn't worth carrying through the rest of this work. It is also the expensive LLM call site &mdash; <code class="inline">matchActivitiesToKsbs</code> sends the user's <em>entire</em> activity history to the model on every invocation, where <code class="inline">parseActivities</code> only sends the diff. Removing it means the quota in step 07 has exactly one call site to guard.</p>
+          <p><strong>Delete outright:</strong></p>
+          <pre><code>src/main/java/com/github/grepHammerspace/api/KsbServicesResource.java
+src/main/java/com/github/grepHammerspace/llm/KsbMatcherService.java
+src/main/java/com/github/grepHammerspace/llm/KsbMatcherServiceImpl.java
+src/main/java/com/github/grepHammerspace/llm/KsbMatch.java
+src/main/java/com/github/grepHammerspace/llm/KsbMatchResult.java
+src/main/java/com/github/grepHammerspace/llm/KsbReportFormatter.java
+src/main/resources/ksb_list.txt
+src/main/resources/ksb_matching_prompt.txt
+src/test/java/com/github/grepHammerspace/llm/KsbMatcherServiceImplTest.java</code></pre>
+          <p><strong>Edit:</strong> <code class="inline">AppModule</code> &mdash; drop <code class="inline">provideKsbMatcherService</code>. <code class="inline">AppComponent</code> &mdash; drop <code class="inline">ksbServicesResource()</code>. <code class="inline">Main</code> &mdash; drop the <code class="inline">ksbResource</code> local and its <code class="inline">ServerBootstrap.start(...)</code> argument.</p>
+          <p><code class="inline">src/main/resources/llm_prompt.txt</code> <strong>stays</strong> &mdash; that is the activity-parsing prompt used by <code class="inline">LlmServiceImpl</code>, unrelated to KSB matching.</p>
+          <div class="callout">
+            <span class="flag">Check</span>
+            <div><code class="inline">ActivityLogRepository.getAllLogsFor()</code> exists only for this feature. Once <code class="inline">KsbServicesResource</code> is gone it is likely dead &mdash; confirm no other caller, then delete it too.</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="step" id="s2">
+        <div class="step-num">02</div>
+        <div class="step-body">
+          <div class="step-head"><h3 class="step-title">Session token core</h3><span class="pill code">Code change</span></div>
+          <p>New package <code class="inline">com.github.grepHammerspace.auth</code>.</p>
+          <p><strong><code class="inline">SessionTokenService</code></strong> &mdash; <code class="inline">@Singleton</code>, <code class="inline">@Inject</code> constructor taking the existing <code class="inline">MongoDatabase</code>, so no explicit Dagger provider is needed. Issues a 32-byte <code class="inline">SecureRandom</code> token, base64url-encoded, and stores only its <strong>SHA-256 hash</strong> in a new <code class="inline">sessions</code> collection. The raw token is returned once and never persisted &mdash; same model as a GitHub PAT.</p>
+          <pre><code>{ tokenHash: "&lt;sha256 hex&gt;", userId: "&lt;uuid&gt;", expiresAt: ISODate, createdAt: ISODate }</code></pre>
+          <p><strong>Sliding expiry.</strong> <code class="inline">resolve(rawToken)</code> looks up by hash, rejects if <code class="inline">expiresAt</code> has passed, and otherwise pushes <code class="inline">expiresAt</code> back out to <code class="inline">now + 30 days</code>. To avoid a Mongo write on every single request, only extend when less than half the window remains. An active user therefore never sees a login screen again; a token unused for 30 days dies on its own.</p>
+          <p><strong><code class="inline">AuthenticationFilter</code></strong> &mdash; a JAX-RS <code class="inline">ContainerRequestFilter</code>. Reads <code class="inline">Authorization: Bearer &lt;token&gt;</code>, resolves it to a <code class="inline">userId</code>, and sets a <code class="inline">SecurityContext</code> whose principal name is that <code class="inline">userId</code>. Missing, malformed, unknown or expired token &rarr; <code class="inline">401</code>, request never reaches the resource.</p>
+          <p><strong><code class="inline">@Authenticated</code></strong> &mdash; a <code class="inline">@NameBinding</code> annotation applied to <code class="inline">OtjServicesResource</code>. Cleaner than path matching in the filter: <code class="inline">AuthResource</code> and <code class="inline">HealthResource</code> simply don't carry the annotation, so they stay anonymous by construction rather than by an exemption list that can drift.</p>
+          <p><strong>Rewire the resource.</strong> <code class="inline">OtjServicesResource</code> loses its <code class="inline">TailscaleIdentityService</code> field and constructor argument; every method swaps <code class="inline">@Context HttpServletRequest</code> for <code class="inline">@Context SecurityContext</code>. <code class="inline">resolveUserState</code> collapses to a <code class="inline">userStateStore.createUserState(...)</code> call and stops throwing <code class="inline">IOException</code> &mdash; which deletes six <code class="inline">try/catch</code> blocks and their duplicated 401 branches, since the filter owns that now.</p>
+          <pre><code>@POST @Path("/log-activities")
+public Response logActivities(@Valid ActivityLogRequest body, @Context SecurityContext sc) {
+    String userId = sc.getUserPrincipal().getName();
+    userStateStore.createUserState(userId);
+    ...</code></pre>
+          <p><strong>Delete the <code class="inline">tailscale</code> package entirely</strong> &mdash; <code class="inline">TailscaleIdentityService</code>, <code class="inline">TailscaleIdentityServiceImpl</code>, <code class="inline">TailscaleIdentityHelper</code> &mdash; and remove <code class="inline">provideTailscaleIdentityService</code> from <code class="inline">AppModule</code>. Register the filter on the <code class="inline">ResourceConfig</code> in <code class="inline">ServerBootstrap</code>.</p>
+        </div>
+      </div>
+
+      <div class="step" id="s3">
+        <div class="step-num">03</div>
+        <div class="step-body">
+          <div class="step-head"><h3 class="step-title">User model &amp; bcrypt</h3><span class="pill code">Code change</span></div>
+          <p>Add the hashing dependency to <code class="inline">pom.xml</code> &mdash; <code class="inline">at.favre.lib:bcrypt</code>, chosen because it is small and pulls no transitive dependencies. Hand-rolling PBKDF2 on the JDK would avoid the dependency but is easier to get subtly wrong.</p>
+          <p><strong>The <code class="inline">User</code> record changes meaning, not just shape.</strong> Today <code class="inline">username</code>/<code class="inline">password</code> are the <em>OneAdvanced</em> credentials. Afterwards they are this app's own login. Rename deliberately so the two can never be confused during the refactor:</p>
+          <pre><code>// before
+record User(String userId, String username, String password, String learnerId)
+
+// after
+record User(String userId, String appUsername, String appPasswordHash,
+            String learnerId, Instant createdAt)</code></pre>
+          <p><code class="inline">userId</code> becomes a generated UUID rather than a tailnet login name. Nothing downstream cares &mdash; <code class="inline">ActivityLog</code>, <code class="inline">UserStateStore</code> and the driver methods all treat it as an opaque string.</p>
+          <p><code class="inline">learnerId</code> <strong>stays server-side</strong>, captured once at signup. It is not a secret, it is embedded in every <code class="inline">ActivityLog</code> row, and keeping it on the user record avoids threading it through every request body for no security benefit.</p>
+          <p><strong><code class="inline">UserRepository</code></strong> &mdash; drop the <code class="inline">PasswordCipher</code> injection and both encrypt/decrypt calls; add <code class="inline">findByAppUsername()</code> for login and an insert that fails closed on a duplicate username. <code class="inline">lastContent</code> handling is unchanged: it is diff state, not a secret, and stays where it is.</p>
+          <p><strong>Delete</strong> <code class="inline">crypto/PasswordCipher.java</code>, <code class="inline">crypto/PasswordCipherTest.java</code>, <code class="inline">testutil/TestKeys.java</code>, the <code class="inline">providePasswordCipher</code> bindings in both <code class="inline">AppModule</code> and <code class="inline">TestAppModule</code>, and every reference to <code class="inline">PASSWORD_ENCRYPTION_KEY</code> in compose files, <code class="inline">.env</code>, CI and the SSM deploy script.</p>
+        </div>
+      </div>
+
+      <div class="step" id="s4">
+        <div class="step-num">04</div>
+        <div class="step-body">
+          <div class="step-head"><h3 class="step-title">Invite-gated signup</h3><span class="pill code">Code change</span> <span class="pill manual">+ Atlas UI</span></div>
+          <p>Open signup would let anyone create an account and start spending Anthropic credits via <code class="inline">/log-activities</code>, even though they could never post a real OTJ without genuine OneAdvanced credentials. The gate has to be server-side: limiting who can <em>install the app</em> is not a control, because the API is a public HTTPS endpoint that anyone can reach with <code class="inline">curl</code>.</p>
+          <p>New <code class="inline">inviteCodes</code> collection, with a schema deliberately simple enough to hand-write &mdash; <strong>the Atlas UI is the admin console</strong>, so there is no admin endpoint to build, authenticate or protect:</p>
+          <pre><code>{ code: "OTJ-7F3K-9QMX", used: false, note: "for Sam",
+  createdAt: ISODate, expiresAt: ISODate, usedBy: null, usedAt: null }</code></pre>
+          <p>To mint a code, insert a document. To revoke, set <code class="inline">used: true</code> or delete it.</p>
+          <p><strong><code class="inline">AuthResource</code></strong> &mdash; new, un-annotated (anonymous) resource:</p>
+          <pre><code>POST   /auth/signup    { inviteCode, username, password, learnerId } -> { token }
+POST   /auth/session   { username, password }                       -> { token }
+DELETE /auth/session   (Bearer)                                     -> 204</code></pre>
+          <p>Signup claims the code <strong>atomically</strong> &mdash; <code class="inline">findOneAndUpdate</code> on <code class="inline">{code, used:false, expiresAt:{$gt:now}}</code> setting <code class="inline">used:true</code>. Atomicity is what stops two people racing the same code. Then it rejects duplicate usernames, bcrypts the password, creates the UUID <code class="inline">userId</code>, and returns a session token so signup and login are one round trip.</p>
+          <p><code class="inline">DELETE /auth/session</code> deletes the token row, giving instant revocation independent of the 30-day window.</p>
+        </div>
+      </div>
+
+      <div class="step" id="s5">
+        <div class="step-num">05</div>
+        <div class="step-body">
+          <div class="step-head"><h3 class="step-title">Stop storing OneAdvanced credentials</h3><span class="pill code">Code change</span></div>
+          <p>The credentials move to the device &mdash; iOS Keychain via <code class="inline">react-native-keychain</code>, or Android Keystore-backed storage &mdash; and are sent on each call that needs a browser login. The server holds them in memory only for the seconds Selenium types them in. That transient exposure exists in the current design too; what disappears is the at-rest copy.</p>
+          <p><strong>Delete</strong> <code class="inline">POST /otj-services/register</code> and <code class="inline">dto/RegisterRequest.java</code>. Registration as a concept is replaced by signup (app account) plus on-device storage (OneAdvanced vault).</p>
+          <p><strong>Breaking endpoint changes</strong> &mdash; both become <code class="inline">POST</code> because they now carry a body:</p>
+          <div class="files-wrap">
+          <table class="files">
+            <thead><tr><th>Was</th><th>Becomes</th><th>Body</th></tr></thead>
+            <tbody>
+              <tr><td><code class="inline">GET /prepare-browser</code></td><td><code class="inline">POST /prepare-browser</code></td><td><code class="inline">{oneAdvancedUsername, oneAdvancedPassword}</code></td></tr>
+              <tr><td><code class="inline">GET /azure-id/prepare</code></td><td><code class="inline">POST /azure-id/prepare</code></td><td><code class="inline">{oneAdvancedUsername, oneAdvancedPassword}</code></td></tr>
+            </tbody>
+          </table>
+          </div>
+          <p>Both feed straight into the existing <code class="inline">driver.prepare(username, password)</code> signatures &mdash; those already take credentials as parameters, so the drivers themselves need no change. New DTOs <code class="inline">PrepareBrowserRequest</code> and <code class="inline">AzureIdPrepareRequest</code>, both fields <code class="inline">@NotBlank</code>. <code class="inline">/azure-id/complete</code>, <code class="inline">/submit-with-mfa</code>, <code class="inline">/delete-last-row</code> and <code class="inline">/reset-notes</code> are unchanged &mdash; none of them need credentials.</p>
+          <div class="callout">
+            <span class="flag">Must fix</span>
+            <div><code class="inline">OtjServicesResource.java:237</code> currently logs the MFA code in plaintext: <code class="inline">log.info("...and mfa code {}", body.mfaCode())</code>. Delete that line. Once passwords arrive in request bodies, the same habit would write credentials into logs and any aggregator downstream &mdash; audit every <code class="inline">log.*</code> and error-response string in the resource for sensitive fields.</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="step" id="s6">
+        <div class="step-num">06</div>
+        <div class="step-body">
+          <div class="step-head"><h3 class="step-title">Rate limiting</h3><span class="pill code">Code change</span></div>
+          <p><code class="inline">auth/RateLimiter.java</code> &mdash; in-memory sliding window over a <code class="inline">ConcurrentHashMap</code> with periodic eviction. In-memory is <em>correct</em> here rather than a shortcut, because there is exactly one app instance; note that it resets on restart. Applied only in <code class="inline">AuthResource</code>:</p>
+          <ul class="checklist">
+            <li><span class="box"></span><div><strong><code class="inline">POST /auth/session</code></strong> &mdash; per-IP <em>and</em> per-username. The per-username limit is the one that matters: usernames are public identifiers, so they are the brute-force surface.</div></li>
+            <li><span class="box"></span><div><strong><code class="inline">POST /auth/signup</code></strong> &mdash; per-IP, tighter, to stop invite-code guessing.</div></li>
+          </ul>
+          <p>Respond <code class="inline">429</code> with <code class="inline">Retry-After</code>. Behind Caddy the client IP arrives in <code class="inline">X-Forwarded-For</code> &mdash; Caddy must be configured to set it, and the app must read the first hop, not <code class="inline">getRemoteAddr()</code>, which would otherwise see only the proxy and rate-limit every user as one.</p>
+        </div>
+      </div>
+
+      <div class="step" id="s7">
+        <div class="step-num">07</div>
+        <div class="step-body">
+          <div class="step-head"><h3 class="step-title">Per-user LLM quota</h3><span class="pill code">Code change</span></div>
+          <p>Every <code class="inline">/log-activities</code> call spends Anthropic credits. After step 01 this is the only LLM call site, so the quota is a single number: <strong>10 calls per user per day</strong>.</p>
+          <p><code class="inline">quota/LlmQuotaService.java</code> &mdash; atomic <code class="inline">$inc</code> against a <code class="inline">{userId, date}</code> document with a unique index. Checked in <code class="inline">logActivtiesWithLlmHelp</code> <strong>after</strong> the <code class="inline">ContentDiffer</code> no-op check but <strong>before</strong> <code class="inline">llmService.parseActivities</code>, so identical resubmitted content never consumes quota. Exhausted &rarr; <code class="inline">429</code>.</p>
+          <div class="callout">
+            <span class="flag">Backstop</span>
+            <div>An application-level quota cannot protect against a bug in the server's own retry logic. Set a spend limit in the Anthropic console as well &mdash; that is the only cap that holds unconditionally.</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="step" id="s8">
+        <div class="step-num">08</div>
+        <div class="step-body">
+          <div class="step-head"><h3 class="step-title">Tests</h3><span class="pill code">Code change</span></div>
+          <p>The integration suite currently gets its identity from a Dagger test double &mdash; <code class="inline">TestAppModule</code> binds <code class="inline">TailscaleIdentityService</code> to <code class="inline">request -&gt; testUserId</code>, so every scenario is silently the same authenticated user. That binding disappears, so scenarios must now sign up and log in to obtain a token.</p>
+          <ul class="checklist">
+            <li><span class="box"></span><div><strong>Rewrite</strong> <code class="inline">TestAppModule</code> &mdash; remove the Tailscale and <code class="inline">PasswordCipher</code> bindings; keep the fake <code class="inline">LlmService</code>.</div></li>
+            <li><span class="box"></span><div><strong>Rewrite</strong> <code class="inline">RegistrationSteps</code> + <code class="inline">registration.feature</code> as signup/login: invalid code, already-used code, expired code, duplicate username, wrong password.</div></li>
+            <li><span class="box"></span><div><strong>Update</strong> <code class="inline">HttpSteps</code> to attach <code class="inline">Authorization: Bearer</code>; <code class="inline">ServerHooks</code> to boot <code class="inline">AuthResource</code> and register the filter.</div></li>
+            <li><span class="box"></span><div><strong>Update</strong> <code class="inline">log_activities</code>, <code class="inline">delete_last_row</code>, <code class="inline">reset_notes</code> features to authenticate first. <code class="inline">health.feature</code> stays anonymous &mdash; and is now a meaningful assertion that the filter doesn't over-apply.</div></li>
+            <li><span class="box"></span><div><strong>Update</strong> <code class="inline">UserRepositoryIT</code> for the new fields and the absence of the cipher.</div></li>
+            <li><span class="box"></span><div><strong>New:</strong> <code class="inline">SessionTokenService</code> (expiry, sliding extension, unknown token, revoke), atomic invite-code claim under contention, rate limiter, quota rollover.</div></li>
+          </ul>
+          <p>Add a scenario asserting a request with <em>no</em> token gets <code class="inline">401</code> &mdash; the regression that would otherwise silently reopen the hole this plan closes.</p>
+        </div>
+      </div>
+
+      <div class="step" id="s9">
+        <div class="step-num">09</div>
+        <div class="step-body">
+          <div class="step-head"><h3 class="step-title">Ingress &amp; infra</h3><span class="pill manual">Manual + CDK</span></div>
+          <p>The Elastic IP in <code class="inline">aws/lib/otj-services-stack.ts</code> is already a public, internet-routable address on a public subnet with an internet gateway &mdash; routing works today. The only reason nothing can connect is the security group, which is deliberately configured with <strong>zero inbound rules</strong>. It was provisioned for a different purpose (a stable egress IP for the Atlas allowlist); the same address will now serve traffic.</p>
+          <ul class="checklist">
+            <li><span class="box"></span><div><strong>CDK:</strong> add inbound <code class="inline">443</code> and <code class="inline">80</code> to <code class="inline">InstanceSecurityGroup</code>. Port 80 is needed for the Let's Encrypt HTTP-01 challenge, not for serving. Update the now-inaccurate comment block above it, which describes the no-inbound/tailscale-serve model.</div></li>
+            <li><span class="box"></span><div><strong>Domain:</strong> register one and point an A record at the EIP. A public CA won't issue against a bare IP in the normal case, so a hostname is required. The pre-existing EIP means the record won't break across instance restarts.</div></li>
+            <li><span class="box"></span><div><strong>Caddy</strong> on the box as another Quadlet unit: reverse-proxy <code class="inline">443 &rarr; 127.0.0.1:8945</code>, automatic certificate issuance and renewal, and set <code class="inline">X-Forwarded-For</code> for step 06. The app stays bound to loopback &mdash; Caddy simply replaces <code class="inline">tailscale serve</code> as the thing in front of it.</div></li>
+            <li><span class="box"></span><div><strong>SSM</strong> remains the admin path. No SSH, no inbound <code class="inline">22</code>.</div></li>
+            <li><span class="box"></span><div><strong>Rewrite <code class="inline">deploy/README.md</code>:</strong> the &ldquo;Identity: header instead of in-container Tailscale&rdquo; section becomes &ldquo;Dev tunnel&rdquo;, and the trust-invariant paragraph is deleted &mdash; it stops being true and stops being load-bearing.</div></li>
+          </ul>
+          <p><code class="inline">deploy/</code> and its podman-compose stack stay exactly as they are, for local development. <code class="inline">tailscale serve</code> remains useful there &mdash; it gives a real certificate on a <code class="inline">.ts.net</code> name, so a phone can exercise the true production HTTPS path against a laptop with no domain and no self-signed-certificate warnings. It is a dumb tunnel now: the injected identity header is ignored, and local dev authenticates with a password like everything else.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="block" id="verify">
+      <h2 class="h-context">Verification</h2>
+      <ul class="checklist">
+        <li><span class="box"></span><div>A request to any <code class="inline">/otj-services/*</code> endpoint with no <code class="inline">Authorization</code> header returns <code class="inline">401</code>, and with a valid token succeeds.</div></li>
+        <li><span class="box"></span><div>A token belonging to user A cannot read or mutate user B's activity logs.</div></li>
+        <li><span class="box"></span><div>Signup without a valid invite code returns <code class="inline">403</code>; the same code cannot be redeemed twice, including concurrently.</div></li>
+        <li><span class="box"></span><div><code class="inline">grep -ri "PASSWORD_ENCRYPTION_KEY\|PasswordCipher\|Tailscale" src/</code> returns nothing.</div></li>
+        <li><span class="box"></span><div>The <code class="inline">users</code> collection contains no field from which any password can be recovered.</div></li>
+        <li><span class="box"></span><div>Server logs across a full login &rarr; prepare &rarr; MFA &rarr; submit cycle contain no password and no MFA code.</div></li>
+        <li><span class="box"></span><div>The 11th <code class="inline">/log-activities</code> call in a day returns <code class="inline">429</code>; the counter rolls over the next day.</div></li>
+        <li><span class="box"></span><div>Repeated bad-password attempts against a known username trip the limiter.</div></li>
+        <li><span class="box"></span><div>Mongo indexes exist: <code class="inline">users.appUsername</code> unique, <code class="inline">sessions.tokenHash</code> unique, <code class="inline">sessions.expiresAt</code> TTL, <code class="inline">inviteCodes.code</code> unique.</div></li>
+        <li><span class="box"></span><div>End to end from a phone over public HTTPS with a valid certificate, no tailnet involved.</div></li>
+      </ul>
+      <p style="margin-top:20px">No data migration is required &mdash; the application has no users other than its author. Drop the <code class="inline">users</code> collection and sign up again. Existing <code class="inline">ActivityLog</code> rows keyed by the old tailnet login will be orphaned from the new UUID accounts; that is acceptable and they can be dropped too.</p>
+    </section>
+
+    <section class="block" id="files">
+      <h2 class="h-context">Critical files</h2>
+      <div class="files-wrap">
+      <table class="files">
+        <thead><tr><th>Path</th><th>Change</th></tr></thead>
+        <tbody>
+          <tr><td><code class="inline">api/OtjServicesResource.java</code></td><td>SecurityContext instead of header reads; two endpoints become POST; register endpoint deleted; MFA-code log line removed</td></tr>
+          <tr><td><code class="inline">api/KsbServicesResource.java</code></td><td>Deleted</td></tr>
+          <tr><td><code class="inline">api/AuthResource.java</code></td><td>New &mdash; signup, login, logout</td></tr>
+          <tr><td><code class="inline">auth/SessionTokenService.java</code></td><td>New &mdash; issue/resolve, sliding 30-day expiry, hashed at rest</td></tr>
+          <tr><td><code class="inline">auth/AuthenticationFilter.java</code></td><td>New &mdash; Bearer &rarr; SecurityContext, 401 otherwise</td></tr>
+          <tr><td><code class="inline">auth/Authenticated.java</code></td><td>New &mdash; NameBinding marking protected resources</td></tr>
+          <tr><td><code class="inline">auth/RateLimiter.java</code></td><td>New &mdash; per-IP and per-username sliding window</td></tr>
+          <tr><td><code class="inline">quota/LlmQuotaService.java</code></td><td>New &mdash; 10 parse calls per user per day</td></tr>
+          <tr><td><code class="inline">db/InviteCodeRepository.java</code></td><td>New &mdash; atomic single-use claim</td></tr>
+          <tr><td><code class="inline">db/model/User.java</code></td><td>App credentials replace OneAdvanced credentials; UUID userId</td></tr>
+          <tr><td><code class="inline">db/UserRepository.java</code></td><td>Cipher removed; lookup by app username</td></tr>
+          <tr><td><code class="inline">crypto/PasswordCipher.java</code></td><td>Deleted, with its test and test key</td></tr>
+          <tr><td><code class="inline">tailscale/*</code></td><td>Deleted &mdash; whole package</td></tr>
+          <tr><td><code class="inline">llm/Ksb*.java</code>, <code class="inline">resources/ksb_*.txt</code></td><td>Deleted</td></tr>
+          <tr><td><code class="inline">bind/AppModule.java</code>, <code class="inline">AppComponent.java</code></td><td>Bindings removed for Tailscale, cipher, KSB matcher; AuthResource exposed</td></tr>
+          <tr><td><code class="inline">ServerBootstrap.java</code>, <code class="inline">Main.java</code></td><td>Register the filter; wire AuthResource; drop the KSB resource</td></tr>
+          <tr><td><code class="inline">pom.xml</code></td><td>Add <code class="inline">at.favre.lib:bcrypt</code></td></tr>
+          <tr><td><code class="inline">aws/lib/otj-services-stack.ts</code></td><td>Inbound 80/443; comment block corrected</td></tr>
+          <tr><td><code class="inline">deploy/README.md</code></td><td>Tailscale reframed as a dev tunnel; trust invariant removed</td></tr>
+        </tbody>
+      </table>
+      </div>
+    </section>
+
+    <section class="block" id="open">
+      <h2 class="h-context">Still open</h2>
+      <p><strong>Domain name</strong> &mdash; not yet registered. Step 09 is blocked on it, though every other step is not.</p>
+      <p><strong>The mobile client</strong> is out of scope here. What this plan fixes for it: one code path for every deployment &mdash; <code class="inline">POST /auth/session</code>, store the token in Keychain or Keystore, send <code class="inline">Authorization: Bearer</code> on everything else, and hold the OneAdvanced credentials in the same secure storage, ideally behind a biometric prompt. That biometric gate, not a short token lifetime, is what actually protects a stolen phone.</p>
+      <p><strong>Residual risk, stated plainly.</strong> This design defeats network attackers and anyone who merely knows a username. It does not defeat someone who learns a user's password, or a rooted device where an attacker can read the Keychain. Expiry, revocation and biometrics are the mitigations; there is no version of bearer-token auth without that residue. The meaningful improvement is that the blast radius of a compromise moves from the server &mdash; where it would have been every user's institutional credentials &mdash; to a single device.</p>
+    </section>
+  </main>
+</div>
+
+<footer class="foot">
+  otjServices &middot; auth &amp; multi-user plan &middot; base master @ 940b85c &middot; drafted 2026-07-26
+</footer>
+
+</body>
+</html>

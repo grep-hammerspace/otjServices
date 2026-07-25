@@ -40,14 +40,6 @@ public class ActivityLogRepository {
                 .into(new ArrayList<>());
     }
 
-    /** Returns all activity logs (posted and unposted) for the user, sorted ascending by activity date. */
-    public List<ActivityLog> getAllLogsFor(String userId) {
-        return collection.find(Filters.eq("tailscaleUserId", userId))
-                .sort(Sorts.ascending("activityDate"))
-                .map(this::fromDoc)
-                .into(new ArrayList<>());
-    }
-
     /** Deletes the most recently inserted unposted activity log for the user. Returns {@code true} if one was found and deleted. */
     public boolean deleteLastActivityLog(String userId) {
         Document deleted = collection.findOneAndDelete(
