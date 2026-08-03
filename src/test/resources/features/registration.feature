@@ -1,13 +1,14 @@
 Feature: User registration
 
-  Scenario: Register a new user stores them in MongoDB
+  Scenario: Register a new user stores them in MongoDB with a bcrypt password hash
     When I POST "/otj-services/register" with username "alice", password "pw1", learnerId "learner-alice"
     Then the response status is 201
     And user "alice" in the users collection has fields:
-      | username  | alice        |
-      | password  | ENC:1:       |
-      | learnerId | learner-alice |
-      | userId    | test-user-id |
+      | appUsername     | alice         |
+      | appPasswordHash | $2a$          |
+      | learnerId       | learner-alice |
+      | userId          | test-user-id  |
+    And no recoverable password is stored for user "alice"
 
   Scenario: Register with missing learnerId is rejected
     When I POST "/otj-services/register" with username "bob", password "pw2", learnerId ""
@@ -17,13 +18,13 @@ Feature: User registration
     When I POST "/otj-services/register" with username " padded-user ", password "pw", learnerId " learner-padded "
     Then the response status is 201
     And user "padded-user" in the users collection has fields:
-      | username  | padded-user    |
-      | learnerId | learner-padded |
+      | appUsername | padded-user    |
+      | learnerId   | learner-padded |
 
   Scenario: Registering the same user twice upserts the existing record
     When I POST "/otj-services/register" with username "carol", password "pw3", learnerId "learner-v1"
     And  I POST "/otj-services/register" with username "carol", password "pw-changed", learnerId "learner-v2"
     Then the response status is 201
     And user "carol" in the users collection has fields:
-      | password  | ENC:1:     |
-      | learnerId | learner-v2 |
+      | appPasswordHash | $2a$       |
+      | learnerId       | learner-v2 |

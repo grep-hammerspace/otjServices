@@ -27,6 +27,13 @@
             <version>5.3.1</version>
         </dependency>
 
+        <!-- Small bcrypt implementation with no transitive dependencies -->
+        <dependency>
+            <groupId>at.favre.lib</groupId>
+            <artifactId>bcrypt</artifactId>
+            <version>0.10.2</version>
+        </dependency>
+
         <dependency>
             <groupId>org.glassfish.jersey.containers</groupId>
             <artifactId>jersey-container-grizzly2-servlet</artifactId>

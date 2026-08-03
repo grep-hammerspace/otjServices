@@ -5,6 +5,7 @@ import com.github.grepHammerspace.api.dto.ActivityLogResponse;
 import com.github.grepHammerspace.api.dto.RegisterRequest;
 import com.github.grepHammerspace.api.dto.SubmitWithMfaRequest;
 import com.github.grepHammerspace.auth.Authenticated;
+import com.github.grepHammerspace.auth.PasswordHasher;
 import com.github.grepHammerspace.db.ActivityLogRepository;
 import com.github.grepHammerspace.db.UserRepository;
 import com.github.grepHammerspace.db.model.ActivityLog;
@@ -19,7 +20,6 @@ import com.github.grepHammerspace.stateStore.UserStateStore;
 import com.github.grepHammerspace.web.Driver;
 import com.github.grepHammerspace.web.OtjDriver;
 import com.github.grepHammerspace.web.OtjSubmitResult;
-import com.github.grepHammerspace.web.PrepareResult;
 import com.github.grepHammerspace.web.AzureIdDriver;
 import jakarta.ws.rs.*;
 import jakarta.ws.rs.core.Context;
@@ -32,6 +32,7 @@ import jakarta.validation.Valid;
 import javax.inject.Inject;
 import javax.inject.Provider;
 import java.io.IOException;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
@@ -56,6 +57,7 @@ public class OtjServicesResource {
     private final UserRepository userRepository;
     private final ActivityLogRepository activityLogRepository;
     private final LlmService llmService;
+    private final PasswordHasher passwordHasher;
     private final Provider<OtjDriver> otjDriverProvider;
     private final Provider<AzureIdDriver> azureIdDriverProvider;
 
@@ -63,12 +65,14 @@ public class OtjServicesResource {
     public OtjServicesResource(UserStateStore userStateStore, UserRepository userRepository,
                                ActivityLogRepository activityLogRepository,
                                LlmService llmService,
+                               PasswordHasher passwordHasher,
                                Provider<OtjDriver> otjDriverProvider,
                                Provider<AzureIdDriver> azureIdDriverProvider) {
         this.userStateStore = userStateStore;
         this.userRepository = userRepository;
         this.activityLogRepository = activityLogRepository;
         this.llmService = llmService;
+        this.passwordHasher = passwordHasher;
         this.otjDriverProvider = otjDriverProvider;
         this.azureIdDriverProvider = azureIdDriverProvider;
     }
@@ -84,17 +88,12 @@ public class OtjServicesResource {
     public Response prepareBrowser(@Context SecurityContext sc) {
         String userId = resolveUserState(sc);
         log.info("Received request from user {} to do {}", userId, "prepare-browser");
-        try {
-            User user = userRepository.findByUserId(userId);
-            UserState userState = userStateStore.getStateForUser(userId);
-            OtjDriver driver = otjDriverProvider.get();
-            driver.prepare(user.username(), user.password());
-            userState.setDriver(driver);
-        } catch (IOException e) {
-            return Response.status(Response.Status.BAD_GATEWAY).entity("{\"error\": \"" + e.getMessage() + "\"}").build();
-        }
-
-        return Response.ok("{\"status\": \"ready\"}").build();
+        // OneAdvanced credentials are no longer stored server-side, so there is nothing to type
+        // into the browser. Step 05 turns this into a POST that carries them in the request body.
+        return Response.status(501)
+                .entity("{\"error\": \"OneAdvanced credentials are no longer stored server-side. " +
+                        "This endpoint will accept them in the request body in an upcoming release.\"}")
+                .build();
     }
 
     @POST
@@ -103,7 +102,8 @@ public class OtjServicesResource {
         String userId = resolveUserState(sc);
         log.info("Received request from user {} to do {}", userId, "register");
         log.info("Registering user {} with learnerId {}", userId, body.learnerId());
-        userRepository.save(new User(userId, body.username().strip(), body.password(), body.learnerId().strip()));
+        userRepository.save(new User(userId, body.username().strip(),
+                passwordHasher.hash(body.password()), body.learnerId().strip(), Instant.now()));
         return Response.status(Response.Status.CREATED).build();
     }
 
@@ -253,40 +253,12 @@ public class OtjServicesResource {
     public Response azureIdPrepare(@Context SecurityContext sc) {
         String userId = resolveUserState(sc);
         log.info("Received request from user {} to do {}", userId, "azure-id/prepare");
-        try {
-            User user = userRepository.findByUserId(userId);
-            if (user == null) {
-                return Response.status(Response.Status.BAD_REQUEST)
-                        .entity("{\"error\": \"No registered user found — call POST /otj-services/register first\"}")
-                        .build();
-            }
-            AzureIdDriver driver = azureIdDriverProvider.get();
-            PrepareResult result = driver.prepare(user.username(), user.password());
-            UserState userState = userStateStore.getStateForUser(userId);
-            userState.setDriver(driver);
-            if (!result.requiresMfa()) {
-                userState.setLoginFuture(CompletableFuture.completedFuture(null));
-                return Response.ok("{\"status\": \"login_complete\", \"message\": \"" + result.userMessage() + "\"}").build();
-            }
-            CompletableFuture<Void> loginFuture = new CompletableFuture<>();
-            Thread.ofVirtual().start(() -> {
-                try {
-                    driver.completeMfa("");
-                    loginFuture.complete(null);
-                } catch (Exception e) {
-                    loginFuture.completeExceptionally(e);
-                }
-            });
-            userState.setLoginFuture(loginFuture);
-            String challengeField = result.status() == PrepareResult.Status.MFA_NUMBER_MATCH
-                    ? ", \"challengeNumber\": " + result.challengeNumber()
-                    : "";
-            return Response.ok("{\"status\": \"push_sent\", \"message\": \"" + result.userMessage() + "\"" + challengeField + "}").build();
-        } catch (IOException e) {
-            log.warn("Azure ID prepare failed: {}", e.getMessage());
-            return Response.status(Response.Status.BAD_REQUEST)
-                    .entity("{\"error\": \"" + e.getMessage() + "\"}").build();
-        }
+        // OneAdvanced credentials are no longer stored server-side, so there is nothing to feed
+        // the driver. Step 05 turns this into a POST that carries them in the request body.
+        return Response.status(501)
+                .entity("{\"error\": \"OneAdvanced credentials are no longer stored server-side. " +
+                        "This endpoint will accept them in the request body in an upcoming release.\"}")
+                .build();
     }
 
     /**
