@@ -6,3 +6,4 @@
 4) User an opensource/free model instead of relying on Anthropic - OpenRouter Nvidia Nim?
 5) Update the LLM system prompt, so that you can be less specific about a time. Ideally we want to just say what we did and it gets logged
 6) Some kinda of automated calendar scraper, that will fetch details of lectures and labs from a uni calendar and prepare an activty log for everyone, that way people dont have to log uni events themselves. They can just log the extra stuff
+7) Rate limiter, with custom message, "Stop trying to DDoS my, get a life loser"
