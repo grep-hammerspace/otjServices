@@ -1,10 +1,9 @@
 ## Improvements
 
-
-1) ~~Find a way to automate login through QMUL Azure Id for everyone, i assume it is already set up to work with everyones QMUL email and password~~
-2) ~~Store passwords encrypted, this means you have to think a lot harder about security~~ — resolved, see `password-encryption-plan.html` (AES-256-GCM via `PasswordCipher`, key from `PASSWORD_ENCRYPTION_KEY` env var)
-3) Upgrade to AWS, with free tier, not sure how that looks with running privileged containers though, will have to do some more digging
-4) Change activity log diffing code to care only about additions, this will solve the issue of previous states being cleared
-5) Add a sweeper proc, this will run every once in a while (or on request) and match your activity logs to KSBs and return you some data on how your activities related to the KSBs.
-6) ~~Decide whether or not we should keep Mongo or switch to sthg AWS native, maybe DocumentDB. It may be cheaper than ingress~~ no need, Atlas free tier has plenty of space
-7) smarter session tracking: ie if someone tries a login with azure id and soon after tries another, they will alr be logged in, which case we dont need to return a challenge code, and we dont need to return the thing about an exisiting push (which is sorta inaccurate)
+1) Smarter session tracking: ie if someone tries a login with azure id and soon after tries another, they will alr be logged in, which case we dont need to return a challenge code, and we dont need to return the thing about an exisiting push (which is sorta inaccurate), we can maybe just do a poll before we even start the login flow to see if the user is logged in alr or not, if yes we can just POST with existing cookies
+2) performance enhancements ? pretty open ended - biggest bottleneck is probably nio when talking to the login services, not sure thugh, needs examining
+3) set up protected branch on remote "tailscale" which is mostly the same thing as master - but without the aws infra stuff, so that it can be run via bootstrap.sh and self-hosting as a docker compose deployment.
+4) User an opensource/free model instead of relying on Anthropic - OpenRouter Nvidia Nim?
+5) Update the LLM system prompt, so that you can be less specific about a time. Ideally we want to just say what we did and it gets logged
+6) Some kinda of automated calendar scraper, that will fetch details of lectures and labs from a uni calendar and prepare an activty log for everyone, that way people dont have to log uni events themselves. They can just log the extra stuff
+7) Rate limiter, with custom message, "Stop trying to DDoS my, get a life loser"
