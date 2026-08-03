@@ -30,8 +30,8 @@ public class RegistrationSteps {
         String body = String.format(
             "{\"username\":\"%s\",\"password\":\"%s\",\"learnerId\":\"%s\"}",
             username, password, learnerId);
-        Request req = new Request.Builder()
-            .url(base + path)
+        Request req = HttpSteps.authenticated(new Request.Builder()
+            .url(base + path))
             .post(RequestBody.create(body, JSON))
             .build();
         lastResponse = HTTP.newCall(req).execute();

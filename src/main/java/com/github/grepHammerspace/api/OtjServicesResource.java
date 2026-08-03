@@ -4,6 +4,7 @@ import com.github.grepHammerspace.api.dto.ActivityLogRequest;
 import com.github.grepHammerspace.api.dto.ActivityLogResponse;
 import com.github.grepHammerspace.api.dto.RegisterRequest;
 import com.github.grepHammerspace.api.dto.SubmitWithMfaRequest;
+import com.github.grepHammerspace.auth.Authenticated;
 import com.github.grepHammerspace.db.ActivityLogRepository;
 import com.github.grepHammerspace.db.UserRepository;
 import com.github.grepHammerspace.db.model.ActivityLog;
@@ -15,16 +16,15 @@ import com.github.grepHammerspace.llm.LlmResult;
 import com.github.grepHammerspace.llm.LlmService;
 import com.github.grepHammerspace.stateStore.UserState;
 import com.github.grepHammerspace.stateStore.UserStateStore;
-import com.github.grepHammerspace.tailscale.TailscaleIdentityService;
 import com.github.grepHammerspace.web.Driver;
 import com.github.grepHammerspace.web.OtjDriver;
 import com.github.grepHammerspace.web.OtjSubmitResult;
 import com.github.grepHammerspace.web.PrepareResult;
 import com.github.grepHammerspace.web.AzureIdDriver;
-import jakarta.servlet.http.HttpServletRequest;
 import jakarta.ws.rs.*;
 import jakarta.ws.rs.core.Context;
 import jakarta.ws.rs.core.Response;
+import jakarta.ws.rs.core.SecurityContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -39,24 +39,28 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
 /** Primary JAX-RS resource for OTJ automation endpoints.
+ *
+ * <p>All endpoints require a valid bearer token: {@link Authenticated} binds
+ * {@link com.github.grepHammerspace.auth.AuthenticationFilter}, which rejects unauthenticated
+ * requests with 401 before they reach this class and exposes the userId as the
+ * {@link SecurityContext} principal.
  */
 @Path("/otj-services")
 @Produces("application/json")
 @Consumes("application/json")
+@Authenticated
 public class OtjServicesResource {
     private static final Logger log = LoggerFactory.getLogger(OtjServicesResource.class);
 
     private final UserStateStore userStateStore;
     private final UserRepository userRepository;
     private final ActivityLogRepository activityLogRepository;
-    private final TailscaleIdentityService tailscaleIdentityService;
     private final LlmService llmService;
     private final Provider<OtjDriver> otjDriverProvider;
     private final Provider<AzureIdDriver> azureIdDriverProvider;
 
     @Inject
     public OtjServicesResource(UserStateStore userStateStore, UserRepository userRepository,
-                               TailscaleIdentityService tailscaleIdentityService,
                                ActivityLogRepository activityLogRepository,
                                LlmService llmService,
                                Provider<OtjDriver> otjDriverProvider,
@@ -64,7 +68,6 @@ public class OtjServicesResource {
         this.userStateStore = userStateStore;
         this.userRepository = userRepository;
         this.activityLogRepository = activityLogRepository;
-        this.tailscaleIdentityService = tailscaleIdentityService;
         this.llmService = llmService;
         this.otjDriverProvider = otjDriverProvider;
         this.azureIdDriverProvider = azureIdDriverProvider;
@@ -78,18 +81,17 @@ public class OtjServicesResource {
      */
     @GET
     @Path("/prepare-browser")
-    public Response prepareBrowser(@Context HttpServletRequest request) {
-        String userId;
+    public Response prepareBrowser(@Context SecurityContext sc) {
+        String userId = resolveUserState(sc);
+        log.info("Received request from user {} to do {}", userId, "prepare-browser");
         try {
-            userId = resolveUserState(request);
-            log.info("Received request from user {} to do {}", userId, "prepare-browser");
             User user = userRepository.findByUserId(userId);
             UserState userState = userStateStore.getStateForUser(userId);
             OtjDriver driver = otjDriverProvider.get();
             driver.prepare(user.username(), user.password());
             userState.setDriver(driver);
         } catch (IOException e) {
-            return Response.status(Response.Status.UNAUTHORIZED).entity("{\"error\": \"" + e.getMessage() + "\"}").build();
+            return Response.status(Response.Status.BAD_GATEWAY).entity("{\"error\": \"" + e.getMessage() + "\"}").build();
         }
 
         return Response.ok("{\"status\": \"ready\"}").build();
@@ -97,30 +99,19 @@ public class OtjServicesResource {
 
     @POST
     @Path("/register")
-    public Response register(@Valid RegisterRequest body, @Context HttpServletRequest request) {
-        try {
-            String userId = resolveUserState(request);
-            log.info("Received request from user {} to do {}", userId, "register");
-            log.info("Registering user {} with learnerId {}", userId, body.learnerId());
-            userRepository.save(new User(userId, body.username().strip(), body.password(), body.learnerId().strip()));
-            userStateStore.createUserState(userId);
-            return Response.status(Response.Status.CREATED).build();
-        } catch (IOException e) {
-            return Response.status(Response.Status.UNAUTHORIZED).entity("{\"error\": \"" + e.getMessage() + "\"}").build();
-        }
+    public Response register(@Valid RegisterRequest body, @Context SecurityContext sc) {
+        String userId = resolveUserState(sc);
+        log.info("Received request from user {} to do {}", userId, "register");
+        log.info("Registering user {} with learnerId {}", userId, body.learnerId());
+        userRepository.save(new User(userId, body.username().strip(), body.password(), body.learnerId().strip()));
+        return Response.status(Response.Status.CREATED).build();
     }
 
     @POST
     @Path("/log-activities")
-    public Response logActivtiesWithLlmHelp(@Valid ActivityLogRequest body, @Context HttpServletRequest request) {
-        String userId;
-        try {
-            userId = resolveUserState(request);
-            log.info("Received request from user {} to do {}", userId, "log-activities");
-        } catch (IOException e) {
-            return Response.status(Response.Status.UNAUTHORIZED)
-                    .entity("{\"error\": \"" + e.getMessage() + "\"}").build();
-        }
+    public Response logActivtiesWithLlmHelp(@Valid ActivityLogRequest body, @Context SecurityContext sc) {
+        String userId = resolveUserState(sc);
+        log.info("Received request from user {} to do {}", userId, "log-activities");
 
         String content = body.content() == null ? "" : body.content().strip();
         if (content.isBlank()) {
@@ -135,7 +126,7 @@ public class OtjServicesResource {
 
         User user = userRepository.findByUserId(userId);
         if (user == null) {
-            String msg = "No registered user found for this Tailscale identity. " +
+            String msg = "No registered user found for this account. " +
                     "Call POST /otj-services/register first.";
             log.warn("User {} not found in repository", userId);
             return Response.status(Response.Status.BAD_REQUEST)
@@ -191,15 +182,9 @@ public class OtjServicesResource {
 
     @DELETE
     @Path("/delete-last-row")
-    public Response deleteLastRow(@Context HttpServletRequest request) {
-        String userId;
-        try {
-            userId = resolveUserState(request);
-            log.info("Received request from user {} to do {}", userId, "delete-last-row");
-        } catch (IOException e) {
-            return Response.status(Response.Status.UNAUTHORIZED)
-                    .entity("{\"error\": \"" + e.getMessage() + "\"}").build();
-        }
+    public Response deleteLastRow(@Context SecurityContext sc) {
+        String userId = resolveUserState(sc);
+        log.info("Received request from user {} to do {}", userId, "delete-last-row");
 
         boolean deleted = activityLogRepository.deleteLastActivityLog(userId);
         if (!deleted) {
@@ -211,15 +196,9 @@ public class OtjServicesResource {
 
     @DELETE
     @Path("/reset-notes")
-    public Response resetNotes(@Context HttpServletRequest request) {
-        String userId;
-        try {
-            userId = resolveUserState(request);
-            log.info("Received request from user {} to do {}", userId, "reset-notes");
-        } catch (IOException e) {
-            return Response.status(Response.Status.UNAUTHORIZED)
-                    .entity("{\"error\": \"" + e.getMessage() + "\"}").build();
-        }
+    public Response resetNotes(@Context SecurityContext sc) {
+        String userId = resolveUserState(sc);
+        log.info("Received request from user {} to do {}", userId, "reset-notes");
 
         userRepository.clearLastContent(userId);
         return Response.ok("{\"status\": \"ok\"}").build();
@@ -227,22 +206,14 @@ public class OtjServicesResource {
 
     @POST
     @Path("/submit-with-mfa")
-    public Response useMfaCodeToSubmitUnSubmittedOTJs(@Valid SubmitWithMfaRequest body, @Context HttpServletRequest request){
-
-        String userId;
-        Driver driver;
-        try {
-            userId = resolveUserState(request);
-            log.info("Received request from user {} to do {}", userId, "submit-with-mfa");
-            log.info("Received submit-with-mfa request from user {} and mfa code {}", userId, body.mfaCode());
-            driver = userStateStore.getStateForUser(userId).getDriver();
-            if (driver == null) {
-                return Response.status(Response.Status.INTERNAL_SERVER_ERROR)
-                        .entity("{\"error\": \"No prepared browser session found for user, call /prepare-browser first\"}").build();
-            }
-        } catch (IOException e) {
-            return Response.status(Response.Status.UNAUTHORIZED)
-                    .entity("{\"error\": \"" + e.getMessage() + "\"}").build();
+    public Response useMfaCodeToSubmitUnSubmittedOTJs(@Valid SubmitWithMfaRequest body, @Context SecurityContext sc) {
+        String userId = resolveUserState(sc);
+        log.info("Received request from user {} to do {}", userId, "submit-with-mfa");
+        log.info("Received submit-with-mfa request from user {} and mfa code {}", userId, body.mfaCode());
+        Driver driver = userStateStore.getStateForUser(userId).getDriver();
+        if (driver == null) {
+            return Response.status(Response.Status.INTERNAL_SERVER_ERROR)
+                    .entity("{\"error\": \"No prepared browser session found for user, call /prepare-browser first\"}").build();
         }
 
         try {
@@ -279,11 +250,10 @@ public class OtjServicesResource {
      */
     @GET
     @Path("/azure-id/prepare")
-    public Response azureIdPrepare(@Context HttpServletRequest request) {
-        String userId;
+    public Response azureIdPrepare(@Context SecurityContext sc) {
+        String userId = resolveUserState(sc);
+        log.info("Received request from user {} to do {}", userId, "azure-id/prepare");
         try {
-            userId = resolveUserState(request);
-            log.info("Received request from user {} to do {}", userId, "azure-id/prepare");
             User user = userRepository.findByUserId(userId);
             if (user == null) {
                 return Response.status(Response.Status.BAD_REQUEST)
@@ -325,23 +295,15 @@ public class OtjServicesResource {
      */
     @GET
     @Path("/azure-id/complete")
-    public Response azureIdComplete(@Context HttpServletRequest request) {
-        String userId;
-        CompletableFuture<Void> loginFuture;
-        Driver driver;
-        try {
-            userId = resolveUserState(request);
-            log.info("Received request from user {} to do {}", userId, "azure-id/complete");
-            UserState userState = userStateStore.getStateForUser(userId);
-            loginFuture = userState.getLoginFuture();
-            driver = userState.getDriver();
-            if (loginFuture == null) {
-                return Response.status(Response.Status.BAD_REQUEST)
-                        .entity("{\"error\": \"No active session — call /azure-id/prepare first\"}").build();
-            }
-        } catch (IOException e) {
-            return Response.status(Response.Status.UNAUTHORIZED)
-                    .entity("{\"error\": \"" + e.getMessage() + "\"}").build();
+    public Response azureIdComplete(@Context SecurityContext sc) {
+        String userId = resolveUserState(sc);
+        log.info("Received request from user {} to do {}", userId, "azure-id/complete");
+        UserState userState = userStateStore.getStateForUser(userId);
+        CompletableFuture<Void> loginFuture = userState.getLoginFuture();
+        Driver driver = userState.getDriver();
+        if (loginFuture == null) {
+            return Response.status(Response.Status.BAD_REQUEST)
+                    .entity("{\"error\": \"No active session — call /azure-id/prepare first\"}").build();
         }
 
         try {
@@ -377,9 +339,13 @@ public class OtjServicesResource {
                 .entity("{\"status\": \"partial\", \"posted\": " + result.posted().size() + ", \"failed\": " + result.failed().size() + "}").build();
     }
 
-    /** Resolves the Tailscale login name and lazily initialises per-user state if it doesn't exist yet. */
-    private String resolveUserState(HttpServletRequest request) throws IOException {
-        String userId = tailscaleIdentityService.getUser(request);
+    /**
+     * Reads the authenticated userId from the {@link SecurityContext} set by
+     * {@link com.github.grepHammerspace.auth.AuthenticationFilter} and lazily initialises
+     * per-user state if it doesn't exist yet.
+     */
+    private String resolveUserState(SecurityContext sc) {
+        String userId = sc.getUserPrincipal().getName();
         userStateStore.createUserState(userId);
         return userId;
     }

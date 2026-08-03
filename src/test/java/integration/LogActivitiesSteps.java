@@ -18,8 +18,8 @@ public class LogActivitiesSteps {
     public void registerUser(String learnerId) throws Exception {
         String base = (String) ScenarioContext.get("baseUrl");
         String body = "{\"username\":\"testuser\",\"password\":\"testpass\",\"learnerId\":\"" + learnerId + "\"}";
-        Request req = new Request.Builder()
-                .url(base + "/otj-services/register")
+        Request req = HttpSteps.authenticated(new Request.Builder()
+                .url(base + "/otj-services/register"))
                 .post(RequestBody.create(body, JSON))
                 .build();
         HTTP.newCall(req).execute().close();
@@ -34,8 +34,8 @@ public class LogActivitiesSteps {
     public void postLogActivitiesTo(String path, String content) throws Exception {
         String base = (String) ScenarioContext.get("baseUrl");
         String body = MAPPER.writeValueAsString(java.util.Map.of("content", content));
-        Request req = new Request.Builder()
-                .url(base + path)
+        Request req = HttpSteps.authenticated(new Request.Builder()
+                .url(base + path))
                 .post(RequestBody.create(body, JSON))
                 .build();
         Response response = HTTP.newCall(req).execute();
@@ -56,8 +56,8 @@ public class LogActivitiesSteps {
     private void postLogActivities(String content) throws Exception {
         String base = (String) ScenarioContext.get("baseUrl");
         String body = MAPPER.writeValueAsString(java.util.Map.of("content", content));
-        Request req = new Request.Builder()
-                .url(base + "/otj-services/log-activities")
+        Request req = HttpSteps.authenticated(new Request.Builder()
+                .url(base + "/otj-services/log-activities"))
                 .post(RequestBody.create(body, JSON))
                 .build();
         Response response = HTTP.newCall(req).execute();
