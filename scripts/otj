@@ -1,0 +1,230 @@
+#!/usr/bin/env bash
+# Call the local otjServices API by hand.
+#
+# Auth is a single header: TailscaleIdentityHelper reads Tailscale-User-Login and
+# nothing else. In production only `tailscale serve` can reach 127.0.0.1:8945 and set
+# it; locally we just set it ourselves.
+#
+# Only the endpoints that stay inside local Mongo (plus the LLM call) get commands.
+# /prepare-browser, /submit-with-mfa and /azure-id/* drive real sessions against
+# OneAdvanced and Azure AD with real credentials — submit-with-mfa writes entries into
+# a real education record — so they are reachable only via `otj raw`, deliberately.
+#
+set -euo pipefail
+
+BASE_URL="${OTJ_BASE_URL:-http://127.0.0.1:8945}"
+USER_ID="${OTJ_USER:-dev@localhost}"
+VERBOSE=false
+
+LAST_STATUS=0
+
+die()  { echo "ERROR: $*" >&2; exit 1; }
+info() { echo "==> $*"; }
+warn() { echo "WARNING: $*" >&2; }
+
+usage() {
+  cat <<'EOF'
+otj — call the local otjServices API
+
+USAGE
+  otj [global flags] <command> [args]
+
+COMMANDS
+  health                          GET    /health
+  register [flags]                POST   /otj-services/register
+      --username U --password P --learner-id L   (all default to dev placeholders)
+  log [--fresh] "text"            POST   /otj-services/log-activities
+      --fresh   reset note history first, so identical text can be replayed
+  reset                           DELETE /otj-services/reset-notes
+  delete-last                     DELETE /otj-services/delete-last-row
+  raw METHOD /path ['{json}']     escape hatch — reaches any endpoint
+
+GLOBAL FLAGS
+  --user <identity>   caller identity for this invocation  (default: dev@localhost)
+  --base-url <url>    target host                          (default: http://127.0.0.1:8945)
+  -v, --verbose       echo the request and dump response headers
+  -h, --help          this text
+
+ENVIRONMENT
+  OTJ_USER, OTJ_BASE_URL — same as the flags above.
+
+GOTCHAS
+  * Re-sending identical text does nothing. ContentDiffer is a set difference over
+    lines, so previously-seen lines are dropped and you get {"status":"no new content"}
+    with no rows and no error. Use `log --fresh` to replay the same text.
+  * `log` needs a registered user — run `otj register` once per identity first.
+  * The app does not read .env (dotenv-java is declared but never imported). Export the
+    variables into the shell before launching it.
+
+STARTING THE APP
+  # whole stack in podman, closest to production
+  bash deploy/bootstrap.sh
+
+  # dev loop: Mongo in podman, app from the jar so you can rebuild fast
+  podman-compose -f deploy/podman-compose.yaml up mongo -d
+  set -a; source .env; set +a
+  mvn -q package -DskipTests && java -jar target/app.jar
+
+EXAMPLES
+  otj health
+  otj register --learner-id 12345
+  otj log "worked on IOT554 from 11:00 to 13:00 today"
+  otj log --fresh "worked on IOT554 from 11:00 to 13:00 today"
+  otj --user someone-else@localhost log "2 hours on revision today"
+  otj delete-last
+EOF
+}
+
+# Quote a shell string as a JSON string. Uses jq when present so quotes, backslashes
+# and newlines in activity text survive; falls back to manual escaping so jq stays
+# optional.
+json_field() {
+  if command -v jq >/dev/null 2>&1; then
+    printf '%s' "$1" | jq -Rs .
+  else
+    local s="$1"
+    s="${s//\\/\\\\}"
+    s="${s//\"/\\\"}"
+    s="${s//$'\n'/\\n}"
+    s="${s//$'\r'/\\r}"
+    s="${s//$'\t'/\\t}"
+    printf '"%s"' "$s"
+  fi
+}
+
+# request METHOD PATH [JSON_BODY]
+# Prints the response body (pretty-printed when it is JSON and jq is available),
+# sets LAST_STATUS, and returns non-zero on HTTP >= 400 so calls compose with &&.
+request() {
+  local method="$1" path="$2" body="${3:-}"
+  local url="${BASE_URL}${path}"
+
+  local -a curl_args=(
+    --silent --show-error
+    --request "$method"
+    --header "Tailscale-User-Login: ${USER_ID}"
+    --write-out $'\n%{http_code}'
+  )
+  if [ -n "$body" ]; then
+    curl_args+=(--header 'Content-Type: application/json' --data "$body")
+  fi
+  if [ "$VERBOSE" = true ]; then
+    echo "> ${method} ${url}" >&2
+    echo "> Tailscale-User-Login: ${USER_ID}" >&2
+    [ -n "$body" ] && echo "> ${body}" >&2
+    curl_args+=(--dump-header /dev/stderr)
+  fi
+
+  local raw
+  if ! raw=$(curl "${curl_args[@]}" "$url" 2>/dev/null); then
+    die "cannot reach the app at ${BASE_URL} — is it running? See 'otj --help' for how to start it."
+  fi
+
+  LAST_STATUS="${raw##*$'\n'}"
+  local payload="${raw%$'\n'*}"
+
+  if [ -n "$payload" ]; then
+    if command -v jq >/dev/null 2>&1 && printf '%s' "$payload" | jq -e . >/dev/null 2>&1; then
+      printf '%s' "$payload" | jq .
+    else
+      printf '%s\n' "$payload"
+    fi
+  fi
+
+  if [ "$LAST_STATUS" -ge 400 ]; then
+    echo "HTTP ${LAST_STATUS}" >&2
+    return 1
+  fi
+}
+
+cmd_health() {
+  request GET /health
+  info "healthy (HTTP ${LAST_STATUS})"
+}
+
+cmd_register() {
+  local username="dev-user" password="dev-password" learner="dev-learner-id"
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --username)    username="${2:-}"; [ -n "$username" ] || die "--username needs a value"; shift 2 ;;
+      --password)    password="${2:-}"; [ -n "$password" ] || die "--password needs a value"; shift 2 ;;
+      --learner-id)  learner="${2:-}";  [ -n "$learner" ]  || die "--learner-id needs a value"; shift 2 ;;
+      *) die "unknown flag for register: $1" ;;
+    esac
+  done
+  request POST /otj-services/register \
+    "{\"username\": $(json_field "$username"), \"password\": $(json_field "$password"), \"learnerId\": $(json_field "$learner")}"
+  info "registered ${USER_ID} (HTTP ${LAST_STATUS})"
+}
+
+cmd_log() {
+  local fresh=false
+  local -a rest=()
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --fresh) fresh=true; shift ;;
+      *) rest+=("$1"); shift ;;
+    esac
+  done
+  [ ${#rest[@]} -gt 0 ] || die "usage: otj log [--fresh] \"activity text\""
+
+  if [ "$fresh" = true ]; then
+    info "clearing note history so identical text is not treated as already-seen"
+    request DELETE /otj-services/reset-notes >/dev/null
+  fi
+  request POST /otj-services/log-activities "{\"content\": $(json_field "${rest[0]}")}"
+}
+
+cmd_reset() {
+  request DELETE /otj-services/reset-notes
+}
+
+cmd_delete_last() {
+  request DELETE /otj-services/delete-last-row
+}
+
+cmd_raw() {
+  local method="${1:-}" path="${2:-}" body="${3:-}"
+  [ -n "$method" ] && [ -n "$path" ] || die "usage: otj raw METHOD /path ['{json}']"
+  case "$path" in
+    /*) ;;
+    *) die "path must start with / (got '${path}')" ;;
+  esac
+  case "$path" in
+    */submit-with-mfa|*/prepare-browser|*/azure-id/*)
+      warn "${path} talks to OneAdvanced/Azure AD with real credentials." \
+           "submit-with-mfa writes entries into your real education record." ;;
+  esac
+  request "$(printf '%s' "$method" | tr '[:lower:]' '[:upper:]')" "$path" "$body"
+}
+
+# --- global flags may appear before or after the command -----------------------------
+declare -a ARGS=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --user)       USER_ID="${2:-}";  [ -n "$USER_ID" ]  || die "--user needs a value";     shift 2 ;;
+    --user=*)     USER_ID="${1#*=}"; shift ;;
+    --base-url)   BASE_URL="${2:-}"; [ -n "$BASE_URL" ] || die "--base-url needs a value"; shift 2 ;;
+    --base-url=*) BASE_URL="${1#*=}"; shift ;;
+    -v|--verbose) VERBOSE=true; shift ;;
+    -h|--help)    usage; exit 0 ;;
+    *)            ARGS+=("$1"); shift ;;
+  esac
+done
+set -- ${ARGS[@]+"${ARGS[@]}"}
+
+command -v curl >/dev/null 2>&1 || die "curl is required but not on PATH"
+
+cmd="${1:-}"
+[ $# -gt 0 ] && shift
+
+case "$cmd" in
+  health)      cmd_health ;;
+  register)    cmd_register "$@" ;;
+  log)         cmd_log "$@" ;;
+  reset)       cmd_reset ;;
+  delete-last) cmd_delete_last ;;
+  raw)         cmd_raw "$@" ;;
+  ""|help)     usage ;;
+  *)           die "unknown command: ${cmd} (try 'otj --help')" ;;
+esac
