@@ -11,6 +11,7 @@ import javax.inject.Singleton;
  * <p>Only the hash is ever stored — see {@link com.github.grepHammerspace.db.model.User#appPasswordHash()}.
  * These are this application's credentials, not OneAdvanced's, which never touch the database.
  */
+// bCrypt = two-way hashing, ie you can take the hash and decrpyt it to make sure the password the user sends over is valid
 @Singleton
 public class PasswordHasher {
     /** 2^12 rounds — comfortably slow for brute force, imperceptible on a single login. */
