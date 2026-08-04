@@ -1,8 +1,10 @@
 package integration;
 
+import com.github.grepHammerspace.api.AuthResource;
 import com.github.grepHammerspace.api.OtjServicesResource;
 import com.github.grepHammerspace.auth.AuthenticationFilter;
 import com.github.grepHammerspace.auth.SessionTokenService;
+import com.github.grepHammerspace.db.InviteCodeRepository;
 import com.mongodb.client.MongoDatabase;
 import dagger.Component;
 
@@ -20,7 +22,9 @@ import javax.inject.Singleton;
 @Component(modules = TestAppModule.class)
 public interface TestAppComponent {
     OtjServicesResource otjServicesResource();
+    AuthResource authResource();
     AuthenticationFilter authenticationFilter();
     SessionTokenService sessionTokenService();
+    InviteCodeRepository inviteCodeRepository();
     MongoDatabase mongoDatabase();
 }

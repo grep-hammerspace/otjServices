@@ -1,5 +1,6 @@
 package com.github.grepHammerspace.bind;
 
+import com.github.grepHammerspace.api.AuthResource;
 import com.github.grepHammerspace.api.OtjServicesResource;
 import com.github.grepHammerspace.auth.AuthenticationFilter;
 import com.mongodb.client.MongoDatabase;
@@ -12,6 +13,7 @@ import javax.inject.Singleton;
 @Component(modules = AppModule.class)
 public interface AppComponent {
     OtjServicesResource otjServicesResource();
+    AuthResource authResource();
     AuthenticationFilter authenticationFilter();
     MongoDatabase mongoDatabase();
 }
