@@ -1,28 +1,45 @@
 package com.github.grepHammerspace.llm;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
 import com.github.grepHammerspace.db.model.ActivityLog;
+import com.github.grepHammerspace.llm.ParsedActivities.Entry;
+import com.github.grepHammerspace.llm.ParsedActivities.ErrorCode;
+import com.github.grepHammerspace.llm.ParsedActivities.ParseError;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.util.List;
+
 import static org.junit.jupiter.api.Assertions.*;
 
+/**
+ * Covers the mapping from the model's typed output onto the persistence types.
+ *
+ * <p>These replace the previous tests against {@code processResponse}, which exercised
+ * hand-rolled JSON handling (fence stripping, {@code time-spent} splitting, error-object
+ * detection). Structured output removed that code, so what is left worth testing is the
+ * field mapping itself.
+ */
 class LlmServiceTest {
 
     private LlmServiceImpl service;
 
     @BeforeEach
     void setUp() {
-        // null client — processResponse does not call it
+        // null client — toResult does not call it
         service = new LlmServiceImpl(null);
     }
 
+    private static ParsedActivities of(List<Entry> entries, List<ParseError> errors) {
+        return new ParsedActivities(entries, errors);
+    }
+
     @Test
-    void validRow_mapsToActivityLog() throws JsonProcessingException {
-        String json = """
-                [{"date":"2026/05/30","time-spent":"2:00","start-time":"10:00","comments":"Worked on assignment","posted":""}]
-                """;
-        LlmResult result = service.processResponse(json, "user1", "learner1");
+    void entryMapsToActivityLog() {
+        ParsedActivities parsed = of(
+                List.of(new Entry("2026/05/30", 2, 0, "10:00", "Worked on assignment")),
+                List.of());
+
+        LlmResult result = service.toResult(parsed, "user1", "learner1");
 
         assertEquals(1, result.ok().size());
         assertEquals(0, result.errors().size());
@@ -36,89 +53,119 @@ class LlmServiceTest {
         assertEquals("user1", log.tailscaleUserId());
         assertEquals("learner1", log.learnerId());
         assertFalse(log.posted());
+        assertNull(log.id());
     }
 
     @Test
-    void errorRow_mapsToLlmParseError() throws JsonProcessingException {
-        String json = """
-                [{"error":"missing_duration","message":"No duration found","raw":"did some work today"}]
-                """;
-        LlmResult result = service.processResponse(json, "user1", "learner1");
+    void errorMapsToLlmParseError() {
+        ParsedActivities parsed = of(
+                List.of(),
+                List.of(new ParseError(ErrorCode.missing_duration,
+                        "No duration found", "did some work today")));
+
+        LlmResult result = service.toResult(parsed, "user1", "learner1");
 
         assertEquals(0, result.ok().size());
         assertEquals(1, result.errors().size());
 
         LlmParseError err = result.errors().get(0);
         assertEquals("missing_duration", err.error());
+        assertEquals("No duration found", err.message());
         assertEquals("did some work today", err.raw());
     }
 
     @Test
-    void mixedRows_splitCorrectly() throws JsonProcessingException {
-        String json = """
-                [
-                  {"date":"2026/05/30","time-spent":"1:30","start-time":"09:00","comments":"Reading","posted":""},
-                  {"error":"missing_description","message":"No description","raw":"1 hour"},
-                  {"date":"2026/05/30","time-spent":"0:45","start-time":"14:00","comments":"Meeting","posted":""}
-                ]
-                """;
-        LlmResult result = service.processResponse(json, "u", "l");
+    void mixedEntriesAndErrorsBothMapped() {
+        ParsedActivities parsed = of(
+                List.of(new Entry("2026/05/30", 1, 30, "09:00", "Reading"),
+                        new Entry("2026/05/30", 0, 45, "14:00", "Meeting")),
+                List.of(new ParseError(ErrorCode.missing_description, "No description", "1 hour")));
+
+        LlmResult result = service.toResult(parsed, "u", "l");
 
         assertEquals(2, result.ok().size());
         assertEquals(1, result.errors().size());
     }
 
     @Test
-    void markdownFencesStripped() throws JsonProcessingException {
-        String json = """
-                ```json
-                [{"date":"2026/05/30","time-spent":"1:00","start-time":"09:00","comments":"Test","posted":""}]
-                ```""";
-        LlmResult result = service.processResponse(json, "u", "l");
-        assertEquals(1, result.ok().size());
+    void entryOrderIsPreserved() {
+        ParsedActivities parsed = of(
+                List.of(new Entry("2026/05/30", 1, 0, "09:00", "first"),
+                        new Entry("2026/05/30", 2, 0, "11:00", "second"),
+                        new Entry("2026/05/30", 3, 0, "14:00", "third")),
+                List.of());
+
+        LlmResult result = service.toResult(parsed, "u", "l");
+
+        assertEquals("first", result.ok().get(0).activityImpact());
+        assertEquals("second", result.ok().get(1).activityImpact());
+        assertEquals("third", result.ok().get(2).activityImpact());
     }
 
     @Test
-    void markdownFencesStripped_noLanguageTag() throws JsonProcessingException {
-        String json = "```\n[{\"date\":\"2026/05/30\",\"time-spent\":\"1:00\",\"start-time\":\"09:00\",\"comments\":\"Test\",\"posted\":\"\"}]\n```";
-        LlmResult result = service.processResponse(json, "u", "l");
-        assertEquals(1, result.ok().size());
-    }
+    void hoursAndMinutesCopiedVerbatim() {
+        ParsedActivities parsed = of(
+                List.of(new Entry("2026/05/30", 4, 0, "08:00", "Work"),
+                        new Entry("2026/05/30", 0, 45, "", "Quick task"),
+                        new Entry("2026/05/30", 1, 30, "13:00", "Task")),
+                List.of());
 
-    @Test
-    void invalidJson_throwsJsonProcessingException() {
-        assertThrows(JsonProcessingException.class,
-                () -> service.processResponse("not valid json at all", "u", "l"));
-    }
+        LlmResult result = service.toResult(parsed, "u", "l");
 
-    @Test
-    void timeSpent_parsedCorrectly_hours() throws JsonProcessingException {
-        String json = "[{\"date\":\"2026/05/30\",\"time-spent\":\"4:00\",\"start-time\":\"08:00\",\"comments\":\"Work\",\"posted\":\"\"}]";
-        LlmResult result = service.processResponse(json, "u", "l");
         assertEquals(4, result.ok().get(0).hours());
         assertEquals(0, result.ok().get(0).minutes());
+        assertEquals(0, result.ok().get(1).hours());
+        assertEquals(45, result.ok().get(1).minutes());
+        assertEquals(1, result.ok().get(2).hours());
+        assertEquals(30, result.ok().get(2).minutes());
     }
 
     @Test
-    void timeSpent_parsedCorrectly_minutes() throws JsonProcessingException {
-        String json = "[{\"date\":\"2026/05/30\",\"time-spent\":\"0:45\",\"start-time\":\"\",\"comments\":\"Quick task\",\"posted\":\"\"}]";
-        LlmResult result = service.processResponse(json, "u", "l");
-        assertEquals(0, result.ok().get(0).hours());
-        assertEquals(45, result.ok().get(0).minutes());
+    void emptyStartTimeIsPreserved() {
+        // The schema permits "" when the input gives no start time. OtjDriver renders this as
+        // "T:00" when posting — a pre-existing defect in the posting path, not introduced here.
+        ParsedActivities parsed = of(
+                List.of(new Entry("2026/05/30", 1, 0, "", "No start time given")),
+                List.of());
+
+        LlmResult result = service.toResult(parsed, "u", "l");
+
+        assertEquals("", result.ok().get(0).activityTime());
     }
 
     @Test
-    void timeSpent_parsedCorrectly_mixed() throws JsonProcessingException {
-        String json = "[{\"date\":\"2026/05/30\",\"time-spent\":\"1:30\",\"start-time\":\"13:00\",\"comments\":\"Task\",\"posted\":\"\"}]";
-        LlmResult result = service.processResponse(json, "u", "l");
-        assertEquals(1, result.ok().get(0).hours());
-        assertEquals(30, result.ok().get(0).minutes());
+    void allErrorCodesMapToTheirWireStrings() {
+        ParsedActivities parsed = of(
+                List.of(),
+                List.of(new ParseError(ErrorCode.missing_duration, "m", "a"),
+                        new ParseError(ErrorCode.missing_description, "m", "b"),
+                        new ParseError(ErrorCode.outside_working_hours, "m", "c")));
+
+        LlmResult result = service.toResult(parsed, "u", "l");
+
+        assertEquals(List.of("missing_duration", "missing_description", "outside_working_hours"),
+                result.errors().stream().map(LlmParseError::error).toList());
     }
 
     @Test
-    void emptyArray_returnsEmptyResult() throws JsonProcessingException {
-        LlmResult result = service.processResponse("[]", "u", "l");
+    void emptyResultReturnsEmptyLists() {
+        LlmResult result = service.toResult(of(List.of(), List.of()), "u", "l");
+
         assertEquals(0, result.ok().size());
         assertEquals(0, result.errors().size());
+    }
+
+    @Test
+    void unitIdAndActivityTypeAreLeftAtDefaults() {
+        // OtjDriver supplies the real unitId and activityType when posting; the parser must not
+        // invent them.
+        ParsedActivities parsed = of(
+                List.of(new Entry("2026/05/30", 1, 0, "09:00", "Work")),
+                List.of());
+
+        ActivityLog log = service.toResult(parsed, "u", "l").ok().get(0);
+
+        assertEquals("", log.unitId());
+        assertEquals(0, log.activityType());
     }
 }
