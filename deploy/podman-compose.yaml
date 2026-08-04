@@ -48,7 +48,7 @@ services:
       LLM_API_KEY: ${LLM_API_KEY}
       # No ${VAR:-default} anywhere in this file: podman-compose does not implement that
       # operator and passes the literal text through as the value. AppModule.envOrDefault
-      # and docker/start.sh own the defaults, and treat blank as unset.
+      # is the single owner of the defaults, and treats blank or an unexpanded ${...} as unset.
       LLM_BASE_URL: ${LLM_BASE_URL}
       LLM_MODEL: ${LLM_MODEL}
       PASSWORD_ENCRYPTION_KEY: ${PASSWORD_ENCRYPTION_KEY}

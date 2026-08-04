@@ -92,7 +92,7 @@ set -a; source "$ENV_FILE"; set +a
 # Compose substitutes unset variables with an empty string (or leaves the literal
 # ${VAR} through, depending on the podman-compose version), so a missing key surfaces
 # as a container crash-loop minutes later instead of an error here. Catch it now.
-# LLM_BASE_URL and LLM_MODEL are omitted — podman-compose.yaml defaults them.
+# LLM_BASE_URL and LLM_MODEL are omitted on purpose — AppModule.envOrDefault defaults them.
 MISSING=()
 for var in MONGO_USER MONGO_PASSWORD LLM_API_KEY PASSWORD_ENCRYPTION_KEY; do
   [ -n "${!var:-}" ] || MISSING+=("$var")
