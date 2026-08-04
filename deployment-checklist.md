@@ -83,7 +83,8 @@ On the box:
       `deploy/prod/deploy.sh` and `deploy/prod/hours-api.container.template`
       from this repo, then `chmod +x ~/otj-deploy/deploy.sh`
 - [ ] As `otjapp`, create `~/otj-hours-api.env` (`chmod 600`) holding
-      `MONGO_URI=`, `ANTHROPIC_API_KEY=`, `PASSWORD_ENCRYPTION_KEY=`
+      `MONGO_URI=`, `LLM_API_KEY=`, `PASSWORD_ENCRYPTION_KEY=`
+      (optionally `LLM_BASE_URL=` and `LLM_MODEL=` to override the OpenRouter defaults)
 - [ ] `tailscale serve --bg --https=443 http://127.0.0.1:8945`
 
 Once this is done, merges to `master` build the app image, push it to ECR

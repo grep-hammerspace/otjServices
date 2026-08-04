@@ -67,7 +67,7 @@ public class TestAppModule {
 
     /**
      * Fake LLM service for integration tests — returns one ActivityLog per non-blank line
-     * in the diff without calling the Anthropic API.
+     * in the diff without calling the LLM API.
      */
     @Provides @Singleton
     LlmService provideLlmService() {

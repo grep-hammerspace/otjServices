@@ -13,8 +13,8 @@ class LlmServiceTest {
 
     @BeforeEach
     void setUp() {
-        // null client — processResponse does not call it
-        service = new LlmServiceImpl(null);
+        // null client and config — processResponse touches neither
+        service = new LlmServiceImpl(null, null);
     }
 
     @Test

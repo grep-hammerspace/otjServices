@@ -45,7 +45,9 @@ services:
       - "127.0.0.1:5005:5005"
     environment:
       MONGO_URI: mongodb://${MONGO_USER}:${MONGO_PASSWORD}@mongo:27017/otjdb?authSource=admin
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      LLM_API_KEY: ${LLM_API_KEY}
+      LLM_BASE_URL: ${LLM_BASE_URL:-https://openrouter.ai/api/v1}
+      LLM_MODEL: ${LLM_MODEL:-meta-llama/llama-3.3-70b-instruct:free}
       PASSWORD_ENCRYPTION_KEY: ${PASSWORD_ENCRYPTION_KEY}
       JAVA_DEBUG: ${JAVA_DEBUG:-true}
     depends_on:
