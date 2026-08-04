@@ -89,6 +89,30 @@ require podman-compose
 [ -f "$ENV_FILE" ] || die ".env not found at $ENV_FILE"
 set -a; source "$ENV_FILE"; set +a
 
+# Compose substitutes unset variables with an empty string (or leaves the literal
+# ${VAR} through, depending on the podman-compose version), so a missing key surfaces
+# as a container crash-loop minutes later instead of an error here. Catch it now.
+# LLM_BASE_URL and LLM_MODEL are omitted — podman-compose.yaml defaults them.
+MISSING=()
+for var in MONGO_USER MONGO_PASSWORD LLM_API_KEY PASSWORD_ENCRYPTION_KEY; do
+  [ -n "${!var:-}" ] || MISSING+=("$var")
+done
+if [ "${#MISSING[@]}" -gt 0 ]; then
+  echo "ERROR: missing required variable(s) in $ENV_FILE:" >&2
+  for var in "${MISSING[@]}"; do echo "         $var" >&2; done
+  if [[ " ${MISSING[*]} " == *" PASSWORD_ENCRYPTION_KEY "* ]]; then
+    echo "" >&2
+    echo "       Generate one with:" >&2
+    echo "         echo \"PASSWORD_ENCRYPTION_KEY=\$(openssl rand -base64 32)\" >> $ENV_FILE" >&2
+    echo "       Note: changing this key makes already-stored passwords undecryptable." >&2
+  fi
+  exit 1
+fi
+
+# AES-256 needs exactly 32 bytes; anything else fails inside PasswordCipher at startup.
+KEY_BYTES=$(printf '%s' "$PASSWORD_ENCRYPTION_KEY" | base64 -d 2>/dev/null | wc -c) || KEY_BYTES=0
+[ "$KEY_BYTES" -eq 32 ] || die "PASSWORD_ENCRYPTION_KEY must be base64 that decodes to 32 bytes for AES-256, got $KEY_BYTES."
+
 # ── Build app image ───────────────────────────────────────────────────────────
 
 info "Building app image (Maven build runs inside Podman, rootless)..."
