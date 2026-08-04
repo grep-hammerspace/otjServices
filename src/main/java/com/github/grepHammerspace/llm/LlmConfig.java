@@ -8,7 +8,7 @@ package com.github.grepHammerspace.llm;
  * a code change. See {@link com.github.grepHammerspace.bind.AppModule} for the bindings.
  *
  * @param baseUrl API root, without a trailing slash (e.g. {@code https://openrouter.ai/api/v1})
- * @param model   provider-specific model slug (e.g. {@code meta-llama/llama-3.3-70b-instruct:free})
+ * @param model   provider-specific model slug (e.g. {@code openai/gpt-oss-20b:free})
  * @param apiKey  bearer token for the provider
  */
 public record LlmConfig(String baseUrl, String model, String apiKey) {
