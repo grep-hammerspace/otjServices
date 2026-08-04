@@ -46,7 +46,8 @@ public class ServerHooks {
 
         String authToken = component.sessionTokenService().issue(TEST_USER_ID);
 
-        server = ServerBootstrap.start(port, component.otjServicesResource(), component.authenticationFilter());
+        server = ServerBootstrap.start(port, component.otjServicesResource(), component.authResource(),
+            component.authenticationFilter());
         ScenarioContext.init();
         ScenarioContext.put("baseUrl", "http://localhost:" + port);
         ScenarioContext.put("db", component.mongoDatabase());
