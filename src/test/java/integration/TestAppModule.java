@@ -1,6 +1,5 @@
 package integration;
 
-import com.github.grepHammerspace.crypto.PasswordCipher;
 import com.github.grepHammerspace.db.model.ActivityLog;
 import com.github.grepHammerspace.llm.LlmResult;
 import com.github.grepHammerspace.llm.LlmService;
@@ -26,8 +25,6 @@ import java.util.stream.Collectors;
  *       so tests never touch a real database.</li>
  *   <li><b>{@link com.github.grepHammerspace.llm.LlmService}</b> — a fake that parses the diff
  *       locally, so tests never call the Anthropic API.</li>
- *   <li><b>{@link com.github.grepHammerspace.crypto.PasswordCipher}</b> — constructed with a fixed
- *       test-only key instead of reading {@code PASSWORD_ENCRYPTION_KEY} from the environment.</li>
  * </ul>
  * All other bindings ({@link com.github.grepHammerspace.stateStore.UserStateStore},
  * {@link com.github.grepHammerspace.db.UserRepository},
@@ -51,11 +48,6 @@ public class TestAppModule {
     @Provides @Singleton
     MongoDatabase provideMongoDatabase(MongoClient client) {
         return client.getDatabase("otjdb");
-    }
-
-    @Provides @Singleton
-    PasswordCipher providePasswordCipher() {
-        return new PasswordCipher(testutil.TestKeys.PASSWORD_ENCRYPTION_KEY);
     }
 
     /**

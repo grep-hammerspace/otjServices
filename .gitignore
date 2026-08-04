@@ -41,3 +41,4 @@ build/
 .idea/
 .mvn/
 .env
+.claude/*.tmp.*

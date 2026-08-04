@@ -46,7 +46,6 @@ services:
     environment:
       MONGO_URI: mongodb://${MONGO_USER}:${MONGO_PASSWORD}@mongo:27017/otjdb?authSource=admin
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
-      PASSWORD_ENCRYPTION_KEY: ${PASSWORD_ENCRYPTION_KEY}
       JAVA_DEBUG: ${JAVA_DEBUG:-true}
     depends_on:
       mongo:
