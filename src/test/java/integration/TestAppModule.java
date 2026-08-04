@@ -5,7 +5,6 @@ import com.github.grepHammerspace.db.model.ActivityLog;
 import com.github.grepHammerspace.llm.LlmResult;
 import com.github.grepHammerspace.llm.LlmService;
 import com.github.grepHammerspace.stateStore.UserStateStore;
-import com.github.grepHammerspace.tailscale.TailscaleIdentityService;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
 import com.mongodb.client.MongoDatabase;
@@ -25,23 +24,22 @@ import java.util.stream.Collectors;
  * <ul>
  *   <li><b>MongoDB URI</b> — supplied by the Testcontainer rather than read from the environment,
  *       so tests never touch a real database.</li>
- *   <li><b>{@link com.github.grepHammerspace.tailscale.TailscaleIdentityService}</b> — replaced
- *       with a lambda that returns a fixed {@code testUserId}, so tests do not require a running
- *       Tailscale daemon. All scenarios therefore appear to come from the same user.</li>
+ *   <li><b>{@link com.github.grepHammerspace.llm.LlmService}</b> — a fake that parses the diff
+ *       locally, so tests never call the Anthropic API.</li>
  *   <li><b>{@link com.github.grepHammerspace.crypto.PasswordCipher}</b> — constructed with a fixed
  *       test-only key instead of reading {@code PASSWORD_ENCRYPTION_KEY} from the environment.</li>
  * </ul>
  * All other bindings ({@link com.github.grepHammerspace.stateStore.UserStateStore},
- * {@link com.github.grepHammerspace.db.UserRepository}, etc.) are the real production classes.
+ * {@link com.github.grepHammerspace.db.UserRepository},
+ * {@link com.github.grepHammerspace.auth.SessionTokenService}, etc.) are the real production
+ * classes. Scenarios authenticate with real bearer tokens issued by {@link ServerHooks}.
  */
 @Module
 public class TestAppModule {
     private final String mongoUri;
-    private final String testUserId;
 
-    public TestAppModule(String mongoUri, String testUserId) {
+    public TestAppModule(String mongoUri) {
         this.mongoUri = mongoUri;
-        this.testUserId = testUserId;
     }
 
     @Provides @Singleton
@@ -53,11 +51,6 @@ public class TestAppModule {
     @Provides @Singleton
     MongoDatabase provideMongoDatabase(MongoClient client) {
         return client.getDatabase("otjdb");
-    }
-
-    @Provides @Singleton
-    TailscaleIdentityService provideTailscaleIdentityService() {
-        return request -> testUserId;
     }
 
     @Provides @Singleton
