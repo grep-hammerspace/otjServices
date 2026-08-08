@@ -1,5 +1,6 @@
 package com.github.grepHammerspace.auth;
 
+import com.github.grepHammerspace.db.SessionRepository;
 import com.mongodb.client.MongoClients;
 import com.mongodb.client.MongoDatabase;
 import com.mongodb.client.model.Filters;
@@ -30,7 +31,7 @@ class SessionTokenServiceIT {
     }
 
     private static SessionTokenService serviceAt(Instant instant) {
-        return new SessionTokenService(database, Clock.fixed(instant, ZoneOffset.UTC));
+        return new SessionTokenService(new SessionRepository(database), Clock.fixed(instant, ZoneOffset.UTC));
     }
 
     @Test
