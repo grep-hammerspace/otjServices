@@ -54,6 +54,7 @@ public class SessionTokenService {
     }
 
     /** Visible for tests — lets expiry and sliding-extension behaviour be driven by a fixed clock. */
+    // Is is the establised pattern to inject a database instead of a Repository class like we do for activity logs nad users
     SessionTokenService(MongoDatabase database, Clock clock) {
         this.sessions = database.getCollection("sessions");
         this.clock = clock;
@@ -85,6 +86,11 @@ public class SessionTokenService {
      * Resolves a raw token to its userId, or empty if the token is unknown or expired.
      * Extends the sliding window when less than half of it remains.
      */
+    // So when making a session token, we create a hash of userId + 32 random bytes, and persist the hashed version, and return the raw version
+    // then when we resolve, we take what comes in on the rquest, hash it and check if it matches sthg in the db, to make sure they match
+    // How is this better than just taking hte hash of userId? it is better in the sense that you cant predict the hash of a userid, so you cant get it
+    // ahead of time. this doenst stop people from sharing session tokens though, if they do do that, then it will be have happened willingly bc traffic is tls
+    // protected. If you give someone ur session token, they can log things as you, they can delete unposte otjs, but they cant post anything
     public Optional<String> resolve(String rawToken) {
         Document session = sessions.find(Filters.eq("tokenHash", sha256(rawToken))).first();
         if (session == null) return Optional.empty();

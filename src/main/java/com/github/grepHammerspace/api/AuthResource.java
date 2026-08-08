@@ -36,6 +36,7 @@ import java.util.UUID;
  * <p>Passwords arrive in request bodies here and nowhere else. Nothing in this class logs a
  * password or a raw token; the username is the most that reaches the log.
  */
+// Auth stuff makes sense to me
 @Path("/auth")
 @Produces("application/json")
 @Consumes("application/json")
