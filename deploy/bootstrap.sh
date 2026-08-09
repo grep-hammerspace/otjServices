@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Bootstrap the full otjServices stack (mongo, mongo-express, app).
+# Bootstrap the full otjServices stack (mongo, mongo-express, app, admin).
 #
 # Usage:
 #   bash deploy/bootstrap.sh          # build and start in debug mode (default)
@@ -15,6 +15,11 @@ ENV_FILE="$SCRIPT_DIR/../.env"
 APP_PORT=8945
 ME_PORT=8081
 DEBUG_PORT=5005
+ADMIN_PORT=8946
+# The admin API gets its own tailnet HTTPS port rather than a path under 443. A path would ride
+# along with whatever gets proxied to the main API once a public domain lands (auth plan step 09);
+# a separate port cannot be exposed by accident.
+ADMIN_TS_PORT=8443
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -89,6 +94,14 @@ require podman-compose
 [ -f "$ENV_FILE" ] || die ".env not found at $ENV_FILE"
 set -a; source "$ENV_FILE"; set +a
 
+# The admin container starts either way — it just rejects every request until this is set, which
+# is the correct failure mode but a baffling one to debug without the warning.
+if [ -z "${ADMIN_ALLOWED_LOGINS:-}" ]; then
+  echo "  NOTE: ADMIN_ALLOWED_LOGINS is unset in .env — the admin API will 403 every request."
+  echo "        Set it to your tailnet login, e.g. ADMIN_ALLOWED_LOGINS=you@example.com"
+  echo ""
+fi
+
 # ── Build app image ───────────────────────────────────────────────────────────
 
 info "Building app image (Maven build runs inside Podman, rootless)..."
@@ -108,6 +121,7 @@ if [ "$MODE" = "debug" ]; then
   wait_for "mongo-express" "http://localhost:$ME_PORT"
 fi
 wait_for "app" "http://localhost:$APP_PORT/health"
+wait_for "admin" "http://localhost:$ADMIN_PORT/health"
 
 # ── Done ──────────────────────────────────────────────────────────────────────
 
@@ -118,9 +132,16 @@ if [ "$MODE" = "debug" ]; then
 echo "  mongo-express  →  http://localhost:$ME_PORT"
 fi
 echo "  app            →  http://localhost:$APP_PORT/otj-services"
+echo "  admin          →  http://localhost:$ADMIN_PORT/admin/invites"
 if [ "$MODE" = "debug" ]; then
 echo "  debugger       →  localhost:$DEBUG_PORT  (attach IDE remote debugger)"
 fi
+echo ""
+echo "  Mint a code locally (over the tailnet, serve injects this header for you):"
+echo "    curl -s -X POST http://localhost:$ADMIN_PORT/admin/invites \\"
+echo "      -H 'Content-Type: application/json' \\"
+echo "      -H 'Tailscale-User-Login: <your allowlisted login>' \\"
+echo "      -d '{\"note\":\"my phone\",\"expiresInDays\":7}'"
 echo ""
 echo "  Logs:  podman-compose -f deploy/podman-compose.yaml logs -f app"
 echo "  Stop:  bash deploy/bootstrap.sh --stop"
@@ -133,12 +154,22 @@ echo ""
 if command -v tailscale &>/dev/null; then
   if tailscale_operator_set; then
     info "Wiring up tailscale serve (operator already delegated to $USER)..."
+    TS_NAME=$(tailscale status --self --json 2>/dev/null | jq -r '.Self.DNSName' | sed 's/\.$//')
+
     if tailscale serve --bg --https=443 "http://127.0.0.1:$APP_PORT" >/tmp/otj-tailscale-serve.log 2>&1; then
-      TS_NAME=$(tailscale status --self --json 2>/dev/null | jq -r '.Self.DNSName' | sed 's/\.$//')
       echo "  tailnet        →  https://$TS_NAME/otj-services"
     else
       echo "  WARNING: 'tailscale serve' failed — see /tmp/otj-tailscale-serve.log"
       cat /tmp/otj-tailscale-serve.log
+    fi
+
+    # Separate HTTPS port, not a path under 443 — see ADMIN_TS_PORT above.
+    if tailscale serve --bg --https=$ADMIN_TS_PORT "http://127.0.0.1:$ADMIN_PORT" \
+         >/tmp/otj-tailscale-serve-admin.log 2>&1; then
+      echo "  tailnet admin  →  https://$TS_NAME:$ADMIN_TS_PORT/admin/invites"
+    else
+      echo "  WARNING: 'tailscale serve' for the admin API failed — see /tmp/otj-tailscale-serve-admin.log"
+      cat /tmp/otj-tailscale-serve-admin.log
     fi
   else
     echo "  NOTE: tailscale operator is not set for '$USER' — 'tailscale serve' needs root without it."

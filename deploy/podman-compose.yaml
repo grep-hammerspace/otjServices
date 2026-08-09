@@ -2,8 +2,10 @@ services:
   mongo:
     image: docker.io/library/mongo:8
     restart: unless-stopped
+    # Loopback only. Nothing outside this host has any business reaching the database directly,
+    # and the box is on a tailnet where "outside this host" includes every other device on it.
     ports:
-      - "27017:27017"
+      - "127.0.0.1:27017:27017"
     environment:
       MONGO_INITDB_ROOT_USERNAME: ${MONGO_USER}
       MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASSWORD}
@@ -22,8 +24,10 @@ services:
   mongo-express:
     image: docker.io/library/mongo-express:latest
     restart: unless-stopped
+    # Loopback only — this console has ME_CONFIG_BASICAUTH disabled, so anyone who can reach the
+    # port owns the database.
     ports:
-      - "8081:8081"
+      - "127.0.0.1:8081:8081"
     environment:
       ME_CONFIG_MONGODB_ADMINUSERNAME: ${MONGO_USER}
       ME_CONFIG_MONGODB_ADMINPASSWORD: ${MONGO_PASSWORD}
@@ -39,17 +43,44 @@ services:
     build:
       context: ..
       dockerfile: docker/otjService.Dockerfile
+    # Named so the admin service can reuse the built image instead of running the Maven build
+    # a second time.
+    image: localhost/otj-services:local
     restart: unless-stopped
     ports:
       - "127.0.0.1:8945:8945"
       - "127.0.0.1:5005:5005"
     environment:
+      APP_ROLE: api
       MONGO_URI: mongodb://${MONGO_USER}:${MONGO_PASSWORD}@mongo:27017/otjdb?authSource=admin
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
       JAVA_DEBUG: ${JAVA_DEBUG:-true}
     depends_on:
       mongo:
         condition: service_healthy
+    networks:
+      - otj-net
+
+  # Invite-code administration. Same image as `app`, different entrypoint — see docker/start.sh.
+  #
+  # Reachable only through `tailscale serve` on the host (bootstrap.sh wires it to https://:8443).
+  # The loopback publish is what makes the Tailscale-User-Login header trustworthy; if you change
+  # it, AdminIdentityFilter stops being a security control. No ANTHROPIC_API_KEY: Dagger never
+  # constructs the LLM client in this graph.
+  admin:
+    image: localhost/otj-services:local
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8946:8946"
+    environment:
+      APP_ROLE: admin
+      MONGO_URI: mongodb://${MONGO_USER}:${MONGO_PASSWORD}@mongo:27017/otjdb?authSource=admin
+      ADMIN_ALLOWED_LOGINS: ${ADMIN_ALLOWED_LOGINS}
+    depends_on:
+      mongo:
+        condition: service_healthy
+      app:
+        condition: service_started
     networks:
       - otj-net
 
