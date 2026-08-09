@@ -1,5 +1,6 @@
 package integration;
 
+import com.github.grepHammerspace.admin.AdminAllowlist;
 import com.github.grepHammerspace.db.model.ActivityLog;
 import com.github.grepHammerspace.llm.LlmResult;
 import com.github.grepHammerspace.llm.LlmService;
@@ -41,6 +42,14 @@ public class TestAppModule {
 
     @Provides @Singleton
     UserStateStore provideUserStateStore() { return new UserStateStore(); }
+
+    /**
+     * A fixed allowlist rather than {@link AdminAllowlist#fromEnv()} — scenarios must not depend
+     * on the developer's environment, and {@code admin_invites.feature} needs a login that is
+     * definitely off the list to prove the gate rejects it.
+     */
+    @Provides @Singleton
+    AdminAllowlist provideAdminAllowlist() { return AdminAllowlist.parse(ServerHooks.ADMIN_LOGIN); }
 
     @Provides @Singleton
     MongoClient provideMongoClient() { return MongoClients.create(mongoUri); }
