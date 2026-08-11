@@ -18,6 +18,12 @@ Feature: Log activities via LLM
     And the response body contains "\"rowsAdded\":1"
     And there is 1 activity log in the database for user "test-user-id"
 
+  Scenario: Logged rows come back addressable and without the server-minted userId
+    When I POST "/otj-services/log-activities" with content "Worked 2 hours on assignment from 10:00"
+    Then the response status is 200
+    And the response body does not contain "tailscaleUserId"
+    And the response body does not contain "learnerId"
+
   Scenario: Resubmitting identical content logs it again
     Given I have already logged "Worked 2 hours on assignment from 10:00"
     When I POST "/otj-services/log-activities" with content "Worked 2 hours on assignment from 10:00"

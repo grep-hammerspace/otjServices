@@ -92,7 +92,9 @@ public class ActivityLogRepository {
         return false;
     }
 
-    public void saveActivityLog(ActivityLog activityLog){
+    /** Inserts the log and returns it with the generated {@code _id} populated, so a caller can
+     *  hand the client a row it can immediately address with {@code DELETE /pending/{id}}. */
+    public ActivityLog saveActivityLog(ActivityLog activityLog){
         Document doc = new Document()
                 .append("tailscaleUserId", activityLog.tailscaleUserId())
                 .append("learnerId", activityLog.learnerId())
@@ -105,8 +107,10 @@ public class ActivityLogRepository {
                 .append("minutes", activityLog.minutes())
                 .append("posted", activityLog.posted());
 
+        // insertOne mutates doc with the generated _id, so no follow-up read is needed.
         collection.insertOne(doc);
         log.info("Saved activity log for user {}", activityLog.tailscaleUserId());
+        return fromDoc(doc);
     }
 
     public void markAsPosted(ActivityLog activityLog) {

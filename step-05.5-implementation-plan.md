@@ -172,5 +172,9 @@ and the 204-with-no-body that the mobile `apiJson` relies on.
 
 ## Out of scope
 
-Editing a pending row, paging, listing posted history, migrating `log-activities` off raw
-`ActivityLog` records (a breaking client change), and the `otj-mobile` UI.
+Editing a pending row, paging, listing posted history, and the `otj-mobile` UI.
+
+Migrating `log-activities` off raw `ActivityLog` records was originally deferred here as a
+breaking client change. It was pulled into this branch instead, since `PendingActivity` made it
+near-free — see the final commit. It **is** still breaking, and the client updates are the
+follow-up it implies.

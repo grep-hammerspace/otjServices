@@ -2,6 +2,7 @@ package com.github.grepHammerspace.api;
 
 import com.github.grepHammerspace.api.dto.ActivityLogRequest;
 import com.github.grepHammerspace.api.dto.ActivityLogResponse;
+import com.github.grepHammerspace.api.dto.PendingActivity;
 import com.github.grepHammerspace.api.dto.PendingResponse;
 import com.github.grepHammerspace.api.dto.RegisterRequest;
 import com.github.grepHammerspace.api.dto.SubmitWithMfaRequest;
@@ -35,6 +36,7 @@ import javax.inject.Provider;
 import java.io.IOException;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
@@ -153,16 +155,19 @@ public class OtjServicesResource {
                     .entity("{\"error\": \"" + msg + "\"}").build();
         }
 
+        // Map from the saved row, not the parsed one: only the saved row has an id, which is what
+        // lets the client delete a line it just added without refetching /pending.
+        List<PendingActivity> saved = new ArrayList<>();
         for (ActivityLog entry : result.ok()) {
-            activityLogRepository.saveActivityLog(entry);
+            saved.add(PendingActivity.from(activityLogRepository.saveActivityLog(entry)));
         }
 
-        log.info("Request complete — {} row(s) written, {} error(s)", result.ok().size(), result.errors().size());
+        log.info("Request complete — {} row(s) written, {} error(s)", saved.size(), result.errors().size());
 
         ActivityLogResponse responseBody = new ActivityLogResponse(
                 "ok",
-                result.ok().size(),
-                result.ok(),
+                saved.size(),
+                saved,
                 result.errors().isEmpty() ? null : result.errors()
         );
 

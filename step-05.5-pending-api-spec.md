@@ -64,9 +64,9 @@ Returns the caller's unposted activity logs.
 **Deliberately not returned:**
 
 - `tailscaleUserId` — AGENTS.md's rule is that the client never receives the server-minted
-  userId. `log-activities` currently violates that by echoing whole `ActivityLog` records;
-  don't propagate the leak into a new endpoint. (Fixing `log-activities` to use the same DTO
-  is a sensible follow-up but is a breaking client change — out of scope here.)
+  userId. `log-activities` used to violate that by echoing whole `ActivityLog` records; it now
+  returns `PendingActivity` too, so the leak is closed in both places. That was a breaking wire
+  change: `otj-mobile` and `scripts/otj` must be updated in lockstep.
 - `posted` — always `false` by construction of this endpoint. A field that can only hold one
   value invites a client to branch on it.
 - `learnerId` — per-user constant, the client already knows its own.
