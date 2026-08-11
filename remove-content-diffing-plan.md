@@ -129,7 +129,7 @@ worth pinning:
 does a plain `countDocuments`, so only its Gherkin phrasing is singular. Widen the expression
 in place — Cucumber alternation and optional text keep every existing scenario matching:
 
-```java
+```
 @And("there is/are {int} activity log(s) in the database for user {string}")
 ```
 
