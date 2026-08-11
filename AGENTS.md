@@ -130,8 +130,8 @@ Anonymous:
 
 Authenticated (`Authorization: Bearer …`, all under `/otj-services`):
 `GET /prepare-browser`, `POST /register`, `POST /log-activities`,
-`DELETE /delete-last-row`, `POST /submit-with-mfa`,
-`GET /azure-id/prepare`, `GET /azure-id/complete`.
+`GET /pending`, `DELETE /pending/{id}`, `DELETE /delete-last-row`,
+`POST /submit-with-mfa`, `GET /azure-id/prepare`, `GET /azure-id/complete`.
 
 Admin API (separate process/port, tailnet identity instead of bearer tokens):
 
