@@ -4,6 +4,7 @@ import com.github.grepHammerspace.db.model.ActivityLog;
 import com.mongodb.client.MongoClients;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import org.bson.types.ObjectId;
 import org.testcontainers.containers.MongoDBContainer;
 
 import java.util.List;
@@ -16,7 +17,11 @@ class ActivityLogRepositoryIT {
     static ActivityLogRepository repository;
 
     private static ActivityLog logFor(String userId) {
-        return new ActivityLog(userId, "learner-x", "Some work", "",
+        return logFor(userId, "Some work");
+    }
+
+    private static ActivityLog logFor(String userId, String impact) {
+        return new ActivityLog(userId, "learner-x", impact, "",
                 "2026/05/30", "09:00", 0, 1, 0, false, null);
     }
 
@@ -105,6 +110,76 @@ class ActivityLogRepositoryIT {
 
         assertFalse(deleted, "no unposted logs to delete");
         // posted log still exists — markAsPosted already removed it from unposted query, so just verify the delete returned false
+    }
+
+    @Test
+    void findUnpostedNewestFirst_returnsNewestFirst() {
+        repository.saveActivityLog(logFor("user-6", "first"));
+        repository.saveActivityLog(logFor("user-6", "second"));
+        repository.saveActivityLog(logFor("user-6", "third"));
+
+        List<ActivityLog> rows = repository.findUnpostedNewestFirst("user-6");
+
+        assertEquals(List.of("third", "second", "first"),
+                rows.stream().map(ActivityLog::activityImpact).toList(),
+                "newest insert should come back first");
+    }
+
+    @Test
+    void findUnpostedNewestFirst_excludesPosted() {
+        repository.saveActivityLog(logFor("user-7", "will be posted"));
+        repository.saveActivityLog(logFor("user-7", "still pending"));
+        ActivityLog posted = repository.findUnpostedNewestFirst("user-7").stream()
+                .filter(l -> l.activityImpact().equals("will be posted")).findFirst().orElseThrow();
+        repository.markAsPosted(posted);
+
+        List<ActivityLog> rows = repository.findUnpostedNewestFirst("user-7");
+
+        assertEquals(1, rows.size());
+        assertEquals("still pending", rows.get(0).activityImpact());
+    }
+
+    @Test
+    void deleteUnpostedById_removesOnlyTheTarget() {
+        repository.saveActivityLog(logFor("user-8", "keep me"));
+        repository.saveActivityLog(logFor("user-8", "delete me"));
+        repository.saveActivityLog(logFor("user-8", "keep me too"));
+        ActivityLog target = repository.findUnpostedNewestFirst("user-8").stream()
+                .filter(l -> l.activityImpact().equals("delete me")).findFirst().orElseThrow();
+
+        assertTrue(repository.deleteUnpostedById("user-8", new ObjectId(target.id())));
+
+        assertEquals(List.of("keep me too", "keep me"),
+                repository.findUnpostedNewestFirst("user-8").stream()
+                        .map(ActivityLog::activityImpact).toList(),
+                "only the addressed row should go");
+    }
+
+    @Test
+    void deleteUnpostedById_otherUsersId_returnsFalseAndLeavesRow() {
+        repository.saveActivityLog(logFor("user-9", "owned by user-9"));
+        ActivityLog owned = repository.findUnpostedNewestFirst("user-9").get(0);
+
+        boolean deleted = repository.deleteUnpostedById("user-intruder", new ObjectId(owned.id()));
+
+        assertFalse(deleted, "a cross-user delete must be a miss");
+        assertEquals(1, repository.findUnpostedNewestFirst("user-9").size(),
+                "and must leave the row alone");
+    }
+
+    @Test
+    void deleteUnpostedById_postedRow_returnsFalse() {
+        repository.saveActivityLog(logFor("user-10", "already submitted"));
+        ActivityLog row = repository.findUnpostedNewestFirst("user-10").get(0);
+        repository.markAsPosted(row);
+
+        assertFalse(repository.deleteUnpostedById("user-10", new ObjectId(row.id())),
+                "a posted row is gone to OneAdvanced and cannot be retracted");
+    }
+
+    @Test
+    void deleteUnpostedById_unknownId_returnsFalse() {
+        assertFalse(repository.deleteUnpostedById("user-11", new ObjectId()));
     }
 
 }
