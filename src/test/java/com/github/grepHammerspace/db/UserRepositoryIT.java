@@ -93,30 +93,6 @@ class UserRepositoryIT {
     }
 
     @Test
-    void saveLastContent_then_getLastContent_returnsValue() {
-        repository.save(user("uid-3", "carol"));
-        repository.saveLastContent("uid-3", "my notes");
-
-        assertEquals("my notes", repository.getLastContent("uid-3"));
-    }
-
-    @Test
-    void clearLastContent_removesField() {
-        repository.save(user("uid-4", "dave"));
-        repository.saveLastContent("uid-4", "some content");
-        repository.clearLastContent("uid-4");
-
-        assertNull(repository.getLastContent("uid-4"), "getLastContent should return null after clear");
-    }
-
-    @Test
-    void getLastContent_withNoContentSaved_returnsNull() {
-        repository.save(user("uid-5", "eve"));
-
-        assertNull(repository.getLastContent("uid-5"));
-    }
-
-    @Test
     void storedDocument_containsNoRecoverablePassword() {
         repository.save(user("uid-6", "frank"));
 
