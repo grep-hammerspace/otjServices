@@ -10,7 +10,6 @@ import com.github.grepHammerspace.db.ActivityLogRepository;
 import com.github.grepHammerspace.db.UserRepository;
 import com.github.grepHammerspace.db.model.ActivityLog;
 import com.github.grepHammerspace.db.model.User;
-import com.github.grepHammerspace.llm.ContentDiffer;
 import com.github.grepHammerspace.llm.exception.LlmException;
 import com.github.grepHammerspace.llm.exception.LlmRateLimitException;
 import com.github.grepHammerspace.llm.LlmResult;
@@ -133,22 +132,11 @@ public class OtjServicesResource {
                     .entity("{\"error\": \"" + msg + "\"}").build();
         }
 
-        String lastContent = userRepository.getLastContent(userId);
-        String diff = ContentDiffer.computeDiff(lastContent, content);
-
-        if (diff == null) {
-            String msg = "No new content detected. " +
-                    "The incoming 'content' field is identical to what was last processed. " +
-                    "Send content that includes new lines to trigger logging.";
-            log.info(msg);
-            return Response.ok("{\"status\": \"no new content\", \"detail\": \"" + msg + "\"}").build();
-        }
-
-        log.info("Diff contains new content ({} chars), calling LLM", diff.length());
+        log.info("Calling LLM with {} chars", content.length());
 
         LlmResult result;
         try {
-            result = llmService.parseActivities(diff, LocalDate.now().toString(), userId, user.learnerId());
+            result = llmService.parseActivities(content, LocalDate.now().toString(), userId, user.learnerId());
         } catch (LlmRateLimitException e) {
             return Response.status(429)
                     .entity("{\"error\": \"" + e.getMessage() + "\"}").build();
@@ -165,8 +153,6 @@ public class OtjServicesResource {
         for (ActivityLog entry : result.ok()) {
             activityLogRepository.saveActivityLog(entry);
         }
-
-        userRepository.saveLastContent(userId, content);
 
         log.info("Request complete — {} row(s) written, {} error(s)", result.ok().size(), result.errors().size());
 
@@ -191,16 +177,6 @@ public class OtjServicesResource {
             return Response.status(Response.Status.NOT_FOUND)
                     .entity("{\"error\": \"No unposted activity log found for this user.\"}").build();
         }
-        return Response.ok("{\"status\": \"ok\"}").build();
-    }
-
-    @DELETE
-    @Path("/reset-notes")
-    public Response resetNotes(@Context SecurityContext sc) {
-        String userId = resolveUserState(sc);
-        log.info("Received request from user {} to do {}", userId, "reset-notes");
-
-        userRepository.clearLastContent(userId);
         return Response.ok("{\"status\": \"ok\"}").build();
     }
 

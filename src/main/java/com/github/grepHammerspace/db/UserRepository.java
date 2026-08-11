@@ -8,7 +8,6 @@ import com.mongodb.client.model.Filters;
 import com.mongodb.client.model.IndexOptions;
 import com.mongodb.client.model.Indexes;
 import com.mongodb.client.model.ReplaceOptions;
-import com.mongodb.client.model.Updates;
 import org.bson.Document;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -73,28 +72,6 @@ public class UserRepository {
     /** Looks up a user by their app login name — the login path. */
     public User findByAppUsername(String appUsername) {
         return fromDocument(collection.find(Filters.eq("appUsername", appUsername)).first());
-    }
-
-    public String getLastContent(String userId) {
-        Document doc = collection.find(Filters.eq("userId", userId)).first();
-        if (doc == null) return null;
-        return doc.getString("lastContent");
-    }
-
-    public void saveLastContent(String userId, String content) {
-        collection.updateOne(
-                Filters.eq("userId", userId),
-                Updates.set("lastContent", content)
-        );
-        log.debug("Saved lastContent for user {} ({} chars)", userId, content.length());
-    }
-
-    public void clearLastContent(String userId) {
-        collection.updateOne(
-                Filters.eq("userId", userId),
-                Updates.unset("lastContent")
-        );
-        log.info("Cleared lastContent for user {}", userId);
     }
 
     private static Document toDocument(User user) {
