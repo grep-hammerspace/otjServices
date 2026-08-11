@@ -40,6 +40,44 @@ public class ActivityLogRepository {
                 .into(new ArrayList<>());
     }
 
+    /** Unposted logs for the user, newest first (_id descending).
+     *
+     *  <p>Deliberately separate from {@link #getUnpostedActivityLogsFor}: that one feeds
+     *  {@code OtjDriver:188} and {@code AzureIdDriver:508}, which use its order to decide the
+     *  order rows reach OneAdvanced. Adding a sort there would silently reorder submissions. */
+    public List<ActivityLog> findUnpostedNewestFirst(String userId) {
+        Bson filter = Filters.and(
+            Filters.eq("tailscaleUserId", userId),
+            Filters.eq("posted", false)
+        );
+
+        return collection.find(filter)
+                .sort(Sorts.descending("_id"))
+                .map(this::fromDoc)
+                .into(new ArrayList<>());
+    }
+
+    /** Deletes one unposted log owned by {@code userId}.
+     *
+     *  <p>Returns {@code false} when the filter matched nothing — unknown id, someone else's id,
+     *  or already posted. Ownership is part of the filter rather than a check after the read, so
+     *  a caller can never learn that an id they do not own exists. */
+    public boolean deleteUnpostedById(String userId, ObjectId id) {
+        Document deleted = collection.findOneAndDelete(
+                Filters.and(
+                        Filters.eq("_id", id),
+                        Filters.eq("tailscaleUserId", userId),
+                        Filters.eq("posted", false)
+                )
+        );
+        if (deleted != null) {
+            log.info("Deleted activity log {} for user {}", id.toHexString(), userId);
+            return true;
+        }
+        log.info("No unposted activity log {} found to delete for user {}", id.toHexString(), userId);
+        return false;
+    }
+
     /** Deletes the most recently inserted unposted activity log for the user. Returns {@code true} if one was found and deleted. */
     public boolean deleteLastActivityLog(String userId) {
         Document deleted = collection.findOneAndDelete(
