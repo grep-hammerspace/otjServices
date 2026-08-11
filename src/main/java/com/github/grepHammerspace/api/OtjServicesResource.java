@@ -2,6 +2,8 @@ package com.github.grepHammerspace.api;
 
 import com.github.grepHammerspace.api.dto.ActivityLogRequest;
 import com.github.grepHammerspace.api.dto.ActivityLogResponse;
+import com.github.grepHammerspace.api.dto.PendingActivity;
+import com.github.grepHammerspace.api.dto.PendingResponse;
 import com.github.grepHammerspace.api.dto.RegisterRequest;
 import com.github.grepHammerspace.api.dto.SubmitWithMfaRequest;
 import com.github.grepHammerspace.auth.Authenticated;
@@ -10,7 +12,6 @@ import com.github.grepHammerspace.db.ActivityLogRepository;
 import com.github.grepHammerspace.db.UserRepository;
 import com.github.grepHammerspace.db.model.ActivityLog;
 import com.github.grepHammerspace.db.model.User;
-import com.github.grepHammerspace.llm.ContentDiffer;
 import com.github.grepHammerspace.llm.exception.LlmException;
 import com.github.grepHammerspace.llm.exception.LlmRateLimitException;
 import com.github.grepHammerspace.llm.LlmResult;
@@ -25,6 +26,7 @@ import jakarta.ws.rs.*;
 import jakarta.ws.rs.core.Context;
 import jakarta.ws.rs.core.Response;
 import jakarta.ws.rs.core.SecurityContext;
+import org.bson.types.ObjectId;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -34,6 +36,8 @@ import javax.inject.Provider;
 import java.io.IOException;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
@@ -133,22 +137,11 @@ public class OtjServicesResource {
                     .entity("{\"error\": \"" + msg + "\"}").build();
         }
 
-        String lastContent = userRepository.getLastContent(userId);
-        String diff = ContentDiffer.computeDiff(lastContent, content);
-
-        if (diff == null) {
-            String msg = "No new content detected. " +
-                    "The incoming 'content' field is identical to what was last processed. " +
-                    "Send content that includes new lines to trigger logging.";
-            log.info(msg);
-            return Response.ok("{\"status\": \"no new content\", \"detail\": \"" + msg + "\"}").build();
-        }
-
-        log.info("Diff contains new content ({} chars), calling LLM", diff.length());
+        log.info("Calling LLM with {} chars", content.length());
 
         LlmResult result;
         try {
-            result = llmService.parseActivities(diff, LocalDate.now().toString(), userId, user.learnerId());
+            result = llmService.parseActivities(content, LocalDate.now().toString(), userId, user.learnerId());
         } catch (LlmRateLimitException e) {
             return Response.status(429)
                     .entity("{\"error\": \"" + e.getMessage() + "\"}").build();
@@ -162,18 +155,19 @@ public class OtjServicesResource {
                     .entity("{\"error\": \"" + msg + "\"}").build();
         }
 
+        // Map from the saved row, not the parsed one: only the saved row has an id, which is what
+        // lets the client delete a line it just added without refetching /pending.
+        List<PendingActivity> saved = new ArrayList<>();
         for (ActivityLog entry : result.ok()) {
-            activityLogRepository.saveActivityLog(entry);
+            saved.add(PendingActivity.from(activityLogRepository.saveActivityLog(entry)));
         }
 
-        userRepository.saveLastContent(userId, content);
-
-        log.info("Request complete — {} row(s) written, {} error(s)", result.ok().size(), result.errors().size());
+        log.info("Request complete — {} row(s) written, {} error(s)", saved.size(), result.errors().size());
 
         ActivityLogResponse responseBody = new ActivityLogResponse(
                 "ok",
-                result.ok().size(),
-                result.ok(),
+                saved.size(),
+                saved,
                 result.errors().isEmpty() ? null : result.errors()
         );
 
@@ -194,14 +188,38 @@ public class OtjServicesResource {
         return Response.ok("{\"status\": \"ok\"}").build();
     }
 
-    @DELETE
-    @Path("/reset-notes")
-    public Response resetNotes(@Context SecurityContext sc) {
+    @GET
+    @Path("/pending")
+    public Response getPending(@Context SecurityContext sc) {
         String userId = resolveUserState(sc);
-        log.info("Received request from user {} to do {}", userId, "reset-notes");
+        log.info("Received request from user {} to do {}", userId, "pending");
 
-        userRepository.clearLastContent(userId);
-        return Response.ok("{\"status\": \"ok\"}").build();
+        // No findByUserId check: unlike log-activities, which needs learnerId, reading needs
+        // nothing from the user document. An unregistered caller simply has no rows.
+        List<ActivityLog> rows = activityLogRepository.findUnpostedNewestFirst(userId);
+        return Response.ok(PendingResponse.from(rows)).build();
+    }
+
+    @DELETE
+    @Path("/pending/{id}")
+    public Response deletePending(@PathParam("id") String id, @Context SecurityContext sc) {
+        String userId = resolveUserState(sc);
+        log.info("Received request from user {} to do {} for {}", userId, "delete-pending", id);
+
+        // ObjectId.isValid rather than catching IllegalArgumentException from the constructor:
+        // same 400-not-500 outcome, without exception control flow.
+        if (!ObjectId.isValid(id)) {
+            return Response.status(Response.Status.BAD_REQUEST)
+                    .entity("{\"error\": \"'" + id + "' is not a valid activity id.\"}").build();
+        }
+
+        if (!activityLogRepository.deleteUnpostedById(userId, new ObjectId(id))) {
+            // One body for all three misses — unknown id, someone else's, already posted.
+            // Distinguishing them would confirm that an id the caller does not own exists.
+            return Response.status(Response.Status.NOT_FOUND)
+                    .entity("{\"error\": \"No unposted activity log with that id for this user.\"}").build();
+        }
+        return Response.noContent().build();
     }
 
     @POST

@@ -82,6 +82,17 @@ public class SignupSteps {
         record(HTTP.newCall(req).execute());
     }
 
+    @When("I GET {string} with the signup token")
+    public void getWithSignupToken(String path) throws Exception {
+        String base = (String) ScenarioContext.get("baseUrl");
+        Request req = new Request.Builder()
+                .url(base + path)
+                .header("Authorization", "Bearer " + ScenarioContext.get("signupToken"))
+                .get()
+                .build();
+        record(HTTP.newCall(req).execute());
+    }
+
     private void post(String path, Map<String, String> body) throws Exception {
         String base = (String) ScenarioContext.get("baseUrl");
         Request req = new Request.Builder()

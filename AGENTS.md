@@ -61,8 +61,8 @@ src/main/java/com/github/grepHammerspace/
                           SessionTokenService (opaque bearer tokens), PasswordHasher
   db/                     repositories (User, Session, ActivityLog, InviteCode)
     model/                  User, Session, ActivityLog, InviteCode documents
-  llm/                    LlmService/LlmServiceImpl, ContentDiffer (old vs new notes),
-                          LlmResult / LlmParseError, exception/ hierarchy
+  llm/                    LlmService/LlmServiceImpl, LlmResult / LlmParseError,
+                          exception/ hierarchy
   stateStore/             UserStateStore — ConcurrentHashMap of userId → UserState,
                           keeps a logged-in Driver alive between prepare and MFA calls
   bind/                   AppModule + AppComponent (main API),
@@ -130,8 +130,8 @@ Anonymous:
 
 Authenticated (`Authorization: Bearer …`, all under `/otj-services`):
 `GET /prepare-browser`, `POST /register`, `POST /log-activities`,
-`DELETE /delete-last-row`, `DELETE /reset-notes`, `POST /submit-with-mfa`,
-`GET /azure-id/prepare`, `GET /azure-id/complete`.
+`GET /pending`, `DELETE /pending/{id}`, `DELETE /delete-last-row`,
+`POST /submit-with-mfa`, `GET /azure-id/prepare`, `GET /azure-id/complete`.
 
 Admin API (separate process/port, tailnet identity instead of bearer tokens):
 

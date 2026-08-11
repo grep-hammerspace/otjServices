@@ -94,14 +94,15 @@ TOKEN=$(curl -s -X POST localhost:8945/auth/session \
   -H 'Content-Type: application/json' \
   -d '{"username":"asad","password":"pw"}' | jq -r .token)
 
-curl -s -o /dev/null -w '%{http_code}\n' -X DELETE \
-  localhost:8945/otj-services/reset-notes -H "Authorization: Bearer $TOKEN"   # 200
+# prepare-browser always answers 501; 501-not-401 is what proves the token was accepted.
+curl -s -o /dev/null -w '%{http_code}\n' \
+  localhost:8945/otj-services/prepare-browser -H "Authorization: Bearer $TOKEN"  # 501
 
 curl -s -o /dev/null -w '%{http_code}\n' -X DELETE \
-  localhost:8945/auth/session -H "Authorization: Bearer $TOKEN"               # 204
+  localhost:8945/auth/session -H "Authorization: Bearer $TOKEN"                  # 204
 
-curl -s -o /dev/null -w '%{http_code}\n' -X DELETE \
-  localhost:8945/otj-services/reset-notes -H "Authorization: Bearer $TOKEN"   # 401
+curl -s -o /dev/null -w '%{http_code}\n' \
+  localhost:8945/otj-services/prepare-browser -H "Authorization: Bearer $TOKEN"  # 401
 ```
 
 ### A4. The negative cases

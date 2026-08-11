@@ -44,7 +44,7 @@ public class LogActivitiesSteps {
         ScenarioContext.put("lastResponseBody", responseBody);
     }
 
-    @And("there is {int} activity log in the database for user {string}")
+    @And("there is/are {int} activity log(s) in the database for user {string}")
     public void checkActivityLogCount(int expectedCount, String userId) {
         MongoDatabase db = (MongoDatabase) ScenarioContext.get("db");
         long count = db.getCollection("activitylogs")
