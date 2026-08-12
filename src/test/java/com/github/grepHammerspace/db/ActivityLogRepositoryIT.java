@@ -182,4 +182,72 @@ class ActivityLogRepositoryIT {
         assertFalse(repository.deleteUnpostedById("user-11", new ObjectId()));
     }
 
+    @Test
+    void updateUnpostedById_returnsTheRowInItsNewState() {
+        repository.saveActivityLog(logFor("user-12", "Wrong on every count"));
+        ActivityLog row = repository.findUnpostedNewestFirst("user-12").get(0);
+
+        ActivityLog updated = repository.updateUnpostedById("user-12", new ObjectId(row.id()),
+                "2026/06/01", "14:30", 2, 45, "Paired on the auth filter");
+
+        assertNotNull(updated, "a hit must come back as the updated row, not null");
+        assertEquals("2026/06/01", updated.activityDate());
+        assertEquals("14:30", updated.activityTime());
+        assertEquals(2, updated.hours());
+        assertEquals(45, updated.minutes());
+        assertEquals("Paired on the auth filter", updated.activityImpact());
+        assertEquals(row.id(), updated.id(), "an edit must not move the row to a new _id");
+
+        // ReturnDocument.AFTER is only useful if what it returns is what was stored.
+        ActivityLog reread = repository.findUnpostedNewestFirst("user-12").get(0);
+        assertEquals("Paired on the auth filter", reread.activityImpact());
+        assertEquals(45, reread.minutes());
+    }
+
+    @Test
+    void updateUnpostedById_leavesTheFieldsItDoesNotName() {
+        repository.saveActivityLog(logFor("user-13", "Original"));
+        ActivityLog before = repository.findUnpostedNewestFirst("user-13").get(0);
+
+        ActivityLog updated = repository.updateUnpostedById("user-13", new ObjectId(before.id()),
+                "2026/06/02", "", 1, 0, "Edited");
+
+        assertEquals(before.tailscaleUserId(), updated.tailscaleUserId());
+        assertEquals(before.learnerId(), updated.learnerId());
+        assertEquals(before.unitId(), updated.unitId());
+        assertEquals(before.activityType(), updated.activityType());
+        assertFalse(updated.posted(), "an edit must never flip posted");
+    }
+
+    @Test
+    void updateUnpostedById_otherUsersId_returnsNullAndLeavesRowAlone() {
+        repository.saveActivityLog(logFor("user-14", "owned by user-14"));
+        ActivityLog owned = repository.findUnpostedNewestFirst("user-14").get(0);
+
+        ActivityLog updated = repository.updateUnpostedById("user-intruder", new ObjectId(owned.id()),
+                "2026/06/03", "10:00", 9, 0, "Written by someone else");
+
+        assertNull(updated, "a cross-user edit must be a miss");
+        ActivityLog after = repository.findUnpostedNewestFirst("user-14").get(0);
+        assertEquals("owned by user-14", after.activityImpact(), "and must leave the row untouched");
+        assertEquals(owned.activityDate(), after.activityDate());
+    }
+
+    @Test
+    void updateUnpostedById_postedRow_returnsNull() {
+        repository.saveActivityLog(logFor("user-15", "already submitted"));
+        ActivityLog row = repository.findUnpostedNewestFirst("user-15").get(0);
+        repository.markAsPosted(row);
+
+        assertNull(repository.updateUnpostedById("user-15", new ObjectId(row.id()),
+                        "2026/06/04", "10:00", 1, 0, "Too late"),
+                "a posted row is gone to OneAdvanced and cannot be edited");
+    }
+
+    @Test
+    void updateUnpostedById_unknownId_returnsNull() {
+        assertNull(repository.updateUnpostedById("user-16", new ObjectId(),
+                "2026/06/05", "10:00", 1, 0, "Nothing to edit"));
+    }
+
 }
