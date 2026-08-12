@@ -130,7 +130,7 @@ Anonymous:
 
 Authenticated (`Authorization: Bearer …`, all under `/otj-services`):
 `GET /prepare-browser`, `POST /register`, `POST /log-activities`,
-`GET /pending`, `DELETE /pending/{id}`, `DELETE /delete-last-row`,
+`GET /pending`, `PUT /pending/{id}`, `DELETE /pending/{id}`, `DELETE /delete-last-row`,
 `POST /submit-with-mfa`, `GET /azure-id/prepare`, `GET /azure-id/complete`.
 
 Admin API (separate process/port, tailnet identity instead of bearer tokens):
@@ -147,6 +147,11 @@ Notes:
 - `userId` is a server-minted UUID — the client never sends or receives it; every
   authenticated handler derives it from the token via `SecurityContext`.
 - Signup is **invite-gated**; codes are minted through the admin API above.
+- `PUT /pending/{id}` replaces the five editable fields of one unposted row and answers with
+  the updated `PendingActivity`. Ownership and `posted: false` are in the Mongo filter, not a
+  check after the read, so unknown / someone else's / already-posted all give the same 404 as
+  the delete endpoint. Its rules are hand-written in `UpdateActivityRequest` rather than with
+  `@Valid`, because only an `{"error": "..."}` body reaches the mobile user as a real message.
 - Revocation sets `revokedAt` *and* pulls `expiresAt` back to now, so a revoked code dies
   through the existing claim filter. `InviteCodeRepository.claim` is a single atomic
   `findOneAndUpdate` and deliberately knows nothing about revocation — leave it that way.
