@@ -9,6 +9,7 @@ import org.bson.Document;
 public class HttpSteps {
 
     private static final OkHttpClient HTTP = new OkHttpClient();
+    private static final MediaType JSON = MediaType.get("application/json");
 
     /** Attaches the scenario's bearer token (issued by {@link ServerHooks}) if one is present. */
     static Request.Builder authenticated(Request.Builder builder) {
@@ -41,6 +42,24 @@ public class HttpSteps {
     public void sendDeleteWithoutToken(String path) throws Exception {
         String base = (String) ScenarioContext.get("baseUrl");
         Request req = new Request.Builder().url(base + path).delete().build();
+        record(HTTP.newCall(req).execute());
+    }
+
+    @When("I PUT {string} with body:")
+    public void sendPut(String path, String body) throws Exception {
+        String base = (String) ScenarioContext.get("baseUrl");
+        Request req = authenticated(new Request.Builder().url(base + path))
+                .put(RequestBody.create(body, JSON))
+                .build();
+        record(HTTP.newCall(req).execute());
+    }
+
+    @When("I PUT {string} without a token with body:")
+    public void sendPutWithoutToken(String path, String body) throws Exception {
+        String base = (String) ScenarioContext.get("baseUrl");
+        Request req = new Request.Builder().url(base + path)
+                .put(RequestBody.create(body, JSON))
+                .build();
         record(HTTP.newCall(req).execute());
     }
 
