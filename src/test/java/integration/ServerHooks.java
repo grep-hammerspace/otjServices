@@ -51,7 +51,7 @@ public class ServerHooks {
         String authToken = component.sessionTokenService().issue(TEST_USER_ID);
 
         server = ServerBootstrap.start(port, component.otjServicesResource(), component.authResource(),
-            component.authenticationFilter());
+            component.accountResource(), component.authenticationFilter());
 
         // The admin API is a genuinely separate server in production, so the tests run it as one
         // too — on its own port, with its own resources. Booting it inside the main server would
