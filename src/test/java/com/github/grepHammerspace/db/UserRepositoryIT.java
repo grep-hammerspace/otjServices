@@ -93,6 +93,45 @@ class UserRepositoryIT {
     }
 
     @Test
+    void updateLearnerId_returnsUpdatedUser() {
+        repository.insert(user("uid-learner", "learner-name"));
+
+        User updated = repository.updateLearnerId("uid-learner", "L-CORRECTED");
+        assertNotNull(updated);
+        assertEquals("L-CORRECTED", updated.learnerId());
+        assertEquals("L-CORRECTED", repository.findByUserId("uid-learner").learnerId());
+    }
+
+    /**
+     * The point of the {@code $set}: everything the caller of {@code PATCH /auth/me} never sent
+     * has to survive. A {@code save(User)} built from a partial request would blank all of it.
+     */
+    @Test
+    void updateLearnerId_leavesEveryOtherFieldAlone() {
+        repository.insert(new User("uid-untouched", "untouched-name", "$2a$12$fakehashfortesting",
+                "L-OLD", CREATED));
+
+        repository.updateLearnerId("uid-untouched", "L-NEW");
+
+        User found = repository.findByUserId("uid-untouched");
+        assertEquals("untouched-name", found.appUsername());
+        assertEquals("$2a$12$fakehashfortesting", found.appPasswordHash());
+        assertEquals(CREATED, found.createdAt().truncatedTo(ChronoUnit.SECONDS));
+    }
+
+    /**
+     * Null rather than an upsert. {@code save(User)} would insert here, resurrecting a deleted
+     * account with whatever the caller happened to be holding; the resource turns this into a 404.
+     */
+    @Test
+    void updateLearnerId_unknownUser_returnsNullAndInsertsNothing() {
+        assertNull(repository.updateLearnerId("uid-does-not-exist", "L-GHOST"));
+
+        assertEquals(0, database.getCollection("users")
+                .countDocuments(Filters.eq("userId", "uid-does-not-exist")));
+    }
+
+    @Test
     void storedDocument_containsNoRecoverablePassword() {
         repository.save(user("uid-6", "frank"));
 

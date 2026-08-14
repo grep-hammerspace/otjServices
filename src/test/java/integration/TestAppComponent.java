@@ -2,6 +2,7 @@ package integration;
 
 import com.github.grepHammerspace.admin.AdminIdentityFilter;
 import com.github.grepHammerspace.admin.AdminInviteResource;
+import com.github.grepHammerspace.api.AccountResource;
 import com.github.grepHammerspace.api.AuthResource;
 import com.github.grepHammerspace.api.OtjServicesResource;
 import com.github.grepHammerspace.auth.AuthenticationFilter;
@@ -25,6 +26,7 @@ import javax.inject.Singleton;
 public interface TestAppComponent {
     OtjServicesResource otjServicesResource();
     AuthResource authResource();
+    AccountResource accountResource();
     AuthenticationFilter authenticationFilter();
     AdminInviteResource adminInviteResource();
     AdminIdentityFilter adminIdentityFilter();

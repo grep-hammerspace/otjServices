@@ -133,6 +133,18 @@ Authenticated (`Authorization: Bearer …`, all under `/otj-services`):
 `GET /pending`, `DELETE /pending/{id}`, `DELETE /delete-last-row`,
 `POST /submit-with-mfa`, `GET /azure-id/prepare`, `GET /azure-id/complete`.
 
+Authenticated, outside `/otj-services` — the account itself, on `AccountResource`:
+
+| Method | Path | Body → Result |
+|---|---|---|
+| GET | `/auth/me` | → 200 `{username, learnerId}` |
+| PATCH | `/auth/me` | `{learnerId}` → 200 `{username, learnerId}` |
+
+**These are not on `AuthResource`.** That class carries no `@Authenticated` annotation on purpose
+— its endpoints are the ones you reach before holding a token — and the annotation binds per
+class, so the two that need a token live in their own class under the same URL prefix. See
+`learner-id-api-spec.md`.
+
 Admin API (separate process/port, tailnet identity instead of bearer tokens):
 
 | Method | Path | Result |
