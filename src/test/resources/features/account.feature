@@ -116,9 +116,13 @@ Feature: The signed-in account
     Then the response status is 200
     And the newest activity log for user "newrows" has learnerId "L-AFTER"
 
-  # The no-back-fill rule, pinned. A correction applies to what is logged next; rows already in
-  # the queue keep the old value and will post under it. The mobile client warns about exactly
-  # this while the field is open — if that ever changes, this scenario is what has to change first.
+  # The no-back-fill rule, pinned: a correction does not rewrite rows already written, which keep
+  # the old value as a record of what was intended at the time.
+  #
+  # Note this is only about the *stored* row. Where those rows get posted is a separate question,
+  # and the answer changed: submission reads the learner ID from the account, so a correction does
+  # reach queued activities. That half is pinned in prepare_and_submit.feature — asserting the
+  # stored row here would not have caught the change on its own.
   Scenario: An activity logged before the correction keeps the old learner ID
     Given an unused invite code "OTJ-ACC-0015" expiring in 7 days
     And I sign up with inviteCode "OTJ-ACC-0015", username "oldrows", password "pw", learnerId "L-BEFORE"

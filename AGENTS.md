@@ -65,12 +65,17 @@ src/main/java/com/github/grepHammerspace/
                           exception/ hierarchy
   stateStore/             UserStateStore — ConcurrentHashMap of userId → UserState,
                           keeps a logged-in Driver alive between prepare and MFA calls
+    LoginSession, LoginFlow  one parked login: which flow, its driver, its background
+                             login future, and when it started (5 min TTL)
   bind/                   AppModule + AppComponent (main API),
                           AdminModule + AdminComponent (admin API)
   web/                    Driver interface + implementations
     OtjDriver               direct OneAdvanced/Keycloak discover login
     AzureIdDriver           QMUL Azure AD federation path; bypasses discover with a
                             hand-built PKCE flow, then Microsoft Authenticator push
+    Keycloak, AzurePush     Dagger qualifiers selecting between the two drivers, so the
+                            resource names neither and tests can bind fakes
+    SafeUrl                 strips query strings before a URL reaches a log or exception
     PrepareResult, OtjSubmitResult
 
 src/main/resources/       app.properties, llm_prompt.txt (system prompt), logback.xml
@@ -129,9 +134,29 @@ Anonymous:
 | GET | `/health` | 200 |
 
 Authenticated (`Authorization: Bearer …`, all under `/otj-services`):
-`GET /prepare-browser`, `POST /register`, `POST /log-activities`,
-`GET /pending`, `DELETE /pending/{id}`, `DELETE /delete-last-row`,
-`POST /submit-with-mfa`, `GET /azure-id/prepare`, `GET /azure-id/complete`.
+
+| Method | Path | Body → Result |
+|---|---|---|
+| POST | `/prepare-browser` | `{username, password}` → 200 `{status, message}` |
+| POST | `/azure-id/prepare` | `{username, password}` → 200 `{status, message, challengeNumber?}` |
+| POST | `/submit-with-mfa` | `{mfaCode}` → 200/207/502 `{status, posted, failed}` |
+| GET | `/azure-id/complete` | → 200/207/408/502 `{status, posted, failed}` |
+| POST | `/log-activities` | `{content}` → 200 `ActivityLogResponse` |
+| POST | `/register` | `{username, password, learnerId}` → 201 |
+| GET | `/pending` | → 200 `PendingResponse` |
+| DELETE | `/pending/{id}` | → 204 |
+| DELETE | `/delete-last-row` | → 200 |
+
+The `username`/`password` on the two prepare endpoints are the user's **OneAdvanced**
+credentials. They are **not stored** — the multi-user rollout deleted the encrypted-at-rest copy,
+so they have to arrive per request. They exist as a local for the length of the call, go straight
+into `Driver.prepare`, and never reach a log line or a response body. Do not add a field, a cache,
+or a "remember me" for them.
+
+`prepare*` answers `status` of `login_complete`, `otp_required` or `push_sent`; `challengeNumber`
+is present only for a Microsoft number match. The learner ID is **server-side** and is never
+accepted on these bodies — Jackson rejects the unknown property with a 400, and
+`prepare_and_submit.feature` pins that.
 
 Authenticated, outside `/otj-services` — the account itself, on `AccountResource`:
 
@@ -164,7 +189,16 @@ Notes:
   `findOneAndUpdate` and deliberately knows nothing about revocation — leave it that way.
 - Login is a two-phase dance because MFA codes live ~30 s: `prepare*` opens and parks
   the session in `UserStateStore`, then `submit-with-mfa` / `azure-id/complete`
-  finishes it.
+  finishes it. The two halves are **not interchangeable** — a `LoginSession` records which
+  `LoginFlow` it belongs to and the wrong complete gets a 409. Without that check an Azure
+  session would be accepted by `submit-with-mfa`, and `AzureIdDriver.completeMfa` ignores the
+  token it is given, so it would start a second Microsoft poll racing the first.
+- A parked session expires after `LoginSession.TTL` (5 min) and is dropped as soon as it is
+  spent. It holds live OneAdvanced cookies, so it must not outlive its use.
+- The learner ID used when posting is read from the **account at submit time**, not from the
+  rows being posted, so a correction through `PATCH /auth/me` also rescues activities already
+  queued. The value stored on each row is left alone as a record of what was intended when it
+  was written.
 
 ## Branches
 
@@ -236,8 +270,21 @@ on the prod box):
 
 ## Conventions and gotchas
 
-- Nothing logs passwords, MFA codes, or raw tokens. Username/userId is the most that
-  should ever reach a log line. Keep it that way when adding logging.
+- Nothing logs OneAdvanced credentials, MFA codes, Microsoft flow tokens, cookie values or
+  learner IDs. The app's own `userId` is the most that should reach a log line. This is
+  enforced, not merely intended:
+  - `web/SafeUrl` strips query strings from every URL the drivers log or put in an exception —
+    Keycloak carries the username in `login_hint` and its own `session_code`, and driver
+    exception messages are echoed to the caller.
+  - The drivers log named fields (`Success`, `ResultValue`, HTTP status), never a raw upstream
+    request or response body — those carry Microsoft's `FlowToken`, which is bearer-equivalent.
+  - `logback.xml` deliberately does **not** pin the drivers to DEBUG. It used to, which is what
+    put those tokens in the production log.
+  - `ServerHooks` captures every log event at TRACE and fails any scenario in which a sentinel
+    credential appears — in the message, the arguments, or the throwable chain. Adding a leak
+    breaks the suite.
+- Error bodies are `ApiError` records, never hand-built JSON strings, and never carry a driver's
+  `e.getMessage()`. One fixed constant per failure, in the `AuthResource` style.
 - `AuthResource` verifies against a dummy bcrypt hash on unknown usernames so that
   "no such user" and "wrong password" take the same time; invite rejections use one
   message for invalid/used/expired alike. Don't "helpfully" make these more specific.

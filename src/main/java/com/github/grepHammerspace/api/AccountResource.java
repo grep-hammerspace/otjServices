@@ -89,11 +89,16 @@ public class AccountResource {
      * <p>Answers with the account rather than 204 so the client can write it straight into its
      * cache and redraw as the editor closes, instead of showing the old value until a refetch lands.
      *
-     * <p><b>This does not touch rows already written.</b> {@code learnerId} is copied onto each
-     * activity log as the row is created, so a correction applies to what is logged next and cannot
-     * reach what is already queued. That is deliberate — a back-fill would silently rewrite rows the
-     * user has not looked at, and posted rows cannot be rewritten at OneAdvanced anyway. The mobile
-     * client says so, naming the queued count, while the field is open.
+     * <p><b>This does not rewrite rows already written, but it does change where they go.</b>
+     * {@code learnerId} is copied onto each activity log as the row is created, and a correction
+     * leaves those copies alone — they record what was intended at the time. Submission, however,
+     * uses the account's current value: {@link com.github.grepHammerspace.web.Driver#submitPendingOtjs}
+     * is handed the learner ID read here, so activities queued before the correction still post
+     * under the fixed one. Without that, a typo noticed after logging could not be repaired at all.
+     *
+     * <p>A true back-fill, rewriting the stored rows, is still not done and should not be added.
+     * Note the mobile client's warning about queued activities is stale — see
+     * {@code learner-id-api-spec.md}.
      */
     @PATCH
     public Response updateLearnerId(UpdateLearnerIdRequest body, @Context SecurityContext sc) {
