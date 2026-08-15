@@ -5,8 +5,10 @@
     </encoder>
   </appender>
 
-  <logger name="com.github.grepHammerspace.web.OtjDriver" level="DEBUG"/>
-  <logger name="com.github.grepHammerspace.web.AzureIdDriver" level="DEBUG"/>
+  <!-- The two login drivers deliberately run at the root level. They handle OneAdvanced
+       credentials and Microsoft flow tokens, and were previously pinned to DEBUG, which put
+       those tokens in the production log. The debug lines that remain are safe to enable, but
+       enable them on purpose rather than by default. -->
 
   <!-- Suppress noisy MongoDB cluster monitor heartbeat logs -->
   <logger name="org.mongodb.driver" level="WARN"/>

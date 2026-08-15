@@ -174,15 +174,25 @@ A missing key deserialises to `null`, which the blank check must therefore handl
 
 ### What this does *not* do
 
-**Existing rows keep the old learner ID.** `learnerId` is copied onto each `ActivityLog` when
-the row is written — `log-activities` reads it off the user document at that moment and hands
-it to the parser (`OtjServicesResource:144`) — so correcting it applies to what is logged next
-and cannot reach what is already queued. Rows sitting in Pending will post under the old value.
+**Existing rows keep the old learner ID as stored data, but post under the corrected one.**
+`learnerId` is copied onto each `ActivityLog` when the row is written — `log-activities` reads it
+off the user document at that moment and hands it to the parser — and a correction does not
+rewrite those rows. What a correction *does* change is where they are sent: the drivers are handed
+the account's current learner ID at submit time (`Driver.submitPendingOtjs(userId, learnerId)`),
+so activities queued before the fix still post under the corrected value.
 
-That is the right behaviour — a back-fill would silently rewrite rows the user has not looked
-at, and the posted ones cannot be rewritten at OneAdvanced anyway — but it is surprising, so
-**the client says so**: the editor shows a warning naming how many activities are queued while
-the field is open. Do not add a back-fill without changing that text.
+This is a deliberate reversal of the original rule, which had the drivers read the learner ID off
+the first pending row. That behaviour meant a typo noticed after logging could not be repaired at
+all — the queued rows would go to OneAdvanced under the wrong learner — and, with a mixed batch,
+every row was posted to the first row's learner URL regardless of its own.
+
+The split is the point: the stored value stays as a record of what was intended when the row was
+written, while the posting target follows the account. A true back-fill, rewriting the rows, is
+still not done and should not be added.
+
+**The client copy is now wrong.** The editor shows a warning naming how many activities are queued
+while the field is open, on the premise that they are beyond rescue. They are not. That text needs
+updating in `otj-mobile`.
 
 ---
 

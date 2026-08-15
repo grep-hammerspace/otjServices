@@ -10,7 +10,7 @@ import org.testcontainers.containers.MongoDBContainer;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assumptions.assumeFalse;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /**
  * Manual, live end-to-end run of the Azure AD login + OTJ submission flow.
@@ -20,19 +20,21 @@ import static org.junit.jupiter.api.Assumptions.assumeFalse;
  * (this project has no failsafe plugin configured, so {@code mvn test} never picks it up) and
  * must be run by hand, e.g.:
  *
- * <pre>mvn test -Dtest=AzureIdDriverIT</pre>
+ * <pre>
+ * OTJ_IT_USERNAME=you@qmul.ac.uk OTJ_IT_PASSWORD=… OTJ_IT_LEARNER_ID=… \
+ *   mvn test -Dtest=AzureIdDriverIT
+ * </pre>
  *
- * Fill in {@link #PASSWORD} locally before running — do not commit a real password.
+ * <p>Credentials come from the environment rather than constants. They used to be fields with a
+ * "fill in locally" comment, which committed a real account name and left a guard that compared
+ * the password against a placeholder it no longer held — so the assumption always passed and the
+ * test fired a live login with an empty password.
  */
 class AzureIdDriverIT {
 
-    // ── Hardcoded test credentials — fill in locally, never commit a real password ──
-    private static final String USERNAME = "ec24598@qmul.ac.uk";
-    private static final String PASSWORD = "";
-
-    // Known-working learnerId for USERNAME, confirmed against the real activity-log API
-    // (sourced from ellie_login.har's captured API calls).
-    private static final String LEARNER_ID = "b34c56c6-4fac-4616-8f03-3b7a5c2c5da7";
+    private static final String USERNAME   = System.getenv("OTJ_IT_USERNAME");
+    private static final String PASSWORD   = System.getenv("OTJ_IT_PASSWORD");
+    private static final String LEARNER_ID = System.getenv("OTJ_IT_LEARNER_ID");
 
     private static final String TEST_USER_ID = "azure-id-it-user";
 
@@ -66,12 +68,14 @@ class AzureIdDriverIT {
 
     @Test
     void login_thenSubmitMockedActivityLog() throws Exception {
-        assumeFalse(PASSWORD.equals("REPLACE_ME_BEFORE_RUNNING"),
-                "Set a real PASSWORD constant before running this manual test");
+        assumeTrue(USERNAME != null && !USERNAME.isBlank()
+                        && PASSWORD != null && !PASSWORD.isBlank()
+                        && LEARNER_ID != null && !LEARNER_ID.isBlank(),
+                "Set OTJ_IT_USERNAME, OTJ_IT_PASSWORD and OTJ_IT_LEARNER_ID to run this manual test");
 
         AzureIdDriver driver = new AzureIdDriver(repository);
 
-        System.out.println("[IT] Step 1/3 — starting login for " + USERNAME + " (PKCE -> Keycloak -> Azure AD)...");
+        System.out.println("[IT] Step 1/3 — starting login (PKCE -> Keycloak -> Azure AD)...");
         PrepareResult prepareResult = driver.prepare(USERNAME, PASSWORD);
         System.out.println("[IT] prepare() returned status=" + prepareResult.status() + " — " + prepareResult.userMessage());
 
@@ -84,10 +88,10 @@ class AzureIdDriverIT {
             System.out.println("[IT] Step 2/3 — existing Microsoft SSO session completed login, no MFA needed.");
         }
 
-        System.out.println("[IT] Cookies on oneadvanced.com after login: " + driver.cookiesFor("oneadvanced"));
+        System.out.println("[IT] Cookies on oneadvanced.com after login: " + driver.cookieNamesFor("oneadvanced"));
 
         System.out.println("[IT] Step 3/3 — posting the 1 mocked activity log to the OneAdvanced activity-log API...");
-        OtjSubmitResult result = driver.submitPendingOtjs(TEST_USER_ID);
+        OtjSubmitResult result = driver.submitPendingOtjs(TEST_USER_ID, LEARNER_ID);
 
         System.out.println("[IT] submitPendingOtjs() result — posted=" + result.posted() + " failed=" + result.failed());
         if (result.allPosted()) {
