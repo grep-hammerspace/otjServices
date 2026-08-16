@@ -22,16 +22,38 @@ export class OtjServicesStack extends cdk.Stack {
       ],
     });
 
-    // No inbound rules at all. Admin access is via SSM Session Manager (IAM-gated,
-    // no open port); app access is via the host's `tailscale serve`, which binds
-    // only the tailnet interface — see deploy/README.md for that trust model.
-    // Outbound stays open (default) for package installs, the Tailscale control
-    // plane/DERP relays, and MongoDB Atlas connectivity.
+    // 80 and 443 are the only inbound rules, and they reach Caddy on the host — not the app.
+    // Caddy terminates TLS and rate limits, then proxies to 127.0.0.1:8945
+    // (see deploy/prod/Caddyfile). Admin access to the box is still SSM Session Manager, so
+    // there is still no SSH port, and the admin API is still tailnet-only via the host's
+    // `tailscale serve` rather than anything opened here.
+    //
+    // Nothing else is opened, and that is what the rest of the design rests on: the Quadlets
+    // bind 8945/8946 to 127.0.0.1, so the only routes in are Caddy (public, main API) and
+    // `tailscale serve` (tailnet). AdminIdentityFilter believes the Tailscale-User-Login header
+    // precisely because no rule here can reach 8946 — see deploy/README.md before adding one.
+    //
+    // Outbound stays open (default) for package installs, the Tailscale control plane/DERP
+    // relays, ECR pulls, Anthropic, and MongoDB Atlas connectivity.
     const instanceSecurityGroup = new ec2.SecurityGroup(this, "InstanceSecurityGroup", {
       vpc,
-      description: "otjServices EC2 host - no inbound; SSM for admin, tailscale serve for app access",
+      description: "otjServices EC2 host - 80/443 to Caddy; SSM for shell, tailscale for the admin API",
       allowAllOutbound: true,
     });
+
+    // Port 80 is not just a courtesy redirect: Caddy renews its certificate over the ACME
+    // HTTP-01 challenge, which is served here. Closing it means moving to DNS-01, which would
+    // put a Cloudflare API token on the box — a credential where there is currently none.
+    instanceSecurityGroup.addIngressRule(
+      ec2.Peer.anyIpv4(),
+      ec2.Port.tcp(80),
+      "ACME HTTP-01 renewal + Caddy's redirect to HTTPS",
+    );
+    instanceSecurityGroup.addIngressRule(
+      ec2.Peer.anyIpv4(),
+      ec2.Port.tcp(443),
+      "Public API (api.otj-services.com) via Caddy -> 127.0.0.1:8945",
+    );
 
     const instanceRole = new iam.Role(this, "InstanceRole", {
       assumedBy: new iam.ServicePrincipal("ec2.amazonaws.com"),
@@ -60,7 +82,13 @@ export class OtjServicesStack extends cdk.Stack {
       ],
     });
 
-    // Stable IP for the MongoDB Atlas allowlist.
+    // Stable IP for the MongoDB Atlas allowlist and for the api.otj-services.com A record.
+    //
+    // The DNS record is deliberately NOT a CDK resource: the domain is registered with
+    // Cloudflare Registrar, which requires Cloudflare's own nameservers, so there is no Route 53
+    // hosted zone to put an ARecord in. That makes DNS a manual step — documented in
+    // deploy/README.md alongside the Atlas allowlist, which was already manual for the same
+    // reason. If this EIP is ever recreated, both have to be updated by hand.
     const elasticIp = new ec2.CfnEIP(this, "InstanceEip", { domain: "vpc" });
     new ec2.CfnEIPAssociation(this, "InstanceEipAssociation", {
       allocationId: elasticIp.attrAllocationId,

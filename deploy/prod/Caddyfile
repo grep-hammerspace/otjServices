@@ -1,0 +1,107 @@
+# otjServices public edge — TLS termination and per-IP rate limiting for the main API.
+#
+# This file is the source of truth; it is installed by hand to /etc/caddy/Caddyfile on the EC2
+# box, the same way the Quadlet templates in this directory are. See the README next to this
+# file for the install steps and the rate-limit rationale, and deploy/README.md for the
+# Tailscale trust model this sits inside.
+#
+# Requires the caddy-ratelimit module, which is NOT in a stock Caddy build:
+#     sudo caddy add-package github.com/mholt/caddy-ratelimit
+# A binary without it cannot parse this file at all — `rate_limit` is an unknown directive — so
+# Caddy refuses to start rather than quietly serving unlimited traffic. That failure is the
+# safe one; do not "fix" a failed start by deleting the rate_limit blocks.
+{
+	# rate_limit is third-party, so it has no position in Caddy's built-in directive order and
+	# must be placed explicitly. Caddy will not start without this line.
+	order rate_limit before basicauth
+}
+
+api.otj-services.com {
+	# The notes body on /log-activities is free text with no length bound of its own.
+	request_body {
+		max_size 1MB
+	}
+
+	# ── Anonymous endpoints ──────────────────────────────────────────────────────────────────
+	# Every request here costs a full bcrypt verify (~2^12 rounds) — including ones naming a
+	# user that does not exist, because AuthResource deliberately verifies against DUMMY_HASH so
+	# that "unknown username" and "wrong password" take the same time. That constant-time
+	# property is exactly what makes this the cheapest way to burn the box's CPU, and t3.small is
+	# burstable: sustained load drains CPU credits and then throttles everything on the host, not
+	# just /auth.
+	#
+	# The app's own limiter keys on the *submitted username*, so it does nothing against an
+	# attacker who rotates usernames. This is the layer that covers that gap.
+	@anon path /auth/signup /auth/session
+	handle @anon {
+		rate_limit {
+			# Short window first. It sheds a flood and recovers within the minute — which is
+			# the whole reason it is here rather than relying on the daily cap alone.
+			zone auth_burst {
+				key {remote_host}
+				events 10
+				window 1m
+			}
+			# The daily cap, scoped to the anonymous endpoints only. Read the note on shared
+			# egress IPs in ./README.md before widening this to the whole site.
+			zone auth_daily {
+				key {remote_host}
+				events 250
+				window 24h
+			}
+		}
+		reverse_proxy 127.0.0.1:8945
+	}
+
+	# ── Health ───────────────────────────────────────────────────────────────────────────────
+	# Uncapped on purpose. An uptime monitor polling every 5 minutes is 288 requests/day, which
+	# would trip a 250/day cap on its own and take the alerting down with it.
+	handle /health {
+		reverse_proxy 127.0.0.1:8945
+	}
+
+	# ── Everything else ──────────────────────────────────────────────────────────────────────
+	# Authenticated traffic: a burst ceiling only. These endpoints already require a valid bearer
+	# token, and the expensive one is bounded per-user by LlmQuotaService at 10 LLM calls/day. A
+	# 24h cap here would punish everyone behind a shared campus or carrier-NAT egress IP for the
+	# behaviour of one of them — see ./README.md.
+	handle {
+		rate_limit {
+			zone api_burst {
+				key {remote_host}
+				events 120
+				window 1m
+			}
+		}
+		reverse_proxy 127.0.0.1:8945 {
+			# GET /azure-id/complete holds the request open while it polls Microsoft for an MFA
+			# approval — AzureIdDriver's budget is 40 × 3 s = 2 minutes, before the redirect
+			# chain and the OneAdvanced POSTs that follow it. The app sends no response headers
+			# until all of that finishes. Caddy has no upstream response timeout by default, so
+			# this works today by accident; setting it explicitly means a future default cannot
+			# start cutting logins off mid-MFA.
+			#
+			# If you ever add a server-level `timeouts { write ... }` block, it has to clear this
+			# same 2-minute floor or it will truncate the same requests from the other side.
+			transport http {
+				dial_timeout 10s
+				response_header_timeout 300s
+			}
+		}
+	}
+
+	# notes.md item 7, finally.
+	#
+	# VERIFY AFTER ANY CADDY UPGRADE: the rate_limit module sets Retry-After on the 429, and the
+	# Expo client reads it. Replacing the body here must not drop that header — ./README.md has
+	# the curl that checks. If it ever does, delete this block; the plugin's default 429 is
+	# worth more than the joke.
+	handle_errors 429 {
+		header Content-Type application/json
+		respond `{"error": "Stop trying to DDoS me, get a life loser"}` 429
+	}
+
+	log {
+		output file /var/log/caddy/access.log
+	}
+}

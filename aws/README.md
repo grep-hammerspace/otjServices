@@ -18,16 +18,26 @@ Two stacks:
 
 ## Access model
 
-- **No inbound rules** on the instance's security group at all.
-- **Admin access** — SSM Session Manager, not SSH. IAM-gated, no open port:
+- **Inbound is 80 and 443 only**, and both reach **Caddy on the host**, never the
+  app directly. Caddy terminates TLS and rate limits, then proxies to
+  `127.0.0.1:8945`. Port 80 carries the ACME HTTP-01 renewal and the redirect to
+  443. See `deploy/prod/README.md` for the provisioning steps and
+  `deploy/prod/Caddyfile` for the config.
+- **Shell access** — SSM Session Manager, not SSH. IAM-gated, no open port:
   ```
   aws ssm start-session --target <instance-id> --region eu-west-2
   ```
   (printed as a stack output after deploy)
-- **App access** — the host's own `tailscale serve`, once Tailscale is
-  installed and podman/Quadlets are set up on the box (manual, see
-  `deployment-migration-plan.html` steps 05–07). Same trust model as the
-  current local setup: nothing is listening on the public interface.
+- **Admin API** — tailnet only, via the host's own `tailscale serve` on 8443.
+  Nothing in the security group can reach it. This is load-bearing:
+  `AdminIdentityFilter` trusts the `Tailscale-User-Login` header *because* 8946
+  is bound to loopback and `tailscale serve` is the only thing that can reach
+  it. Read `deploy/README.md` before adding an inbound rule.
+- **DNS** — `api.otj-services.com`, an A record pointing at the Elastic IP. It is
+  **not** a CDK resource: the domain is registered with Cloudflare Registrar,
+  which mandates Cloudflare's nameservers, so there is no Route 53 hosted zone to
+  hold an `ARecord`. Like the MongoDB Atlas IP allowlist, it is a manual step
+  that has to be redone by hand if the Elastic IP is ever recreated.
 
 ## Commands
 
