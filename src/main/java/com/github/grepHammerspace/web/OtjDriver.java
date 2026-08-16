@@ -195,8 +195,11 @@ public class OtjDriver implements Driver {
         }
 
         String postUrl = String.format(ACTIVITY_LOG_API, learnerId.strip());
-        // The URL is not logged: the learner ID is a path segment, and it identifies the student.
+        // At INFO the URL is withheld: the learner ID is a path segment and it identifies the
+        // student. At DEBUG it is printed in full, because when a submission is being rejected
+        // the target is the first thing you need to see. See logback.xml.
         log.info("Submitting {} pending OTJ(s) for user {}", pending.size(), userId);
+        log.debug("POST target: {}", postUrl);
 
         List<String> posted = new ArrayList<>();
         List<String> failed = new ArrayList<>();
@@ -204,6 +207,7 @@ public class OtjDriver implements Driver {
         for (ActivityLog activityLog : pending) {
             try {
                 String json = mapper.writeValueAsString(buildPayload(activityLog, learnerId));
+                log.debug("POST body for activity log {}: {}", activityLog.id(), json);
 
                 Request request = new Request.Builder()
                         .url(postUrl)
@@ -218,16 +222,26 @@ public class OtjDriver implements Driver {
                         log.info("Posted activity log {} ({})", activityLog.id(), activityLog.activityDate());
                     } else {
                         failed.add(activityLog.id());
-                        // Status only. The WWW-Authenticate challenge and the response body are
-                        // upstream material that can carry session and account detail.
+                        // Status only at WARN: the WWW-Authenticate challenge and the response
+                        // body are upstream material that can carry session and account detail.
                         log.warn("Failed to post activity log {} — HTTP {}", activityLog.id(), response.code());
+                        // At DEBUG, the whole thing. OneAdvanced puts the actual reason a post was
+                        // rejected in the body, so withholding it is what makes a failing
+                        // submission undebuggable from logs alone.
+                        if (log.isDebugEnabled()) {
+                            log.debug("Rejected activity log {} — HTTP {}, WWW-Authenticate: [{}], body: {}",
+                                    activityLog.id(), response.code(),
+                                    response.header("WWW-Authenticate"),
+                                    response.body() == null ? "<none>" : response.body().string());
+                        }
                     }
                 }
             } catch (Exception e) {
                 failed.add(activityLog.id());
-                // Type, not message: an OkHttp failure names the URL it was calling, and that URL
-                // has the learner ID in its path.
+                // Type only at ERROR: an OkHttp failure names the URL it was calling, and that
+                // URL has the learner ID in its path.
                 log.error("Exception posting activity log {}: {}", activityLog.id(), e.getClass().getSimpleName());
+                log.debug("Exception posting activity log {}", activityLog.id(), e);
             }
         }
 
@@ -251,9 +265,8 @@ public class OtjDriver implements Driver {
         payload.put("activityType", 16);
         payload.put("hours", activityLog.hours());
         payload.put("minutes", String.format("%02d", activityLog.minutes()));
-        // Shape, not content: the payload carries the learner ID and the user's own notes.
-        log.debug("Posting activity log {} — {}h{}m on {}", activityLog.id(),
-                activityLog.hours(), activityLog.minutes(), activityLog.activityDate());
+        // No log line here: the caller logs the serialised JSON, which is strictly more useful
+        // than a summary of the map that produced it.
         return payload;
     }
 }

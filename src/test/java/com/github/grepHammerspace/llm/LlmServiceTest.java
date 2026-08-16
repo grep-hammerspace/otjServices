@@ -106,7 +106,7 @@ class LlmServiceTest {
     void hoursAndMinutesCopiedVerbatim() {
         ParsedActivities parsed = of(
                 List.of(new Entry("2026/05/30", 4, 0, "08:00", "Work"),
-                        new Entry("2026/05/30", 0, 45, "", "Quick task"),
+                        new Entry("2026/05/30", 0, 45, "11:15", "Quick task"),
                         new Entry("2026/05/30", 1, 30, "13:00", "Task")),
                 List.of());
 
@@ -121,16 +121,17 @@ class LlmServiceTest {
     }
 
     @Test
-    void emptyStartTimeIsPreserved() {
-        // The schema permits "" when the input gives no start time. OtjDriver renders this as
-        // "T:00" when posting — a pre-existing defect in the posting path, not introduced here.
+    void startTimeCopiedVerbatim() {
+        // A line with no start time is now a missing_start_time error rather than an entry, so
+        // every entry reaching this mapper carries a real HH:MM that OtjDriver can render as
+        // "THH:MM:00". An empty one used to produce the unparseable "T:00" the API rejects.
         ParsedActivities parsed = of(
-                List.of(new Entry("2026/05/30", 1, 0, "", "No start time given")),
+                List.of(new Entry("2026/05/30", 1, 0, "09:00", "Started at nine")),
                 List.of());
 
         LlmResult result = service.toResult(parsed, "u", "l");
 
-        assertEquals("", result.ok().get(0).activityTime());
+        assertEquals("09:00", result.ok().get(0).activityTime());
     }
 
     @Test
@@ -139,11 +140,13 @@ class LlmServiceTest {
                 List.of(),
                 List.of(new ParseError(ErrorCode.missing_duration, "m", "a"),
                         new ParseError(ErrorCode.missing_description, "m", "b"),
-                        new ParseError(ErrorCode.outside_working_hours, "m", "c")));
+                        new ParseError(ErrorCode.missing_start_time, "m", "c"),
+                        new ParseError(ErrorCode.outside_working_hours, "m", "d")));
 
         LlmResult result = service.toResult(parsed, "u", "l");
 
-        assertEquals(List.of("missing_duration", "missing_description", "outside_working_hours"),
+        assertEquals(List.of("missing_duration", "missing_description", "missing_start_time",
+                        "outside_working_hours"),
                 result.errors().stream().map(LlmParseError::error).toList());
     }
 

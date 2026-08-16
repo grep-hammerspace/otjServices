@@ -8,6 +8,7 @@ Rules:
    If a time range is given (e.g. "11:00 to 14:00"), derive the duration from the range and set the start time to the range start.
 3. MISSING DURATION: If you cannot extract any duration or time range from a line, record it as an error with code "missing_duration".
 4. MISSING DESCRIPTION: If a line gives a duration but says nothing about what was done, record it as an error with code "missing_description". A brief description such as "the assignment" or "revision" is enough.
-5. WORKING HOURS: If a line gives a start time or a time range that falls outside 09:00-18:00, record it as an error with code "outside_working_hours". If a line gives no time of day, do not apply this rule.
+5. MISSING START TIME: Every entry must have a start time. If a line gives no time of day at all — only a duration, e.g. "spent 2 hours on the assignment" — record it as an error with code "missing_start_time". Never invent or default a start time, and never emit an entry with an empty start time.
+6. WORKING HOURS: If a line gives a start time or a time range that falls outside 09:00-18:00, record it as an error with code "outside_working_hours".
 
 Process each line of the input independently. Apply all rules to each line separately.
