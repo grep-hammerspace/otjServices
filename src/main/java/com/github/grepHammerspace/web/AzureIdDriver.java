@@ -106,6 +106,12 @@ public class AzureIdDriver implements Driver {
     private String mfaFlowToken;
     private String mfaCanary;
     private String mfaSessionId;
+    /**
+     * The OneAdvanced username, and the one credential-derived value this class is allowed to
+     * retain. Microsoft's ProcessAuth step needs it in its {@code login} field, and ProcessAuth
+     * runs in {@link #completeMfa} — a separate HTTP request, minutes after {@link #prepare}
+     * received it. Everything else, the password above all, stays a local variable. Never log it.
+     */
     private String mfaLogin;
     // Set to true when an existing MS SSO session completes the whole flow inside prepare()
     private boolean loginComplete = false;
@@ -121,18 +127,17 @@ public class AzureIdDriver implements Driver {
                 .build();
     }
 
-    /** Returns all cookies whose domain contains {@code domain}. */
-    List<String> cookiesFor(String domain) {
+    /**
+     * Returns the <em>names</em> of all cookies whose domain contains {@code domain}.
+     *
+     * <p>Names only, never values: after login the jar holds live {@code education.oneadvanced.com}
+     * session cookies, and a value here is a ready-to-replay credential. "Did we get a session
+     * cookie at all?" is the only question this needs to answer.
+     */
+    List<String> cookieNamesFor(String domain) {
         return cookieJar.allCookies().stream()
                 .filter(c -> c.domain().contains(domain))
-                .map(c -> "[" + c.domain() + "] " + c.name() + "=" + c.value())
-                .toList();
-    }
-
-    /** Returns every cookie collected across all domains during this session. */
-    List<String> allCookies() {
-        return cookieJar.allCookies().stream()
-                .map(c -> "[" + c.domain() + "] " + c.name() + "=" + c.value())
+                .map(c -> "[" + c.domain() + "] " + c.name())
                 .toList();
     }
 
@@ -229,23 +234,24 @@ public class AzureIdDriver implements Driver {
         String currentUrl = resp.request().url().toString();
         String body = resp.body().string();
         resp.close();
-        log.info("Keycloak page: {}", currentUrl);
+        // currentUrl carries login_hint=<username>; SafeUrl keeps the parameter names only.
+        log.info("Keycloak page: {}", SafeUrl.redact(currentUrl));
 
         Document doc = Jsoup.parse(body, currentUrl);
         Element brokerAnchor = doc.selectFirst("a[href*=broker/asso-qm-aad]");
         if (brokerAnchor == null) {
-            throw new IOException("Azure AD broker link not found on Keycloak page — URL: " + currentUrl);
+            throw new IOException("Azure AD broker link not found on Keycloak page — URL: " + SafeUrl.redact(currentUrl));
         }
         resp = get(brokerAnchor.absUrl("href"));
         currentUrl = resp.request().url().toString();
         body = resp.body().string();
         resp.close();
-        log.info("Broker page: {}", currentUrl);
+        log.info("Broker page: {}", SafeUrl.redact(currentUrl));
 
         // ── Step 4: POST SAMLRequest to Microsoft ───────────────────────────
         doc = Jsoup.parse(body, currentUrl);
         Element samlFormEl = doc.selectFirst("form");
-        if (samlFormEl == null) throw new IOException("SAML form not found on broker page — URL: " + currentUrl);
+        if (samlFormEl == null) throw new IOException("SAML form not found on broker page — URL: " + SafeUrl.redact(currentUrl));
         resp = post(samlFormEl.absUrl("action"), hiddenInputsOf(samlFormEl));
         currentUrl = resp.request().url().toString();
         body = resp.body().string();
@@ -267,7 +273,7 @@ public class AzureIdDriver implements Driver {
             currentUrl = resp.request().url().toString();
             body = resp.body().string();
             resp.close();
-            log.info("After sso_reload, at: {}", currentUrl);
+            log.info("After sso_reload, at: {}", SafeUrl.redact(currentUrl));
         }
 
         // ── Fast-path: existing MS SSO session already sent us the SAMLResponse ──
@@ -283,7 +289,8 @@ public class AzureIdDriver implements Driver {
         // We extract $Config values and POST directly to urlPost.
         String pgid = cfg(body, "pgid");
         if (!"ConvergedSignIn".equals(pgid)) {
-            throw new IOException("Expected Microsoft login page (ConvergedSignIn), got pgid=" + pgid + " — URL: " + currentUrl);
+            throw new IOException("Expected Microsoft login page (ConvergedSignIn), got pgid=" + pgid
+                    + " — URL: " + SafeUrl.redact(currentUrl));
         }
         String urlPost      = cfg(body, "urlPost");
         String credCtx      = cfg(body, "sCtx");
@@ -325,7 +332,7 @@ public class AzureIdDriver implements Driver {
         currentUrl = resp.request().url().toString();
         body = resp.body().string();
         resp.close();
-        log.debug("After cred POST: pgid={} url={}", cfg(body, "pgid"), currentUrl);
+        log.debug("After cred POST: pgid={} url={}", cfg(body, "pgid"), SafeUrl.redact(currentUrl));
 
         // ── Fast-path: Microsoft responded with SAMLResponse immediately (no MFA) ──
         if (body.contains("name=\"SAMLResponse\"") || body.contains("name='SAMLResponse'")) {
@@ -339,7 +346,7 @@ public class AzureIdDriver implements Driver {
         String mfaPgid = cfg(body, "pgid");
         if (!"ConvergedTFA".equals(mfaPgid)) {
             throw new IOException("Expected MFA page (ConvergedTFA), got pgid=" + mfaPgid
-                    + " — URL: " + currentUrl + ". Credentials may be wrong.");
+                    + " — URL: " + SafeUrl.redact(currentUrl) + ". Credentials may be wrong.");
         }
 
         mfaCtx       = cfg(body, "sCtx");
@@ -371,8 +378,11 @@ public class AzureIdDriver implements Driver {
         PrepareResult result;
         try (Response beginResp = httpClient.newCall(beginReq).execute()) {
             String rawBegin = beginResp.body().string();
-            log.debug("BeginAuth raw={}", rawBegin);
             JsonNode json = decodeSasResponse(rawBegin);
+            // Named fields only. The raw response carries FlowToken, which is bearer-equivalent
+            // for this MFA session — anyone holding it can drive the approval to completion.
+            log.debug("BeginAuth status={} Success={} ResultValue={}",
+                    beginResp.code(), json.path("Success").asBoolean(), json.path("ResultValue").asText());
             if (!json.path("Success").asBoolean()) {
                 String rv = json.path("ResultValue").asText();
                 String hint = "UserAuthFailedDuplicateRequest".equals(rv)
@@ -426,7 +436,8 @@ public class AzureIdDriver implements Driver {
                 endMap.put("lastPollEnd",   lastPollEnd);
             }
             String endBody = mapper.writeValueAsString(endMap);
-            log.debug("EndAuth poll={} body={}", poll, endBody);
+            // endBody holds ctx and flowToken — never logged.
+            log.debug("EndAuth poll={}/{} sending", poll, MAX_POLL_ATTEMPTS);
 
             Request pollReq = new Request.Builder()
                     .url(END_AUTH_URL)
@@ -441,7 +452,6 @@ public class AzureIdDriver implements Driver {
 
             try (Response pollResp = httpClient.newCall(pollReq).execute()) {
                 String rawPoll = pollResp.body().string();
-                log.debug("EndAuth poll={} status={} raw={}", poll, pollResp.code(), rawPoll);
                 JsonNode json = decodeSasResponse(rawPoll);
                 lastPollEnd = System.currentTimeMillis();
 
@@ -454,10 +464,12 @@ public class AzureIdDriver implements Driver {
                     break;
                 }
                 String result = json.path("ResultValue").asText();
-                log.debug("EndAuth poll={} Success={} ResultValue={}", poll, json.path("Success"), result);
+                log.debug("EndAuth poll={} status={} Success={} ResultValue={}",
+                        poll, pollResp.code(), json.path("Success").asBoolean(), result);
                 if (!"AuthenticationPending".equals(result)) {
-                    throw new IOException("Unexpected MFA poll result: " + result
-                            + " — full response: " + json.toPrettyString());
+                    // ResultValue alone. The full body would carry the refreshed FlowToken, and
+                    // this message is echoed to the HTTP caller.
+                    throw new IOException("Unexpected MFA poll result: " + result);
                 }
                 log.debug("Poll {}/{}: pending", poll, MAX_POLL_ATTEMPTS);
             }
@@ -493,7 +505,7 @@ public class AzureIdDriver implements Driver {
         String processUrl  = processResp.request().url().toString();
         String processHtml = processResp.body().string();
         processResp.close();
-        log.info("ProcessAuth at: {}", processUrl);
+        log.info("ProcessAuth at: {}", SafeUrl.redact(processUrl));
 
         completeSamlChain(processHtml, processUrl);
     }
@@ -504,7 +516,7 @@ public class AzureIdDriver implements Driver {
      * this driver collected via the Azure AD login instead of a direct Keycloak login.
      */
     @Override
-    public OtjSubmitResult submitPendingOtjs(String userId) {
+    public OtjSubmitResult submitPendingOtjs(String userId, String learnerId) {
         List<ActivityLog> pending = activityLogRepository.getUnpostedActivityLogsFor(userId);
 
         if (pending.isEmpty()) {
@@ -512,15 +524,16 @@ public class AzureIdDriver implements Driver {
             return new OtjSubmitResult(List.of(), List.of());
         }
 
-        String postUrl = String.format(ACTIVITY_LOG_API, pending.get(0).learnerId().strip());
-        log.info("Submitting {} pending OTJ(s) to {} for user {}", pending.size(), postUrl, userId);
+        String postUrl = String.format(ACTIVITY_LOG_API, learnerId.strip());
+        // The URL is not logged: the learner ID is a path segment, and it identifies the student.
+        log.info("Submitting {} pending OTJ(s) for user {}", pending.size(), userId);
 
         List<String> posted = new ArrayList<>();
         List<String> failed = new ArrayList<>();
 
         for (ActivityLog activityLog : pending) {
             try {
-                String json = mapper.writeValueAsString(buildPayload(activityLog));
+                String json = mapper.writeValueAsString(buildPayload(activityLog, learnerId));
 
                 Request request = new Request.Builder()
                         .url(postUrl)
@@ -535,15 +548,16 @@ public class AzureIdDriver implements Driver {
                         log.info("Posted activity log {} ({})", activityLog.id(), activityLog.activityDate());
                     } else {
                         failed.add(activityLog.id());
-                        log.warn("Failed to post activity log {} — HTTP {} WWW-Authenticate: [{}] body: {}",
-                                activityLog.id(), response.code(),
-                                response.header("WWW-Authenticate"),
-                                response.body() != null ? response.body().string() : "null");
+                        // Status only. The WWW-Authenticate challenge and the response body are
+                        // upstream material that can carry session and account detail.
+                        log.warn("Failed to post activity log {} — HTTP {}", activityLog.id(), response.code());
                     }
                 }
             } catch (Exception e) {
                 failed.add(activityLog.id());
-                log.error("Exception posting activity log {}: {}", activityLog.id(), e.getMessage());
+                // Type, not message: an OkHttp failure names the URL it was calling, and that URL
+                // has the learner ID in its path.
+                log.error("Exception posting activity log {}: {}", activityLog.id(), e.getClass().getSimpleName());
             }
         }
 
@@ -551,9 +565,13 @@ public class AzureIdDriver implements Driver {
         return new OtjSubmitResult(posted, failed);
     }
 
-    private Map<String, Object> buildPayload(ActivityLog activityLog) {
+    /**
+     * @param learnerId the account's current learner ID, which wins over the one stamped on the
+     *                  row when it was logged — see {@link Driver#submitPendingOtjs}.
+     */
+    private Map<String, Object> buildPayload(ActivityLog activityLog, String learnerId) {
         Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("learnerId", activityLog.learnerId().strip());
+        payload.put("learnerId", learnerId.strip());
         payload.put("activityImpact", activityLog.activityImpact());
         payload.put("unitId", "ef974f73-5d9d-447e-8652-379ba9535229");
         payload.put("activityDate", activityLog.activityDate().replace("/", "-"));
@@ -563,7 +581,9 @@ public class AzureIdDriver implements Driver {
         payload.put("activityType", 16);
         payload.put("hours", activityLog.hours());
         payload.put("minutes", String.format("%02d", activityLog.minutes()));
-        log.info("Posting payload: {}", payload);
+        // Shape, not content: the payload carries the learner ID and the user's own notes.
+        log.debug("Posting activity log {} — {}h{}m on {}", activityLog.id(),
+                activityLog.hours(), activityLog.minutes(), activityLog.activityDate());
         return payload;
     }
 
@@ -574,16 +594,16 @@ public class AzureIdDriver implements Driver {
     private void completeSamlChain(String html, String baseUrl) throws IOException {
         Document doc = Jsoup.parse(html, baseUrl);
         Element samlForm = doc.selectFirst("form");
-        if (samlForm == null) throw new IOException("SAMLResponse form not found — URL: " + baseUrl);
+        if (samlForm == null) throw new IOException("SAMLResponse form not found — URL: " + SafeUrl.redact(baseUrl));
 
         Response finalResp = post(samlForm.absUrl("action"), hiddenInputsOf(samlForm));
         String landingUrl = finalResp.request().url().toString();
         finalResp.body().string(); // consume to follow the full redirect chain
         finalResp.close();
 
-        log.info("Login complete — landing URL: {}", landingUrl);
+        log.info("Login complete — landing URL: {}", SafeUrl.redact(landingUrl));
         if (!landingUrl.contains("education.oneadvanced.com")) {
-            throw new IOException("Login failed — unexpected landing URL: " + landingUrl);
+            throw new IOException("Login failed — unexpected landing URL: " + SafeUrl.redact(landingUrl));
         }
     }
 

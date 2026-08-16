@@ -22,6 +22,9 @@ public class HttpSteps {
         String responseBody = response.body() != null ? response.body().string() : "";
         ScenarioContext.put("lastResponseCode", response.code());
         ScenarioContext.put("lastResponseBody", responseBody);
+        // Headers too: Retry-After is the first response header this API sets, and a step that
+        // asserted on a stale header map would pass or fail for the wrong reason.
+        ScenarioContext.put("lastResponseHeaders", response.headers());
     }
 
     @When("I DELETE {string}")

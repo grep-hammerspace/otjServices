@@ -6,9 +6,16 @@ Feature: Editing a pending activity
   #
   # Scenarios share one Mongo database with no per-scenario reset, so the background clears the
   # test user's rows first.
+  #
+  # The quota reset is load-bearing for the same reason, and for the same reason it is in
+  # log_activities.feature: nearly every scenario here seeds its row through "I have already
+  # logged", which spends one of test-user-id's ten daily LLM calls. Without this line the
+  # Examples table below runs out partway through and the later cases 429 instead of reaching
+  # the endpoint under test.
   Background:
     Given a registered user with learnerId "L001"
     And there are no activity logs for the test user
+    And the test user has used no LLM calls today
 
   Scenario: A valid edit returns the row in its new state
     Given I have already logged "Worked on the assignment"

@@ -5,6 +5,9 @@ import com.github.grepHammerspace.db.model.ActivityLog;
 import com.github.grepHammerspace.llm.LlmResult;
 import com.github.grepHammerspace.llm.LlmService;
 import com.github.grepHammerspace.stateStore.UserStateStore;
+import com.github.grepHammerspace.web.AzurePush;
+import com.github.grepHammerspace.web.Driver;
+import com.github.grepHammerspace.web.Keycloak;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
 import com.mongodb.client.MongoDatabase;
@@ -73,4 +76,23 @@ public class TestAppModule {
             return new LlmResult(ok, List.of());
         };
     }
+
+    /*
+     * The drivers are the third and fourth test doubles. Unlike the LLM, these are not swapped
+     * to save money — they are swapped because the real ones perform a live SSO login against
+     * Keycloak and Microsoft, which no scenario can do. @Singleton so a step definition and the
+     * running resource see the same instance.
+     */
+
+    @Provides @Singleton @Keycloak
+    Driver provideKeycloakDriver(@Keycloak FakeDriver fake) { return fake; }
+
+    @Provides @Singleton @AzurePush
+    Driver provideAzurePushDriver(@AzurePush FakeDriver fake) { return fake; }
+
+    @Provides @Singleton @Keycloak
+    FakeDriver provideKeycloakFake() { return new FakeDriver(); }
+
+    @Provides @Singleton @AzurePush
+    FakeDriver provideAzurePushFake() { return new FakeDriver(); }
 }

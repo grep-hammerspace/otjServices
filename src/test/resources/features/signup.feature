@@ -63,7 +63,7 @@ Feature: Signup and login
     And I sign up with inviteCode "OTJ-TEST-0008", username "logoutuser", password "pw", learnerId "L9"
     When I DELETE "/auth/session" with the signup token
     Then the response status is 204
-    When I GET "/otj-services/prepare-browser" with the signup token
+    When I GET "/otj-services/pending" with the signup token
     Then the response status is 401
 
   Scenario: Logging out twice is not an error
@@ -73,15 +73,14 @@ Feature: Signup and login
     And I DELETE "/auth/session" with the signup token
     Then the response status is 204
 
-  # prepare-browser is authenticated but always answers 501 (credentials are no longer stored
-  # server-side). 501 rather than 401 is the point: the filter accepted the token and let the
-  # request reach the handler. Any authenticated endpoint with a deterministic response works
-  # here — swap this for GET /pending once step 05.5 lands.
+  # 200 rather than 401 is the point: the filter accepted the token and let the request reach the
+  # handler. GET /pending is the endpoint to use for this — it is authenticated, deterministic,
+  # and needs no OneAdvanced credentials, unlike the prepare endpoints this used to call.
   Scenario: A token from signup works on a protected endpoint
     Given an unused invite code "OTJ-TEST-0010" expiring in 7 days
     And I sign up with inviteCode "OTJ-TEST-0010", username "tokenworks", password "pw", learnerId "L9"
-    When I GET "/otj-services/prepare-browser" with the signup token
-    Then the response status is 501
+    When I GET "/otj-services/pending" with the signup token
+    Then the response status is 200
 
   Scenario: Signup requires every field
     Given an unused invite code "OTJ-TEST-0011" expiring in 7 days

@@ -65,12 +65,17 @@ src/main/java/com/github/grepHammerspace/
                           exception/ hierarchy
   stateStore/             UserStateStore — ConcurrentHashMap of userId → UserState,
                           keeps a logged-in Driver alive between prepare and MFA calls
+    LoginSession, LoginFlow  one parked login: which flow, its driver, its background
+                             login future, and when it started (5 min TTL)
   bind/                   AppModule + AppComponent (main API),
                           AdminModule + AdminComponent (admin API)
   web/                    Driver interface + implementations
     OtjDriver               direct OneAdvanced/Keycloak discover login
     AzureIdDriver           QMUL Azure AD federation path; bypasses discover with a
                             hand-built PKCE flow, then Microsoft Authenticator push
+    Keycloak, AzurePush     Dagger qualifiers selecting between the two drivers, so the
+                            resource names neither and tests can bind fakes
+    SafeUrl                 strips query strings before a URL reaches a log or exception
     PrepareResult, OtjSubmitResult
 
 src/main/resources/       app.properties, llm_prompt.txt (system prompt), logback.xml
@@ -124,14 +129,47 @@ Anonymous:
 | Method | Path | Body → Result |
 |---|---|---|
 | POST | `/auth/signup` | `{inviteCode, username, password, learnerId}` → 201 `{token}` |
-| POST | `/auth/session` | `{username, password}` → 200 `{token}` |
+| POST | `/auth/session` | `{username, password}` → 200 `{token}`, or 429 + `Retry-After` |
 | DELETE | `/auth/session` | `Authorization: Bearer …` → 204 |
 | GET | `/health` | 200 |
 
 Authenticated (`Authorization: Bearer …`, all under `/otj-services`):
-`GET /prepare-browser`, `POST /register`, `POST /log-activities`,
-`GET /pending`, `PUT /pending/{id}`, `DELETE /pending/{id}`, `DELETE /delete-last-row`,
-`POST /submit-with-mfa`, `GET /azure-id/prepare`, `GET /azure-id/complete`.
+
+| Method | Path | Body → Result |
+|---|---|---|
+| POST | `/prepare-browser` | `{username, password}` → 200 `{status, message}` |
+| POST | `/azure-id/prepare` | `{username, password}` → 200 `{status, message, challengeNumber?}` |
+| POST | `/submit-with-mfa` | `{mfaCode}` → 200/207/502 `{status, posted, failed}` |
+| GET | `/azure-id/complete` | → 200/207/408/502 `{status, posted, failed}` |
+| POST | `/log-activities` | `{content}` → 200 `ActivityLogResponse`, or 429 + `Retry-After` |
+| POST | `/register` | `{username, password, learnerId}` → 201 |
+| GET | `/pending` | → 200 `PendingResponse` |
+| PUT | `/pending/{id}` | `UpdateActivityRequest` → 200 `PendingActivity`, or 404 |
+| DELETE | `/pending/{id}` | → 204 |
+| DELETE | `/delete-last-row` | → 200 |
+
+The `username`/`password` on the two prepare endpoints are the user's **OneAdvanced**
+credentials. They are **not stored** — the multi-user rollout deleted the encrypted-at-rest copy,
+so they have to arrive per request. They exist as a local for the length of the call, go straight
+into `Driver.prepare`, and never reach a log line or a response body. Do not add a field, a cache,
+or a "remember me" for them.
+
+`prepare*` answers `status` of `login_complete`, `otp_required` or `push_sent`; `challengeNumber`
+is present only for a Microsoft number match. The learner ID is **server-side** and is never
+accepted on these bodies — Jackson rejects the unknown property with a 400, and
+`prepare_and_submit.feature` pins that.
+
+Authenticated, outside `/otj-services` — the account itself, on `AccountResource`:
+
+| Method | Path | Body → Result |
+|---|---|---|
+| GET | `/auth/me` | → 200 `{username, learnerId}` |
+| PATCH | `/auth/me` | `{learnerId}` → 200 `{username, learnerId}` |
+
+**These are not on `AuthResource`.** That class carries no `@Authenticated` annotation on purpose
+— its endpoints are the ones you reach before holding a token — and the annotation binds per
+class, so the two that need a token live in their own class under the same URL prefix. See
+`learner-id-api-spec.md`.
 
 Admin API (separate process/port, tailnet identity instead of bearer tokens):
 
@@ -157,7 +195,16 @@ Notes:
   `findOneAndUpdate` and deliberately knows nothing about revocation — leave it that way.
 - Login is a two-phase dance because MFA codes live ~30 s: `prepare*` opens and parks
   the session in `UserStateStore`, then `submit-with-mfa` / `azure-id/complete`
-  finishes it.
+  finishes it. The two halves are **not interchangeable** — a `LoginSession` records which
+  `LoginFlow` it belongs to and the wrong complete gets a 409. Without that check an Azure
+  session would be accepted by `submit-with-mfa`, and `AzureIdDriver.completeMfa` ignores the
+  token it is given, so it would start a second Microsoft poll racing the first.
+- A parked session expires after `LoginSession.TTL` (5 min) and is dropped as soon as it is
+  spent. It holds live OneAdvanced cookies, so it must not outlive its use.
+- The learner ID used when posting is read from the **account at submit time**, not from the
+  rows being posted, so a correction through `PATCH /auth/me` also rescues activities already
+  queued. The value stored on each row is left alone as a record of what was intended when it
+  was written.
 
 ## Branches
 
@@ -198,7 +245,7 @@ they must be named explicitly, and they need a container runtime:
 ```bash
 DOCKER_HOST=unix:///run/user/1000/podman/podman.sock \
 TESTCONTAINERS_RYUK_DISABLED=true \
-mvn -B test -Dtest='CucumberIT,UserRepositoryIT,ActivityLogRepositoryIT,SessionTokenServiceIT,InviteCodeRepositoryIT,SessionRepositoryIT'
+mvn -B test -Dtest='CucumberIT,UserRepositoryIT,ActivityLogRepositoryIT,SessionTokenServiceIT,InviteCodeRepositoryIT,SessionRepositoryIT,LlmQuotaServiceIT'
 ```
 
 Local Mongo: `podman run -d --name otj-mongo -p 27017:27017 mongo:8`.
@@ -229,8 +276,56 @@ on the prod box):
 
 ## Conventions and gotchas
 
-- Nothing logs passwords, MFA codes, or raw tokens. Username/userId is the most that
-  should ever reach a log line. Keep it that way when adding logging.
+- **Login is rate limited per username**, 10 attempts per 15 minutes, via `auth/RateLimiter` — an
+  in-memory sliding window, correct because there is exactly one app instance. Things to preserve:
+  - The check sits **above `findByAppUsername`**, so an unknown username is limited exactly like a
+    real one and a 429 is never an account-existence oracle. Moving it below would create one.
+  - It is also above the bcrypt verify, which is the cost being shed.
+  - **Successes count too.** A flood of valid logins is still a flood, and counting only failures
+    would leave an attacker holding a correct password an unmetered channel.
+  - Keys are truncated and idle keys are swept, because the key is the *submitted* username and an
+    attacker can otherwise grow the map one invented name at a time.
+  - `tryAcquire` rejects a window longer than `RateLimiter.MAX_WINDOW`; the sweep is global and
+    prunes against that bound, so a longer window would have its live counters collected.
+- **There is no signup rate limit, deliberately.** Behind `tailscale serve` every request comes
+  from `127.0.0.1` and `X-Forwarded-For` is unverified, so there is no forgery-resistant per-client
+  key. Keying on the invite code would let an attacker lock a legitimate invitee out of the only
+  code they have, and a global limit would let anyone deny signup to everybody. Invite codes carry
+  40 bits, which `InviteCodeGenerator`'s javadoc rightly calls far past online guessing. Revisit
+  when there is an edge proxy with a real client IP.
+- **`log-activities` is capped at 10 LLM calls per user per day** by `quota/LlmQuotaService`,
+  counted in the `llmQuota` collection, one document per user per day. Things to preserve:
+  - The check sits after the 400s and before the model call, so a malformed request never spends
+    quota and a refused one never reaches Anthropic. Content diffing is gone, so every request
+    that gets past those 400s does cost a call — there is no resubmit-is-free path to lean on.
+  - `tryConsume` is a single atomic `findOneAndUpdate` + `$inc` + upsert. **An over-limit call
+    still increments** — that is what keeps it one round trip with no read-modify-write, so the
+    count cannot be raced. The stored number is calls *attempted*; clamp it before showing it.
+  - The upsert plus the unique `{userId, date}` index means two concurrent first calls race and
+    one sees a duplicate key; there is a single bounded retry for exactly that.
+  - The day is **UTC**, deliberately unlike `logActivtiesWithLlmHelp`'s system-zone
+    `LocalDate.now()` for the date stamped on rows. UTC is DST-free and cannot silently give a
+    23- or 25-hour quota window. They disagree for an hour under BST; both are right.
+  - Two different 429s can come from this endpoint — quota, and the upstream Anthropic rate
+    limit. Only the quota one carries `Retry-After`, which is how a client tells them apart.
+  - **Any feature whose scenarios POST `/log-activities` must reset the quota in its
+    `Background:`.** The suite's Mongo is not wiped between scenarios and `llm_quota.feature` sets
+    the counter to its limit, so without the reset those scenarios start over quota and 429.
+- Nothing logs OneAdvanced credentials, MFA codes, Microsoft flow tokens, cookie values or
+  learner IDs. The app's own `userId` is the most that should reach a log line. This is
+  enforced, not merely intended:
+  - `web/SafeUrl` strips query strings from every URL the drivers log or put in an exception —
+    Keycloak carries the username in `login_hint` and its own `session_code`, and driver
+    exception messages are echoed to the caller.
+  - The drivers log named fields (`Success`, `ResultValue`, HTTP status), never a raw upstream
+    request or response body — those carry Microsoft's `FlowToken`, which is bearer-equivalent.
+  - `logback.xml` deliberately does **not** pin the drivers to DEBUG. It used to, which is what
+    put those tokens in the production log.
+  - `ServerHooks` captures every log event at TRACE and fails any scenario in which a sentinel
+    credential appears — in the message, the arguments, or the throwable chain. Adding a leak
+    breaks the suite.
+- Error bodies are `ApiError` records, never hand-built JSON strings, and never carry a driver's
+  `e.getMessage()`. One fixed constant per failure, in the `AuthResource` style.
 - `AuthResource` verifies against a dummy bcrypt hash on unknown usernames so that
   "no such user" and "wrong password" take the same time; invite rejections use one
   message for invalid/used/expired alike. Don't "helpfully" make these more specific.

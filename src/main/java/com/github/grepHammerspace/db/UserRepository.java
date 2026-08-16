@@ -5,9 +5,12 @@ import com.mongodb.MongoWriteException;
 import com.mongodb.client.MongoCollection;
 import com.mongodb.client.MongoDatabase;
 import com.mongodb.client.model.Filters;
+import com.mongodb.client.model.FindOneAndUpdateOptions;
 import com.mongodb.client.model.IndexOptions;
 import com.mongodb.client.model.Indexes;
 import com.mongodb.client.model.ReplaceOptions;
+import com.mongodb.client.model.ReturnDocument;
+import com.mongodb.client.model.Updates;
 import org.bson.Document;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -67,6 +70,34 @@ public class UserRepository {
 
     public User findByUserId(String userId) {
         return fromDocument(collection.find(Filters.eq("userId", userId)).first());
+    }
+
+    /**
+     * Sets {@code learnerId} on one user, leaving every other field alone.
+     *
+     * <p>Returns the updated user, or {@code null} when no document matched — the account was
+     * deleted while a token for it was still live.
+     *
+     * <p>A {@code $set} of the one field rather than {@link #save(User)}: that method replaces the
+     * whole document and upserts, so it would make this a read-modify-write that clobbers any
+     * concurrent change, and a lost race against a deletion would resurrect the account with
+     * whatever the caller happened to be holding — including no password hash.
+     *
+     * <p>{@code ReturnDocument.AFTER} so the caller answers with the new state without a second read.
+     * The log line records that the ID changed and for whom, never the value.
+     */
+    public User updateLearnerId(String userId, String learnerId) {
+        Document updated = collection.findOneAndUpdate(
+                Filters.eq("userId", userId),
+                Updates.set("learnerId", learnerId),
+                new FindOneAndUpdateOptions().returnDocument(ReturnDocument.AFTER));
+
+        if (updated == null) {
+            log.info("No user {} found to update learnerId for", userId);
+            return null;
+        }
+        log.info("Updated learnerId for user {}", userId);
+        return fromDocument(updated);
     }
 
     /** Looks up a user by their app login name — the login path. */
