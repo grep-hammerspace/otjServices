@@ -18,11 +18,16 @@ Two stacks:
 
 ## Access model
 
-- **Inbound is 80 and 443 only**, and both reach **Caddy on the host**, never the
-  app directly. Caddy terminates TLS and rate limits, then proxies to
-  `127.0.0.1:8945`. Port 80 carries the ACME HTTP-01 renewal and the redirect to
-  443. See `deploy/prod/README.md` for the provisioning steps and
+- **Inbound is 443 only, and only from Cloudflare's published ranges**, reaching
+  **Caddy on the host**, never the app directly. Caddy terminates TLS and rate
+  limits, then proxies to `127.0.0.1:8945`. Port 80 is not opened: Cloudflare
+  terminates the visitor's HTTP at its own edge, and the origin's certificate is
+  a Cloudflare Origin CA pair rather than ACME, so there is no HTTP-01 challenge
+  to serve. See `deploy/prod/README.md` for the provisioning steps and
   `deploy/prod/Caddyfile` for the config.
+  The CIDR list here and the `trusted_proxies` list in the Caddyfile are the same
+  set and must be refreshed together — see "Keeping the Cloudflare ranges
+  current" in `deploy/prod/README.md`.
 - **Shell access** — SSM Session Manager, not SSH. IAM-gated, no open port:
   ```
   aws ssm start-session --target <instance-id> --region eu-west-2
@@ -33,11 +38,16 @@ Two stacks:
   `AdminIdentityFilter` trusts the `Tailscale-User-Login` header *because* 8946
   is bound to loopback and `tailscale serve` is the only thing that can reach
   it. Read `deploy/README.md` before adding an inbound rule.
-- **DNS** — `api.otj-services.com`, an A record pointing at the Elastic IP. It is
-  **not** a CDK resource: the domain is registered with Cloudflare Registrar,
-  which mandates Cloudflare's nameservers, so there is no Route 53 hosted zone to
-  hold an `ARecord`. Like the MongoDB Atlas IP allowlist, it is a manual step
-  that has to be redone by hand if the Elastic IP is ever recreated.
+- **DNS** — `otj-services.com`, an apex A record pointing at the Elastic IP and
+  **proxied (orange cloud)**, so the name resolves to Cloudflare and the origin
+  address is never published. It is **not** a CDK resource: the domain is
+  registered with Cloudflare Registrar, which mandates Cloudflare's nameservers,
+  so there is no Route 53 hosted zone to hold an `ARecord`. Like the MongoDB
+  Atlas IP allowlist, it is a manual step that has to be redone by hand if the
+  Elastic IP is ever recreated.
+  Because the record is proxied, `dig` returns Cloudflare's addresses, not the
+  Elastic IP — that is expected, and it means DNS cannot be used to check the
+  origin. Read the record content in the Cloudflare dashboard instead.
 
 ## Commands
 

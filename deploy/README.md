@@ -23,7 +23,8 @@ differs: the main API is public on 443 through Caddy and its tailnet listener ha
 to leave 443 free. See `deploy/prod/README.md`.
 
 The admin API is a separate server rather than a path on the main API because the main API sits
-behind a public domain. That has now happened — `api.otj-services.com`, terminated by Caddy — and
+behind a public domain. That has now happened — `otj-services.com`, proxied by Cloudflare and
+terminated by Caddy — and
 the decision paid off exactly as expected: a path under the main API would have inherited that
 exposure the moment the proxy landed, whereas a distinct port on a loopback binding could not.
 

@@ -22,8 +22,8 @@ export class OtjServicesStack extends cdk.Stack {
       ],
     });
 
-    // 80 and 443 are the only inbound rules, and they reach Caddy on the host — not the app.
-    // Caddy terminates TLS and rate limits, then proxies to 127.0.0.1:8945
+    // 443 from Cloudflare's edge ranges is the only inbound rule, and it reaches Caddy on the
+    // host — not the app. Caddy terminates TLS and rate limits, then proxies to 127.0.0.1:8945
     // (see deploy/prod/Caddyfile). Admin access to the box is still SSM Session Manager, so
     // there is still no SSH port, and the admin API is still tailnet-only via the host's
     // `tailscale serve` rather than anything opened here.
@@ -37,23 +37,52 @@ export class OtjServicesStack extends cdk.Stack {
     // relays, ECR pulls, Anthropic, and MongoDB Atlas connectivity.
     const instanceSecurityGroup = new ec2.SecurityGroup(this, "InstanceSecurityGroup", {
       vpc,
-      description: "otjServices EC2 host - 80/443 to Caddy; SSM for shell, tailscale for the admin API",
+      description: "otjServices EC2 host - 443 from Cloudflare to Caddy; SSM for shell, tailscale for the admin API",
       allowAllOutbound: true,
     });
 
-    // Port 80 is not just a courtesy redirect: Caddy renews its certificate over the ACME
-    // HTTP-01 challenge, which is served here. Closing it means moving to DNS-01, which would
-    // put a Cloudflare API token on the box — a credential where there is currently none.
-    instanceSecurityGroup.addIngressRule(
-      ec2.Peer.anyIpv4(),
-      ec2.Port.tcp(80),
-      "ACME HTTP-01 renewal + Caddy's redirect to HTTPS",
-    );
-    instanceSecurityGroup.addIngressRule(
-      ec2.Peer.anyIpv4(),
-      ec2.Port.tcp(443),
-      "Public API (api.otj-services.com) via Caddy -> 127.0.0.1:8945",
-    );
+    // Cloudflare's published edge ranges (https://www.cloudflare.com/ips-v4 and /ips-v6), as of
+    // 2026-08-16. Duplicated in the `trusted_proxies` block of deploy/prod/Caddyfile, which must
+    // list the same set — refresh both together.
+    //
+    // Narrowing to these is what makes the orange-cloud proxy mean anything. otj-services.com
+    // resolves to Cloudflare, so the Elastic IP is not published — but "not published" is not
+    // "not findable" (certificate transparency logs, old DNS history, scanning). With 0.0.0.0/0
+    // here, anyone who turns it up connects straight to the origin, skipping Cloudflare's WAF
+    // and DDoS protection, and — because Caddy trusts the forwarded header from any Cloudflare
+    // range — could hand it a CF-Connecting-IP of their choosing and forge the rate-limit key.
+    // The allowlist and the Caddyfile's trusted_proxies only work as a pair.
+    const CLOUDFLARE_IPV4 = [
+      "173.245.48.0/20", "103.21.244.0/22", "103.22.200.0/22", "103.31.4.0/22",
+      "141.101.64.0/18", "108.162.192.0/18", "190.93.240.0/20", "188.114.96.0/20",
+      "197.234.240.0/22", "198.41.128.0/17", "162.158.0.0/15", "104.16.0.0/13",
+      "104.24.0.0/14", "172.64.0.0/13", "131.0.72.0/22",
+    ];
+    const CLOUDFLARE_IPV6 = [
+      "2400:cb00::/32", "2606:4700::/32", "2803:f800::/32", "2405:b500::/32",
+      "2405:8100::/32", "2a06:98c0::/29", "2c0f:f248::/32",
+    ];
+
+    for (const cidr of CLOUDFLARE_IPV4) {
+      instanceSecurityGroup.addIngressRule(
+        ec2.Peer.ipv4(cidr),
+        ec2.Port.tcp(443),
+        "Cloudflare edge -> Caddy -> 127.0.0.1:8945",
+      );
+    }
+    for (const cidr of CLOUDFLARE_IPV6) {
+      instanceSecurityGroup.addIngressRule(
+        ec2.Peer.ipv6(cidr),
+        ec2.Port.tcp(443),
+        "Cloudflare edge (v6) -> Caddy -> 127.0.0.1:8945",
+      );
+    }
+
+    // Port 80 is deliberately NOT opened. Cloudflare terminates the visitor's HTTP at its own
+    // edge and speaks HTTPS to this origin, and the certificate here is a Cloudflare Origin CA
+    // pair rather than ACME — so there is no HTTP-01 challenge to serve and nothing to redirect.
+    // Opening 80 would only add an unauthenticated surface. If you ever move back to Let's
+    // Encrypt on the origin, that is a return to DNS-01 or a grey-cloud record, not a port here.
 
     const instanceRole = new iam.Role(this, "InstanceRole", {
       assumedBy: new iam.ServicePrincipal("ec2.amazonaws.com"),
@@ -82,13 +111,17 @@ export class OtjServicesStack extends cdk.Stack {
       ],
     });
 
-    // Stable IP for the MongoDB Atlas allowlist and for the api.otj-services.com A record.
+    // Stable IP for the MongoDB Atlas allowlist and for the otj-services.com A record.
     //
     // The DNS record is deliberately NOT a CDK resource: the domain is registered with
     // Cloudflare Registrar, which requires Cloudflare's own nameservers, so there is no Route 53
     // hosted zone to put an ARecord in. That makes DNS a manual step — documented in
     // deploy/README.md alongside the Atlas allowlist, which was already manual for the same
     // reason. If this EIP is ever recreated, both have to be updated by hand.
+    //
+    // The A record is proxied (orange cloud), so this address is not what the name resolves to —
+    // `dig otj-services.com` returns Cloudflare. To read the origin back, look at the record
+    // content in the Cloudflare dashboard; DNS cannot tell you while the proxy is on.
     const elasticIp = new ec2.CfnEIP(this, "InstanceEip", { domain: "vpc" });
     new ec2.CfnEIPAssociation(this, "InstanceEipAssociation", {
       allocationId: elasticIp.attrAllocationId,

@@ -17,13 +17,13 @@ Delete this file once it has been run. Ongoing operations live in `deploy/prod/R
 | 1.2 admin env file | **done** — `~otjapp/otj-admin-api.env`, mode 600 |
 | 1.3 deploy script + templates | **done** — all three files in `~otjapp/otj-deploy/` |
 | 1.5 install Caddy | **not done** — no `caddy` binary, no `/etc/caddy` |
-| 1.6 point DNS at the box | **not done** — `api.otj-services.com` does not resolve |
+| 1.6 point DNS at the box | **done** — apex A record, proxied (orange cloud) |
 | 2 merge `staging` → `master` | **done** — PR #21, `origin/master` at `583ddff` |
 | — app deployed | **done** — both containers running `583ddff`, `/health` 200 on 8945 and 8946 |
 | 3 bring up the public edge | **not done** — security group still has zero ingress rules |
 | 4 mint the first invite | **not done** |
 
-So what is left is Phase 1.5, Phase 1.6, Phase 3 and Phase 4 — the edge itself. **Read Phase 3
+So what is left is Phase 1.5, Phase 3 and Phase 4 — the edge itself. **Read Phase 3
 from `deploy/prod/README.md` ("Provisioning the edge") rather than from this file**, which is
 kept only for the reasoning behind the ordering and for Phase 4.
 
@@ -36,11 +36,11 @@ this document originally assumed — see the next section.
 
 | | Before (`master`) | After |
 |---|---|---|
-| Reaching the main API | tailnet only, `tailscale serve --https=443` | **public**, `https://api.otj-services.com` via Caddy; tailnet moves to `:8444` |
+| Reaching the main API | tailnet only, `tailscale serve --https=443` | **public**, `https://otj-services.com` via Caddy; tailnet moves to `:8444` |
 | Identity | `Tailscale-User-Login` header, trusted | bearer tokens, bcrypt users, invite-gated signup |
 | Admin API | does not exist | `admin-api` container, tailnet only on `:8443` |
 | Containers on the box | 1 (`hours-api`) | 2 (`hours-api`, `admin-api`) |
-| Inbound ports | none | 80, 443 |
+| Inbound ports | none | 443, from Cloudflare ranges only |
 
 **Every existing user starts from zero.** `master` has no user model, so there is nothing to migrate
 — there are no accounts to preserve. Nobody can use the API until you mint an invite code (Phase 4).
@@ -254,26 +254,32 @@ updates; it preserves the module set.
 merge window.~~ **No longer required** — the merge window has closed, so you can go straight on to
 Phase 3 and install the Caddyfile in the same session. See "The one thing you must not do" above.
 
-### 1.6 Point DNS at the box — **outstanding, and it gates everything else**
+### 1.6 Point DNS at the box — **done**
 
-Cloudflare dashboard, zone `otj-services.com` (the zone already exists and is delegated —
-`dan.ns.cloudflare.com` / `ollie.ns.cloudflare.com` — it simply has no `api` record yet):
+Cloudflare dashboard, zone `otj-services.com` (already delegated to `dan.ns.cloudflare.com` /
+`ollie.ns.cloudflare.com`):
 
 ```
-Type: A    Name: api    Content: 18.169.107.161    Proxy status: DNS only (grey cloud)
+Type: A    Name: @    Content: 18.169.107.161    Proxy status: Proxied (orange cloud)
 ```
 
 `18.169.107.161` is the current `ElasticIp` output of `OtjServicesStack`. Re-read it rather than
 trusting this line if the stack has been recreated since 2026-08-16.
 
-Grey cloud, not orange — orange changes both certificate issuance and what `{remote_host}` means in
-the Caddyfile, and belongs in its own deliberate change.
+**The API lives on the apex, not on `api.`** — a subdomain was the original plan and bought
+nothing, so it was dropped on 2026-08-16 in favour of the record that already existed.
 
-Confirm it resolves before Phase 3. A failed ACME challenge burns Let's Encrypt rate-limit budget,
-and those limits are per-domain-per-week:
+**Proxied, not DNS-only** — the deliberate choice being that the Elastic IP is never published.
+That decision changes three other things, all of which are already reflected in this PR and
+explained in `deploy/prod/README.md`: rate-limit keys move to `{client_ip}` with a
+`trusted_proxies` list, the security group narrows to Cloudflare's ranges on 443 (port 80 is not
+opened at all), and TLS on the origin is a **Cloudflare Origin CA certificate rather than Let's
+Encrypt** — ACME cannot reach an origin that only admits Cloudflare.
+
+`dig` will show Cloudflare's addresses, not the Elastic IP. That is the proxy working:
 
 ```bash
-dig +short A api.otj-services.com @1.1.1.1
+dig +short A otj-services.com @1.1.1.1     # 104.21.x.x / 172.67.x.x — expected
 ```
 
 ### 1.7 Run the test suite locally
@@ -308,8 +314,8 @@ aws ec2 describe-security-groups --region eu-west-2 \
 ```
 
 The ports therefore open when **PR #39** merges, not when this phase ran. That is the moment the box
-becomes publicly reachable, so have DNS (1.6) and Caddy (1.5) in place first — otherwise 80/443 are
-open onto a host with nothing listening for the duration.
+becomes reachable from Cloudflare's edge, so have Caddy and its certificate (1.5, 3.2) in place
+first — otherwise 443 is open onto a host with nothing listening for the duration.
 
 Confirm both containers came up:
 
@@ -343,7 +349,22 @@ tailscale serve status                                     # 8444 and 8443, no 4
 Anything pointing at the tailnet name on `:443` breaks here and needs `:8444`. Confirm 443 is free
 before the next step — `sudo ss -lntp | grep :443` should show nothing.
 
-### 3.2 Install the Caddyfile
+### 3.2 Install the Cloudflare Origin CA certificate
+
+Full instructions in `deploy/prod/README.md` step 4. In short: Cloudflare → SSL/TLS → Origin
+Server → Create Certificate, then put the pair on the box as root, and set the zone's SSL/TLS mode
+to **Full (strict)**.
+
+```bash
+# /etc/caddy/origin-cert.pem   644 root:caddy
+# /etc/caddy/origin-key.pem    640 root:caddy   ← the key is shown once, at creation
+sudo -u caddy test -r /etc/caddy/origin-key.pem && echo "caddy can read the key"
+```
+
+There is **no ACME on this origin** — Let's Encrypt cannot reach a box that only admits Cloudflare.
+If you find yourself watching for a certificate to be issued, something is wrong.
+
+### 3.3 Install the Caddyfile
 
 ```bash
 push_file deploy/prod/Caddyfile /etc/caddy/Caddyfile root 644
@@ -355,31 +376,38 @@ Then on the box:
 ```bash
 sudo caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
 sudo systemctl reload caddy
-sudo journalctl -u caddy -f          # watch the certificate get issued
+sudo journalctl -u caddy -f
 ```
 
 Validate **before** reloading. A reload with a broken config leaves the old config running; a
-restart with one leaves nothing serving.
+restart with one leaves nothing serving. `validate` also opens the certificate and key, so a
+missing or unreadable pair fails here rather than at reload.
+
+The log should say `skipping automatic certificate management because one or more matching
+certificates are already loaded`, and `automatic HTTP->HTTPS redirects are disabled`.
 
 If `validate` says `rate_limit is not a registered directive`, the plugin is missing — go back to
 1.5. Do not "fix" it by deleting the rate limit blocks.
 
-### 3.3 Verify
+### 3.4 Verify
 
 ```bash
-curl -sI https://api.otj-services.com/health | head -1     # 200
-curl -sI http://api.otj-services.com/health  | head -1     # 308 to https
+curl -sI https://otj-services.com/health | head -1            # 200
+curl -sI https://otj-services.com/health | grep -i '^cf-ray'  # came via Cloudflare
 ```
+
+Port 80 is not open and Caddy does not bind it — Cloudflare terminates the visitor's HTTP at its
+edge, so there is no origin redirect to test.
 
 Rate limiting, and the header the mobile client depends on:
 
 ```bash
 for i in $(seq 1 12); do
-  curl -s -o /dev/null -w '%{http_code} ' -X POST https://api.otj-services.com/auth/session \
+  curl -s -o /dev/null -w '%{http_code} ' -X POST https://otj-services.com/auth/session \
     -H 'Content-Type: application/json' -d '{"username":"x","password":"y"}'
 done; echo
 
-curl -si -X POST https://api.otj-services.com/auth/session \
+curl -si -X POST https://otj-services.com/auth/session \
   -H 'Content-Type: application/json' -d '{"username":"x","password":"y"}' | grep -i retry-after
 ```
 
@@ -387,15 +415,24 @@ Expect `401` turning to `429` at the eleventh request, and a `Retry-After` on th
 is missing, delete the `handle_errors` block from the Caddyfile — it matters more to the client than
 the custom message does to anyone.
 
-Finally, confirm nothing else got exposed. **From off the tailnet**, against the public IP:
+**Then send one request from a different network** — a phone off wifi will do. It must come back
+`401`, not `429`. A `429` on the first request from a fresh IP means Caddy is keying the limiter on
+Cloudflare's edge address instead of the real client, i.e. `trusted_proxies` is not matching, and
+every user in the world is sharing one bucket. Fix that before letting anyone on.
+
+Finally, confirm the origin is reachable *only* through Cloudflare. **From off the tailnet**,
+against the public IP:
 
 ```bash
+curl --max-time 5 -k "https://$ELASTIC_IP/health"          # the one people forget
 curl --max-time 5 "http://$ELASTIC_IP:8945/health"
 curl --max-time 5 "http://$ELASTIC_IP:8946/admin/invites"
 ```
 
-Both must fail to connect outright. A `403` would mean the port is reachable and only the app is
-stopping it — stop and fix that.
+All three must time out. A connection refused means the packet reached the host; a `403` would mean
+the port is reachable and only the app is stopping it. If the first one answers, the security group
+still has an `0.0.0.0/0` rule on 443 and the proxy is trivially bypassable — which would defeat the
+reason for choosing orange cloud in the first place.
 
 ---
 
@@ -416,7 +453,7 @@ Confirm the gate holds — from a tailnet device **not** on the allowlist, the s
 Sign up against the public endpoint:
 
 ```bash
-curl -s -X POST https://api.otj-services.com/auth/signup \
+curl -s -X POST https://otj-services.com/auth/signup \
   -H 'Content-Type: application/json' \
   -d '{"inviteCode":"OTJ-XXXX-XXXX","username":"asad","password":"...","learnerId":"..."}'
 # -> 201 {"token":"..."}
@@ -427,7 +464,7 @@ curl -s -X POST https://api.otj-services.com/auth/signup \
 ## After the cutover
 
 - **Update the mobile client.** `otj-mobile/.env.example` still reads
-  `EXPO_PUBLIC_API_URL=https://example.ts.net`; it becomes `https://api.otj-services.com`.
+  `EXPO_PUBLIC_API_URL=https://example.ts.net`; it becomes `https://otj-services.com`.
 - **Your rollback floor has moved.** With the two-service `deploy.sh` installed you cannot roll back
   past the commit that added the admin API. `master`'s old `start.sh` has no `APP_ROLE` handling —
   it always runs the main API — so an older image in the `admin-api` container would listen on 8945

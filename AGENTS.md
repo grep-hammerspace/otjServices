@@ -106,7 +106,7 @@ The jar has two entrypoints, selected by `APP_ROLE` in `docker/start.sh`:
 
 | Role | Main class | Port | Graph | Exposure (AWS box) |
 |---|---|---|---|---|
-| `api` (default) | `Main` | 8945 | `AppComponent` | **public** — Caddy on 443 → `127.0.0.1:8945`; also `tailscale serve --https=8444` |
+| `api` (default) | `Main` | 8945 | `AppComponent` | **public** — Cloudflare → Caddy on 443 → `127.0.0.1:8945`; also `tailscale serve --https=8444` |
 | `admin` | `admin.AdminMain` | 8946 | `AdminComponent` | tailnet only — `tailscale serve --https=8443` |
 
 Same image tag for both, so they cannot drift and a rollback moves them together. The admin
