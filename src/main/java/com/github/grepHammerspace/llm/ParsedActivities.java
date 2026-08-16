@@ -34,7 +34,8 @@ public record ParsedActivities(
             int minutes,
 
             @JsonPropertyDescription("Start time as HH:MM with a two-digit hour, e.g. 09:00. "
-                    + "Empty string when the input gives no start time.")
+                    + "Never empty: a line with no start time is a missing_start_time error, "
+                    + "not an entry.")
             String startTime,
 
             @JsonPropertyDescription("Plain description of what was done.")
@@ -66,6 +67,7 @@ public record ParsedActivities(
     public enum ErrorCode {
         missing_duration,
         missing_description,
+        missing_start_time,
         outside_working_hours
     }
 }
