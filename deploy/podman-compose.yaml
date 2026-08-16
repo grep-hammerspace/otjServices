@@ -55,6 +55,11 @@ services:
       MONGO_URI: mongodb://${MONGO_USER}:${MONGO_PASSWORD}@mongo:27017/otjdb?authSource=admin
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
       JAVA_DEBUG: ${JAVA_DEBUG:-true}
+      # Turns on the OtjDriver submission diagnostics — target URL, the exact JSON posted, and
+      # OneAdvanced's rejection body. Defaults to INFO so the payload and learner ID stay out of
+      # the log unless someone asks for them. Set OTJ_DRIVER_LOG_LEVEL=DEBUG to debug a failing
+      # submission; it needs a container recreate, not an image rebuild.
+      OTJ_DRIVER_LOG_LEVEL: ${OTJ_DRIVER_LOG_LEVEL:-INFO}
     depends_on:
       mongo:
         condition: service_healthy
