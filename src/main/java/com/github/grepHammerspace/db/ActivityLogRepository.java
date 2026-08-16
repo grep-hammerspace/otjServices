@@ -4,6 +4,8 @@ import com.github.grepHammerspace.db.model.ActivityLog;
 import com.mongodb.client.MongoCollection;
 import com.mongodb.client.MongoDatabase;
 import com.mongodb.client.model.Filters;
+import com.mongodb.client.model.FindOneAndUpdateOptions;
+import com.mongodb.client.model.ReturnDocument;
 import com.mongodb.client.model.Sorts;
 import com.mongodb.client.model.Updates;
 import org.bson.Document;
@@ -76,6 +78,45 @@ public class ActivityLogRepository {
         }
         log.info("No unposted activity log {} found to delete for user {}", id.toHexString(), userId);
         return false;
+    }
+
+    /** Replaces the editable fields of one unposted log owned by {@code userId}.
+     *
+     *  <p>Returns {@code null} when the filter matched nothing — unknown id, someone else's id, or
+     *  already posted. Ownership and {@code posted} are part of the filter rather than a check after
+     *  the read, so a caller can never learn that an id they do not own exists. Keeping
+     *  {@code posted} in the filter also settles the race where a submission run posts the row while
+     *  the edit sheet is open: the write matches nothing and the caller gets the same "it's gone"
+     *  answer a deleted row would give.
+     *
+     *  <p>{@code Updates.combine} names exactly the five fields a person can edit.
+     *  {@code tailscaleUserId}, {@code learnerId}, {@code unitId}, {@code activityType} and
+     *  {@code posted} are never the caller's to set. {@link #markAsPosted} is not a precedent to
+     *  copy: it filters on {@code _id} alone, which is safe only because its input came from a
+     *  per-user query. */
+    public ActivityLog updateUnpostedById(String userId, ObjectId id,
+                                          String activityDate, String activityTime,
+                                          int hours, int minutes, String activityImpact) {
+        Document updated = collection.findOneAndUpdate(
+                Filters.and(
+                        Filters.eq("_id", id),
+                        Filters.eq("tailscaleUserId", userId),
+                        Filters.eq("posted", false)),
+                Updates.combine(
+                        Updates.set("activityDate", activityDate),
+                        Updates.set("activityTime", activityTime),
+                        Updates.set("hours", hours),
+                        Updates.set("minutes", minutes),
+                        Updates.set("activityImpact", activityImpact)),
+                // The endpoint answers with the new state, so there is no follow-up read.
+                new FindOneAndUpdateOptions().returnDocument(ReturnDocument.AFTER));
+
+        if (updated == null) {
+            log.info("No unposted activity log {} found to update for user {}", id.toHexString(), userId);
+            return null;
+        }
+        log.info("Updated activity log {} for user {}", id.toHexString(), userId);
+        return fromDoc(updated);
     }
 
     /** Deletes the most recently inserted unposted activity log for the user. Returns {@code true} if one was found and deleted. */

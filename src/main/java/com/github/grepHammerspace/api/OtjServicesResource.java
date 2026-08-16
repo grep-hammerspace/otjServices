@@ -10,6 +10,7 @@ import com.github.grepHammerspace.api.dto.PrepareResponse;
 import com.github.grepHammerspace.api.dto.RegisterRequest;
 import com.github.grepHammerspace.api.dto.SubmitResponse;
 import com.github.grepHammerspace.api.dto.SubmitWithMfaRequest;
+import com.github.grepHammerspace.api.dto.UpdateActivityRequest;
 import com.github.grepHammerspace.auth.Authenticated;
 import com.github.grepHammerspace.auth.PasswordHasher;
 import com.github.grepHammerspace.db.ActivityLogRepository;
@@ -280,6 +281,48 @@ public class OtjServicesResource {
         return Response.noContent().build();
     }
 
+    /** Replaces the editable fields of one unposted row owned by the caller.
+     *
+     * <p>Answers with the updated row rather than 204 so the client can write it straight into its
+     * react-query cache and redraw without a refetch — the same reasoning that made
+     * {@code log-activities} return saved rows rather than just a count. {@code createdAt} is
+     * derived from the ObjectId timestamp, so it does not move when a row is edited: "added 3 hours
+     * ago" keeps meaning when the row was added, not when it was last touched.
+     */
+    @PUT
+    @Path("/pending/{id}")
+    public Response updatePending(@PathParam("id") String id, UpdateActivityRequest body,
+                                  @Context SecurityContext sc) {
+        String userId = resolveUserState(sc);
+        log.info("Received request from user {} to do {} for {}", userId, "update-pending", id);
+
+        if (!ObjectId.isValid(id)) {
+            return jsonError(Response.Status.BAD_REQUEST, "'" + id + "' is not a valid activity id.");
+        }
+        if (body == null) {
+            return jsonError(Response.Status.BAD_REQUEST, "A JSON body is required.");
+        }
+
+        UpdateActivityRequest edit = body.normalised();
+        String problem = edit.validationError();
+        if (problem != null) {
+            log.warn("Rejected edit of {} for user {}: {}", id, userId, problem);
+            return jsonError(Response.Status.BAD_REQUEST, problem);
+        }
+
+        ActivityLog updated = activityLogRepository.updateUnpostedById(userId, new ObjectId(id),
+                edit.activityDate(), edit.activityTime(), edit.hours(), edit.minutes(),
+                edit.activityImpact());
+        if (updated == null) {
+            // Same body as deletePending's, for the same reason: unknown id, someone else's, and
+            // already posted must be indistinguishable. The client treats a 404 here as "the row is
+            // gone" and refetches rather than reporting a failure.
+            return jsonError(Response.Status.NOT_FOUND,
+                    "No unposted activity log with that id for this user.");
+        }
+        return Response.ok(PendingActivity.from(updated)).build();
+    }
+
     /** Completes the Keycloak flow with a typed OTP, then posts everything pending. */
     @POST
     @Path("/submit-with-mfa")
@@ -478,6 +521,17 @@ public class OtjServicesResource {
 
     private static boolean isBlank(String value) {
         return value == null || value.isBlank();
+    }
+
+    /** Builds the {@code {"error": "..."}} body the mobile client's {@code errorMessage()} reads.
+     *
+     * <p>Same shape as the hand-built strings elsewhere in this class, but the message is escaped —
+     * validation messages quote back what the caller sent, and a stray {@code "} in there would
+     * otherwise produce a body that does not parse, costing the user the specific reason. */
+    private static Response jsonError(Response.Status status, String message) {
+        String escaped = message.replace("\\", "\\\\").replace("\"", "\\\"")
+                .replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t");
+        return Response.status(status).entity("{\"error\": \"" + escaped + "\"}").build();
     }
 
     /**
