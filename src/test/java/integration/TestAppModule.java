@@ -1,11 +1,13 @@
 package integration;
 
-import com.github.grepHammerspace.crypto.PasswordCipher;
+import com.github.grepHammerspace.admin.AdminAllowlist;
 import com.github.grepHammerspace.db.model.ActivityLog;
 import com.github.grepHammerspace.llm.LlmResult;
 import com.github.grepHammerspace.llm.LlmService;
 import com.github.grepHammerspace.stateStore.UserStateStore;
-import com.github.grepHammerspace.tailscale.TailscaleIdentityService;
+import com.github.grepHammerspace.web.AzurePush;
+import com.github.grepHammerspace.web.Driver;
+import com.github.grepHammerspace.web.Keycloak;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
 import com.mongodb.client.MongoDatabase;
@@ -25,27 +27,32 @@ import java.util.stream.Collectors;
  * <ul>
  *   <li><b>MongoDB URI</b> — supplied by the Testcontainer rather than read from the environment,
  *       so tests never touch a real database.</li>
- *   <li><b>{@link com.github.grepHammerspace.tailscale.TailscaleIdentityService}</b> — replaced
- *       with a lambda that returns a fixed {@code testUserId}, so tests do not require a running
- *       Tailscale daemon. All scenarios therefore appear to come from the same user.</li>
- *   <li><b>{@link com.github.grepHammerspace.crypto.PasswordCipher}</b> — constructed with a fixed
- *       test-only key instead of reading {@code PASSWORD_ENCRYPTION_KEY} from the environment.</li>
+ *   <li><b>{@link com.github.grepHammerspace.llm.LlmService}</b> — a fake that parses the diff
+ *       locally, so tests never call the Anthropic API.</li>
  * </ul>
  * All other bindings ({@link com.github.grepHammerspace.stateStore.UserStateStore},
- * {@link com.github.grepHammerspace.db.UserRepository}, etc.) are the real production classes.
+ * {@link com.github.grepHammerspace.db.UserRepository},
+ * {@link com.github.grepHammerspace.auth.SessionTokenService}, etc.) are the real production
+ * classes. Scenarios authenticate with real bearer tokens issued by {@link ServerHooks}.
  */
 @Module
 public class TestAppModule {
     private final String mongoUri;
-    private final String testUserId;
 
-    public TestAppModule(String mongoUri, String testUserId) {
+    public TestAppModule(String mongoUri) {
         this.mongoUri = mongoUri;
-        this.testUserId = testUserId;
     }
 
     @Provides @Singleton
     UserStateStore provideUserStateStore() { return new UserStateStore(); }
+
+    /**
+     * A fixed allowlist rather than {@link AdminAllowlist#fromEnv()} — scenarios must not depend
+     * on the developer's environment, and {@code admin_invites.feature} needs a login that is
+     * definitely off the list to prove the gate rejects it.
+     */
+    @Provides @Singleton
+    AdminAllowlist provideAdminAllowlist() { return AdminAllowlist.parse(ServerHooks.ADMIN_LOGIN); }
 
     @Provides @Singleton
     MongoClient provideMongoClient() { return MongoClients.create(mongoUri); }
@@ -53,16 +60,6 @@ public class TestAppModule {
     @Provides @Singleton
     MongoDatabase provideMongoDatabase(MongoClient client) {
         return client.getDatabase("otjdb");
-    }
-
-    @Provides @Singleton
-    TailscaleIdentityService provideTailscaleIdentityService() {
-        return request -> testUserId;
-    }
-
-    @Provides @Singleton
-    PasswordCipher providePasswordCipher() {
-        return new PasswordCipher(testutil.TestKeys.PASSWORD_ENCRYPTION_KEY);
     }
 
     /**
@@ -79,4 +76,23 @@ public class TestAppModule {
             return new LlmResult(ok, List.of());
         };
     }
+
+    /*
+     * The drivers are the third and fourth test doubles. Unlike the LLM, these are not swapped
+     * to save money — they are swapped because the real ones perform a live SSO login against
+     * Keycloak and Microsoft, which no scenario can do. @Singleton so a step definition and the
+     * running resource see the same instance.
+     */
+
+    @Provides @Singleton @Keycloak
+    Driver provideKeycloakDriver(@Keycloak FakeDriver fake) { return fake; }
+
+    @Provides @Singleton @AzurePush
+    Driver provideAzurePushDriver(@AzurePush FakeDriver fake) { return fake; }
+
+    @Provides @Singleton @Keycloak
+    FakeDriver provideKeycloakFake() { return new FakeDriver(); }
+
+    @Provides @Singleton @AzurePush
+    FakeDriver provideAzurePushFake() { return new FakeDriver(); }
 }

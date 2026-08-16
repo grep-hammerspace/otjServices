@@ -1,0 +1,24 @@
+[Unit]
+Description=otjServices admin API (invite codes)
+After=network-online.target
+Wants=network-online.target
+
+[Container]
+Image=__IMAGE_URI__
+ContainerName=admin-api
+Environment=APP_ROLE=admin
+# Loopback only. This is not a defence-in-depth nicety — AdminIdentityFilter trusts the
+# Tailscale-User-Login header precisely because `tailscale serve` is the only process that can
+# reach this port. Publishing it wider silently turns that header into a self-declared identity.
+PublishPort=127.0.0.1:8946:8946
+EnvironmentFile=%h/otj-admin-api.env
+HealthCmd=curl -f http://localhost:8946/health || exit 1
+HealthInterval=15s
+HealthRetries=3
+
+[Service]
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

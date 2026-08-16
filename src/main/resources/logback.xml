@@ -5,8 +5,18 @@
     </encoder>
   </appender>
 
-  <logger name="com.github.grepHammerspace.web.OtjDriver" level="DEBUG"/>
-  <logger name="com.github.grepHammerspace.web.AzureIdDriver" level="DEBUG"/>
+  <!-- The two login drivers deliberately run at the root level. They handle OneAdvanced
+       credentials and Microsoft flow tokens, and were previously pinned to DEBUG, which put
+       those tokens in the production log. The debug lines that remain are safe to enable, but
+       enable them on purpose rather than by default.
+
+       OTJ_DRIVER_LOG_LEVEL is that "on purpose": set it to DEBUG in the environment to get the
+       full submission diagnostics — target URL, the exact JSON posted, and OneAdvanced's own
+       response body when a post fails. No rebuild needed, and it reverts on the next restart if
+       you forget. See OtjDriver.submitPendingOtjs for what it exposes and why it is not on by
+       default. -->
+  <logger name="com.github.grepHammerspace.web.OtjDriver"
+          level="${OTJ_DRIVER_LOG_LEVEL:-INFO}"/>
 
   <!-- Suppress noisy MongoDB cluster monitor heartbeat logs -->
   <logger name="org.mongodb.driver" level="WARN"/>

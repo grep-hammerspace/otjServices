@@ -2,12 +2,14 @@ package com.github.grepHammerspace.bind;
 
 import com.anthropic.client.AnthropicClient;
 import com.anthropic.client.okhttp.AnthropicOkHttpClient;
-import com.github.grepHammerspace.crypto.PasswordCipher;
 import com.github.grepHammerspace.llm.LlmService;
 import com.github.grepHammerspace.llm.LlmServiceImpl;
 import com.github.grepHammerspace.stateStore.UserStateStore;
-import com.github.grepHammerspace.tailscale.TailscaleIdentityService;
-import com.github.grepHammerspace.tailscale.TailscaleIdentityServiceImpl;
+import com.github.grepHammerspace.web.AzureIdDriver;
+import com.github.grepHammerspace.web.AzurePush;
+import com.github.grepHammerspace.web.Driver;
+import com.github.grepHammerspace.web.Keycloak;
+import com.github.grepHammerspace.web.OtjDriver;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
 import com.mongodb.client.MongoDatabase;
@@ -28,12 +30,6 @@ public class AppModule {
     @Singleton
     UserStateStore provideUserStateStore() {
         return new UserStateStore();
-    }
-
-    @Provides
-    @Singleton
-    TailscaleIdentityService provideTailscaleIdentityService(TailscaleIdentityServiceImpl impl) {
-        return impl;
     }
 
     @Provides
@@ -62,9 +58,23 @@ public class AppModule {
         return impl;
     }
 
+    /*
+     * The two drivers are bound behind the Driver interface rather than injected as concrete
+     * types. That keeps the resource from naming implementations, and it is what lets the
+     * integration tests substitute a fake — otherwise a scenario touching prepare would dial
+     * Keycloak and Microsoft for real. Deliberately not @Singleton: each prepare needs its own
+     * cookie jar.
+     */
+
     @Provides
-    @Singleton
-    PasswordCipher providePasswordCipher() {
-        return new PasswordCipher();
+    @Keycloak
+    Driver provideKeycloakDriver(OtjDriver driver) {
+        return driver;
+    }
+
+    @Provides
+    @AzurePush
+    Driver provideAzurePushDriver(AzureIdDriver driver) {
+        return driver;
     }
 }

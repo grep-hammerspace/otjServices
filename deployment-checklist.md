@@ -80,11 +80,22 @@ On the box:
       sudo loginctl enable-linger otjapp
       ```
 - [ ] As `otjapp`, create `~/otj-deploy/` and paste in the contents of
-      `deploy/prod/deploy.sh` and `deploy/prod/hours-api.container.template`
-      from this repo, then `chmod +x ~/otj-deploy/deploy.sh`
+      `deploy/prod/deploy.sh`, `deploy/prod/hours-api.container.template` and
+      `deploy/prod/admin-api.container.template` from this repo, then
+      `chmod +x ~/otj-deploy/deploy.sh`
 - [ ] As `otjapp`, create `~/otj-hours-api.env` (`chmod 600`) holding
-      `MONGO_URI=`, `ANTHROPIC_API_KEY=`, `PASSWORD_ENCRYPTION_KEY=`
+      `MONGO_URI=`, `ANTHROPIC_API_KEY=`
+- [ ] As `otjapp`, create `~/otj-admin-api.env` (`chmod 600`) holding
+      `MONGO_URI=` and `ADMIN_ALLOWED_LOGINS=` — the latter a comma-separated
+      list of tailnet logins permitted to mint and revoke invite codes. If it is
+      unset the admin API rejects every request, which is the intended failure
+      mode but an easy one to misread as a broken deploy. No `ANTHROPIC_API_KEY`
+      here: the admin graph never builds the LLM client.
 - [ ] `tailscale serve --bg --https=443 http://127.0.0.1:8945`
+- [ ] `tailscale serve --bg --https=8443 http://127.0.0.1:8946` — the admin API,
+      on its own tailnet port. Keep it off 443: once step 09 puts a public domain
+      in front of the main API, anything sharing that listener inherits its
+      exposure, and invite minting is the last thing that should.
 
 Once this is done, merges to `master` build the app image, push it to ECR
 tagged with the commit SHA, and run `deploy.sh` on the box via SSM
@@ -98,3 +109,14 @@ for ordinary deploys. To roll back, re-run `deploy.sh` on the box (or via
       → 200
 - [ ] A real register/log-activity call resolves the correct tailnet identity
       in the app logs
+- [ ] Admin API reachable and gated. From an allowlisted device:
+      ```
+      curl -X POST https://hours-api.<tailnet>.ts.net:8443/admin/invites \
+        -H 'Content-Type: application/json' -d '{"note":"first code"}'
+      ```
+      → 201 with a code. From a tailnet device that is *not* on the allowlist,
+      the same call → 403. If the second one succeeds, the allowlist is not
+      being applied — stop and fix it before minting anything real.
+- [ ] `curl https://hours-api.<tailnet>.ts.net:8443/admin/invites` from off the
+      tailnet → no route at all (not a 403). The port must not be publicly
+      routable; 403 would mean it is reachable and only the app is stopping it.

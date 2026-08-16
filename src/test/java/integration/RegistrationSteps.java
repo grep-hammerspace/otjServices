@@ -30,8 +30,8 @@ public class RegistrationSteps {
         String body = String.format(
             "{\"username\":\"%s\",\"password\":\"%s\",\"learnerId\":\"%s\"}",
             username, password, learnerId);
-        Request req = new Request.Builder()
-            .url(base + path)
+        Request req = HttpSteps.authenticated(new Request.Builder()
+            .url(base + path))
             .post(RequestBody.create(body, JSON))
             .build();
         lastResponse = HTTP.newCall(req).execute();
@@ -54,30 +54,43 @@ public class RegistrationSteps {
     }
 
     /**
-     * Queries MongoDB for a user document by {@code username} and asserts that each field named
+     * Queries MongoDB for a user document by {@code appUsername} and asserts that each field named
      * in the DataTable matches the stored value. The DataTable is a two-column map of
      * {@code field | expected value} — only the listed fields are checked, so scenarios only
      * need to specify the fields they care about.
      *
-     * <p>The {@code password} field is stored encrypted (see {@code PasswordCipher}) with a
-     * random IV each time, so it can never match an exact expected value — it is checked with
-     * {@code startsWith} instead of equality.
+     * <p>The {@code appPasswordHash} field is a bcrypt hash with a random salt each time, so it
+     * can never match an exact expected value — it is checked with {@code startsWith} instead of
+     * equality.
      */
     @And("user {string} in the users collection has fields:")
-    public void userHasFields(String username, io.cucumber.datatable.DataTable table) {
+    public void userHasFields(String appUsername, io.cucumber.datatable.DataTable table) {
         MongoDatabase db = (MongoDatabase) ScenarioContext.get("db");
         org.bson.Document doc = db.getCollection("users")
-            .find(new org.bson.Document("username", username))
+            .find(new org.bson.Document("appUsername", appUsername))
             .first();
-        assertNotNull(doc, "Expected user '" + username + "' in MongoDB but found none");
+        assertNotNull(doc, "Expected user '" + appUsername + "' in MongoDB but found none");
         table.asMap().forEach((field, expected) -> {
-            if (field.equals("password")) {
+            if (field.equals("appPasswordHash")) {
                 assertTrue(doc.getString(field).startsWith(expected),
-                    "Field 'password' should start with '" + expected + "' for user '" + username + "'");
+                    "Field 'appPasswordHash' should start with '" + expected + "' for user '" + appUsername + "'");
             } else {
                 assertEquals(expected, doc.getString(field),
-                    "Field '" + field + "' mismatch for user '" + username + "'");
+                    "Field '" + field + "' mismatch for user '" + appUsername + "'");
             }
         });
+    }
+
+    /** Asserts the stored document holds no field from which a password could be recovered. */
+    @And("no recoverable password is stored for user {string}")
+    public void noRecoverablePassword(String appUsername) {
+        MongoDatabase db = (MongoDatabase) ScenarioContext.get("db");
+        org.bson.Document doc = db.getCollection("users")
+            .find(new org.bson.Document("appUsername", appUsername))
+            .first();
+        assertNotNull(doc, "Expected user '" + appUsername + "' in MongoDB but found none");
+        assertNull(doc.get("password"), "legacy recoverable 'password' field must not exist");
+        assertTrue(doc.getString("appPasswordHash").startsWith("$2a$"),
+            "appPasswordHash must be a bcrypt hash");
     }
 }

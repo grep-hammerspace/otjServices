@@ -101,15 +101,17 @@ public class OtjDriver implements Driver {
 
             if (doc.selectFirst("input[name=otp]") != null) {
                 Element form = doc.selectFirst("form");
-                if (form == null) throw new IOException("MFA page has no form — URL: " + currentUrl);
+                if (form == null) throw new IOException("MFA page has no form — URL: " + SafeUrl.redact(currentUrl));
                 mfaActionUrl = form.absUrl("action");
-                log.info("MFA page reached after {} step(s), action={}", step - 1, mfaActionUrl);
+                // Keycloak action URLs carry session_code / execution / tab_id, which identify
+                // this live authentication attempt.
+                log.info("MFA page reached after {} step(s), action={}", step - 1, SafeUrl.redact(mfaActionUrl));
                 return PrepareResult.mfaPushSent();
             }
 
             Element form = doc.selectFirst("form");
             if (form == null) {
-                throw new IOException("No form found at step " + step + " — URL: " + currentUrl);
+                throw new IOException("No form found at step " + step + " — URL: " + SafeUrl.redact(currentUrl));
             }
 
             FormBody.Builder formBody = new FormBody.Builder();
@@ -132,7 +134,7 @@ public class OtjDriver implements Driver {
             }
 
             String action = form.absUrl("action");
-            log.info("Step {} — POSTing to {}", step, action);
+            log.info("Step {} — POSTing to {}", step, SafeUrl.redact(action));
 
             Request postRequest = new Request.Builder()
                     .url(action)
@@ -147,7 +149,7 @@ public class OtjDriver implements Driver {
             resp.close();
         }
 
-        throw new IOException("Did not reach MFA page after 5 steps — last URL: " + currentUrl);
+        throw new IOException("Did not reach MFA page after 5 steps — last URL: " + SafeUrl.redact(currentUrl));
     }
 
     /**
@@ -171,7 +173,7 @@ public class OtjDriver implements Driver {
         try (Response response = httpClient.newCall(request).execute()) {
             response.body().string(); // consume to complete the redirect chain
             String landingUrl = response.request().url().toString();
-            log.info("MFA submitted, landing URL: {}", landingUrl);
+            log.info("MFA submitted, landing URL: {}", SafeUrl.redact(landingUrl));
             log.debug("Cookies after MFA: {}", ((InMemoryCookieJar) httpClient.cookieJar()).cookieNames());
             if (!landingUrl.startsWith("https://education.oneadvanced.com")) {
                 throw new IOException("MFA code rejected — still on login page. Use a fresh OTP and try again.");
@@ -184,7 +186,7 @@ public class OtjDriver implements Driver {
      * The httpClient already carries the authenticated session cookies from the login flow.
      */
     @Override
-    public OtjSubmitResult submitPendingOtjs(String userId) {
+    public OtjSubmitResult submitPendingOtjs(String userId, String learnerId) {
         List<ActivityLog> pending = activityLogRepository.getUnpostedActivityLogsFor(userId);
 
         if (pending.isEmpty()) {
@@ -192,15 +194,20 @@ public class OtjDriver implements Driver {
             return new OtjSubmitResult(List.of(), List.of());
         }
 
-        String postUrl = String.format(ACTIVITY_LOG_API, pending.get(0).learnerId().strip());
-        log.info("Submitting {} pending OTJ(s) to {} for user {}", pending.size(), postUrl, userId);
+        String postUrl = String.format(ACTIVITY_LOG_API, learnerId.strip());
+        // At INFO the URL is withheld: the learner ID is a path segment and it identifies the
+        // student. At DEBUG it is printed in full, because when a submission is being rejected
+        // the target is the first thing you need to see. See logback.xml.
+        log.info("Submitting {} pending OTJ(s) for user {}", pending.size(), userId);
+        log.debug("POST target: {}", postUrl);
 
         List<String> posted = new ArrayList<>();
         List<String> failed = new ArrayList<>();
 
         for (ActivityLog activityLog : pending) {
             try {
-                String json = mapper.writeValueAsString(buildPayload(activityLog));
+                String json = mapper.writeValueAsString(buildPayload(activityLog, learnerId));
+                log.debug("POST body for activity log {}: {}", activityLog.id(), json);
 
                 Request request = new Request.Builder()
                         .url(postUrl)
@@ -215,15 +222,26 @@ public class OtjDriver implements Driver {
                         log.info("Posted activity log {} ({})", activityLog.id(), activityLog.activityDate());
                     } else {
                         failed.add(activityLog.id());
-                        log.warn("Failed to post activity log {} — HTTP {} WWW-Authenticate: [{}] body: {}",
-                                activityLog.id(), response.code(),
-                                response.header("WWW-Authenticate"),
-                                response.body() != null ? response.body().string() : "null");
+                        // Status only at WARN: the WWW-Authenticate challenge and the response
+                        // body are upstream material that can carry session and account detail.
+                        log.warn("Failed to post activity log {} — HTTP {}", activityLog.id(), response.code());
+                        // At DEBUG, the whole thing. OneAdvanced puts the actual reason a post was
+                        // rejected in the body, so withholding it is what makes a failing
+                        // submission undebuggable from logs alone.
+                        if (log.isDebugEnabled()) {
+                            log.debug("Rejected activity log {} — HTTP {}, WWW-Authenticate: [{}], body: {}",
+                                    activityLog.id(), response.code(),
+                                    response.header("WWW-Authenticate"),
+                                    response.body() == null ? "<none>" : response.body().string());
+                        }
                     }
                 }
             } catch (Exception e) {
                 failed.add(activityLog.id());
-                log.error("Exception posting activity log {}: {}", activityLog.id(), e.getMessage());
+                // Type only at ERROR: an OkHttp failure names the URL it was calling, and that
+                // URL has the learner ID in its path.
+                log.error("Exception posting activity log {}: {}", activityLog.id(), e.getClass().getSimpleName());
+                log.debug("Exception posting activity log {}", activityLog.id(), e);
             }
         }
 
@@ -231,19 +249,24 @@ public class OtjDriver implements Driver {
         return new OtjSubmitResult(posted, failed);
     }
 
-    private Map<String, Object> buildPayload(ActivityLog log) {
+    /**
+     * @param learnerId the account's current learner ID, which wins over the one stamped on the
+     *                  row when it was logged — see {@link Driver#submitPendingOtjs}.
+     */
+    private Map<String, Object> buildPayload(ActivityLog activityLog, String learnerId) {
         Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("learnerId", log.learnerId().strip());
-        payload.put("activityImpact", log.activityImpact());
+        payload.put("learnerId", learnerId.strip());
+        payload.put("activityImpact", activityLog.activityImpact());
         payload.put("unitId", "ef974f73-5d9d-447e-8652-379ba9535229");
-        payload.put("activityDate", log.activityDate().replace("/", "-"));
-        payload.put("activityTime", "T" + log.activityTime() + ":00");
+        payload.put("activityDate", activityLog.activityDate().replace("/", "-"));
+        payload.put("activityTime", "T" + activityLog.activityTime() + ":00");
         // ActivityLog.activityType() is always 0 (never set by the LLM parser) — the
         // real OneAdvanced activity-log API expects a fixed code here, confirmed working at 16.
         payload.put("activityType", 16);
-        payload.put("hours", log.hours());
-        payload.put("minutes", String.format("%02d", log.minutes()));
-        OtjDriver.log.info("Posting payload: {}", payload);
+        payload.put("hours", activityLog.hours());
+        payload.put("minutes", String.format("%02d", activityLog.minutes()));
+        // No log line here: the caller logs the serialised JSON, which is strictly more useful
+        // than a summary of the map that produced it.
         return payload;
     }
 }
