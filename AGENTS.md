@@ -129,7 +129,7 @@ Anonymous:
 | Method | Path | Body → Result |
 |---|---|---|
 | POST | `/auth/signup` | `{inviteCode, username, password, learnerId}` → 201 `{token}` |
-| POST | `/auth/session` | `{username, password}` → 200 `{token}` |
+| POST | `/auth/session` | `{username, password}` → 200 `{token}`, or 429 + `Retry-After` |
 | DELETE | `/auth/session` | `Authorization: Bearer …` → 204 |
 | GET | `/health` | 200 |
 
@@ -270,6 +270,23 @@ on the prod box):
 
 ## Conventions and gotchas
 
+- **Login is rate limited per username**, 10 attempts per 15 minutes, via `auth/RateLimiter` — an
+  in-memory sliding window, correct because there is exactly one app instance. Things to preserve:
+  - The check sits **above `findByAppUsername`**, so an unknown username is limited exactly like a
+    real one and a 429 is never an account-existence oracle. Moving it below would create one.
+  - It is also above the bcrypt verify, which is the cost being shed.
+  - **Successes count too.** A flood of valid logins is still a flood, and counting only failures
+    would leave an attacker holding a correct password an unmetered channel.
+  - Keys are truncated and idle keys are swept, because the key is the *submitted* username and an
+    attacker can otherwise grow the map one invented name at a time.
+  - `tryAcquire` rejects a window longer than `RateLimiter.MAX_WINDOW`; the sweep is global and
+    prunes against that bound, so a longer window would have its live counters collected.
+- **There is no signup rate limit, deliberately.** Behind `tailscale serve` every request comes
+  from `127.0.0.1` and `X-Forwarded-For` is unverified, so there is no forgery-resistant per-client
+  key. Keying on the invite code would let an attacker lock a legitimate invitee out of the only
+  code they have, and a global limit would let anyone deny signup to everybody. Invite codes carry
+  40 bits, which `InviteCodeGenerator`'s javadoc rightly calls far past online guessing. Revisit
+  when there is an edge proxy with a real client IP.
 - Nothing logs OneAdvanced credentials, MFA codes, Microsoft flow tokens, cookie values or
   learner IDs. The app's own `userId` is the most that should reach a log line. This is
   enforced, not merely intended:

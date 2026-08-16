@@ -1,9 +1,11 @@
 package com.github.grepHammerspace.api;
 
+import com.github.grepHammerspace.api.dto.ApiError;
 import com.github.grepHammerspace.api.dto.SessionRequest;
 import com.github.grepHammerspace.api.dto.SignupRequest;
 import com.github.grepHammerspace.api.dto.TokenResponse;
 import com.github.grepHammerspace.auth.PasswordHasher;
+import com.github.grepHammerspace.auth.RateLimiter;
 import com.github.grepHammerspace.auth.SessionTokenService;
 import com.github.grepHammerspace.db.InviteCodeRepository;
 import com.github.grepHammerspace.db.UserRepository;
@@ -22,7 +24,9 @@ import org.slf4j.LoggerFactory;
 
 import javax.inject.Inject;
 import javax.inject.Singleton;
+import java.time.Duration;
 import java.time.Instant;
+import java.util.OptionalLong;
 import java.util.UUID;
 
 /**
@@ -57,20 +61,45 @@ public class AuthResource {
     private static final String INVITE_REJECTED = "{\"error\": \"Invalid, used or expired invite code\"}";
     private static final String CREDENTIALS_REJECTED = "{\"error\": \"Invalid username or password\"}";
 
+    /**
+     * Login attempts allowed per username per window.
+     *
+     * <p>Usernames are the brute-force surface — they are chosen by the user, may be guessable,
+     * and unlike a token there is no rate at which trying them is legitimate beyond a person
+     * mistyping. Successes count too: a flood of successful logins is still a flood, and
+     * excluding them would leave an attacker with a valid password an unmetered channel.
+     */
+    private static final int LOGIN_LIMIT = 10;
+    private static final Duration LOGIN_WINDOW = Duration.ofMinutes(15);
+
+    /**
+     * Deliberately distinct from {@link #CREDENTIALS_REJECTED}.
+     *
+     * <p>Saying "you have tried too often" discloses nothing an attacker can use: the limiter is
+     * keyed on the <em>submitted</em> username whether or not an account exists, so a 429 never
+     * reveals that one does. Telling a person who has mistyped their password to wait, rather
+     * than repeating "invalid username or password", is worth more than secrecy that isn't there.
+     */
+    private static final ApiError TOO_MANY_LOGINS = new ApiError(
+            "Too many login attempts for that username. Wait a few minutes and try again.");
+
     private final UserRepository userRepository;
     private final InviteCodeRepository inviteCodeRepository;
     private final SessionTokenService sessionTokenService;
     private final PasswordHasher passwordHasher;
+    private final RateLimiter rateLimiter;
 
     @Inject
     public AuthResource(UserRepository userRepository,
                         InviteCodeRepository inviteCodeRepository,
                         SessionTokenService sessionTokenService,
-                        PasswordHasher passwordHasher) {
+                        PasswordHasher passwordHasher,
+                        RateLimiter rateLimiter) {
         this.userRepository = userRepository;
         this.inviteCodeRepository = inviteCodeRepository;
         this.sessionTokenService = sessionTokenService;
         this.passwordHasher = passwordHasher;
+        this.rateLimiter = rateLimiter;
     }
 
     /**
@@ -111,6 +140,21 @@ public class AuthResource {
     @Path("/session")
     public Response login(@Valid SessionRequest body) {
         String username = body.username().strip();
+
+        // Before the lookup and before the bcrypt verify below. Those are the costs being shed —
+        // checking afterwards would still pay ~2^12 rounds per attempt and limit nothing that
+        // matters.
+        OptionalLong retryAfter = rateLimiter.tryAcquire(
+                "login:user:" + username, LOGIN_LIMIT, LOGIN_WINDOW);
+        if (retryAfter.isPresent()) {
+            log.info("Rate-limited login attempt for username {}", username);
+            // 429 as a raw int: Jakarta RS 3.1 has no TOO_MANY_REQUESTS constant.
+            return Response.status(429)
+                    .header(HttpHeaders.RETRY_AFTER, retryAfter.getAsLong())
+                    .entity(TOO_MANY_LOGINS)
+                    .build();
+        }
+
         User user = userRepository.findByAppUsername(username);
 
         // Verify even when the user is unknown, so both failures cost the same bcrypt work.

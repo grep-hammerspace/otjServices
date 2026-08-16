@@ -110,6 +110,7 @@ public class SignupSteps {
         String body = response.body() != null ? response.body().string() : "";
         ScenarioContext.put("lastResponseCode", response.code());
         ScenarioContext.put("lastResponseBody", body);
+        ScenarioContext.put("lastResponseHeaders", response.headers());
 
         if (!body.isBlank() && body.trim().startsWith("{")) {
             JsonNode token = MAPPER.readTree(body).get("token");
