@@ -223,15 +223,20 @@ Two **protected** branches, both deployment targets:
 
 Do not push directly to either; open a PR.
 
-`staging` is the working integration branch for the in-flight multi-user auth
-rollout (steps 01–08). It is well ahead of `master`: session tokens, bcrypt users,
-invite-gated signup and `SessionRepository` all live there and have not reached
-`master` yet. `master` still carries the older `tailscale/TailscaleIdentity*` classes
-that `staging` removed — so if a file exists in one branch and not the other, check
-which side you are on before concluding something is missing.
+`staging` was the working integration branch for the multi-user auth rollout
+(steps 01–08). **That rollout has landed:** `staging` was merged into `master` by
+PR #21 on 2026-08-16, so session tokens, bcrypt users, invite-gated signup and
+`SessionRepository` are all on `master` now, and the old
+`tailscale/TailscaleIdentity*` classes are gone from it. `master` is the branch that
+deploys and is currently *ahead* of `staging` — reverse of the old advice. Treat
+`master` as the source of truth unless you have a reason not to.
 
-Step branches are cut fresh off `staging` and merged back into it. For stacked PRs
-use a regular merge or rebase, **not squash**.
+The one place `Tailscale-User-Login` is still trusted is `admin/AdminIdentityFilter`,
+for the admin API on 8946, and that rests entirely on nothing but loopback and
+`tailscale serve` being able to reach that port.
+
+Step branches are cut fresh off the branch they target and merged back into it. For
+stacked PRs use a regular merge or rebase, **not squash**.
 
 ## Build, run, test
 
@@ -269,7 +274,7 @@ on the prod box):
   that never touch the LLM. `dummy` is fine for auth work.
 - `LLM_API_KEY` / `LLM_BASE_URL` / `LLM_MODEL` — for the in-progress move to an
   OpenAI-compatible provider (OpenRouter/Groq/NIM) on the `use-free-ai` branch; not
-  yet read by `AppModule` on `staging`.
+  yet read by `AppModule` on `master`.
 - `APP_ROLE` — `api` (default) or `admin`; selects the entrypoint.
 - `ADMIN_ALLOWED_LOGINS` — comma-separated tailnet logins allowed to mint/revoke invite
   codes. Admin process only. Unset means nobody.

@@ -7,6 +7,31 @@ Delete this file once it has been run. Ongoing operations live in `deploy/prod/R
 
 ---
 
+## Status as of 2026-08-16 — the merge has already happened
+
+**Phase 2 is done and most of Phase 1 with it.** Verified against the live box
+(`i-06dd830c8fbde9685`) and `origin/master`, not assumed:
+
+| Step | State |
+|---|---|
+| 1.2 admin env file | **done** — `~otjapp/otj-admin-api.env`, mode 600 |
+| 1.3 deploy script + templates | **done** — all three files in `~otjapp/otj-deploy/` |
+| 1.5 install Caddy | **not done** — no `caddy` binary, no `/etc/caddy` |
+| 1.6 point DNS at the box | **not done** — `api.otj-services.com` does not resolve |
+| 2 merge `staging` → `master` | **done** — PR #21, `origin/master` at `583ddff` |
+| — app deployed | **done** — both containers running `583ddff`, `/health` 200 on 8945 and 8946 |
+| 3 bring up the public edge | **not done** — security group still has zero ingress rules |
+| 4 mint the first invite | **not done** |
+
+So what is left is Phase 1.5, Phase 1.6, Phase 3 and Phase 4 — the edge itself. **Read Phase 3
+from `deploy/prod/README.md` ("Provisioning the edge") rather than from this file**, which is
+kept only for the reasoning behind the ordering and for Phase 4.
+
+Two consequences of the merge already being live, both of which make the rest *easier* than
+this document originally assumed — see the next section.
+
+---
+
 ## What this merge changes
 
 | | Before (`master`) | After |
@@ -26,28 +51,47 @@ The Atlas user's `readWrite` role covers `createIndex`.
 
 ---
 
-## The one thing you must not do
+## The one thing you must not do — **no longer applies**
 
-**Do not let Caddy serve traffic before the new image is running.**
+This was the load-bearing constraint of the original plan, and it is now satisfied. It is kept
+here so that nobody re-derives it from the old `master` and re-imposes the ordering.
 
-`master`'s app derives identity from a client-supplied header. `TailscaleIdentityHelper` reads
-`Tailscale-User-Login` off the request and trusts it, safe only because nothing but loopback can
-reach 8945. **Caddy does not strip that header.** If Caddy proxies public traffic while the old
-image is running, anyone can send `Tailscale-User-Login: <anything>` and be treated as that user.
+> **Do not let Caddy serve traffic before the new image is running.**
+>
+> `master`'s app derives identity from a client-supplied header. `TailscaleIdentityHelper` reads
+> `Tailscale-User-Login` off the request and trusts it, safe only because nothing but loopback can
+> reach 8945. **Caddy does not strip that header.** If Caddy proxies public traffic while the old
+> image is running, anyone can send `Tailscale-User-Login: <anything>` and be treated as that user.
+>
+> CI makes this a live race, because it opens the door before it swaps the app:
+>
+> ```
+> cdk deploy  →  security group opens 80/443     ← public traffic possible from here
+>    ↓
+> docker build + push to ECR                     ← several minutes
+>    ↓
+> ssm send-command → deploy.sh                   ← new image finally running
+> ```
+>
+> The mitigation is ordering: install Caddy in Phase 1 but **leave the Caddyfile off the box** until
+> Phase 3.
 
-CI makes this a live race, because it opens the door before it swaps the app:
+**Why it is now moot.** The race existed only in the window between opening the ports and
+replacing the old image. That window is closed: the merged image is already deployed and serving,
+and on today's `master` `Tailscale-User-Login` is read by `AdminIdentityFilter` alone — the admin
+API on 8946, which Caddy never proxies. The main API on 8945 authenticates with bearer tokens via
+`AuthenticationFilter`. Confirm before relying on this:
 
+```bash
+git grep -n 'Tailscale-User-Login' origin/master -- src/main    # AdminIdentityFilter only
 ```
-cdk deploy  →  security group opens 80/443     ← public traffic possible from here
-   ↓
-docker build + push to ECR                     ← several minutes
-   ↓
-ssm send-command → deploy.sh                   ← new image finally running
-```
 
-The mitigation is ordering: install Caddy in Phase 1 but **leave the Caddyfile off the box** until
-Phase 3. A Caddy with no site config for your domain serves nothing, so the open ports lead nowhere
-until you are ready.
+So Caddy and the Caddyfile can now go on in one pass; there is no need to install Caddy config-less
+and wait. The remaining ordering constraint is a much duller one — free port 443 from `tailscaled`
+*before* installing the Caddyfile, per `deploy/prod/README.md`.
+
+**What has not changed:** the admin API's safety still rests entirely on nothing but loopback and
+`tailscale serve` reaching 8946. The Caddyfile proxies only to 8945. Do not add an 8946 upstream.
 
 ---
 
@@ -115,9 +159,15 @@ plain text transfer would mangle. If you paste by hand instead, use a **quoted**
 Every step is inert. `deploy.sh` and the templates execute only when CI triggers them, and Caddy has
 no config for your domain until Phase 3.
 
-### 1.1 Merge PR #39 into `staging`
+### 1.1 Merge PR #39 into `master` — **outstanding**
 
-### 1.2 Create the admin API's environment file
+Retargeted from `staging` to `master` on 2026-08-16: `staging` was merged into `master` by PR #21
+and is now the older of the two, so the original base would have produced a diff against a branch
+nothing deploys from. `staging` is still an ancestor of `master`, so the retarget is clean.
+
+PR #39 also now carries the container healthcheck fix — see 1.3.
+
+### 1.2 Create the admin API's environment file — **done**
 
 **Before 1.3.** As `otjapp`, mode 600:
 
@@ -131,13 +181,26 @@ No `ANTHROPIC_API_KEY` — the admin Dagger graph never constructs the LLM clien
 An unset or wrong `ADMIN_ALLOWED_LOGINS` denies **everyone**. That is the intended failure mode, but
 it reads exactly like a broken deploy, and it locks you out of minting the first invite.
 
-### 1.3 Push the deploy script and templates
+### 1.3 Push the deploy script and templates — **done, but see the healthcheck note**
 
 ```bash
 push_file deploy/prod/deploy.sh                     /home/otjapp/otj-deploy/deploy.sh otjapp 755
 push_file deploy/prod/admin-api.container.template  /home/otjapp/otj-deploy/admin-api.container.template
 push_file deploy/prod/hours-api.container.template  /home/otjapp/otj-deploy/hours-api.container.template
 ```
+
+**Both containers currently report `unhealthy` while serving `/health` 200 on 8945 and 8946.** The
+templates' `HealthCmd=curl -f ...` runs *inside* the container, and the runtime image
+(`eclipse-temurin:25-jre`, Ubuntu 26.04) ships no HTTP client at all — no curl, no wget, no nc. The
+probe exits 127 with `curl: not found` on every tick; the failing streak was 162 when this was
+found. Nothing was actually wrong with the app.
+
+It stayed hidden because `deploy.sh` health-checks from the *host*, where curl exists — so deploys
+go green and only `podman ps` shows it. PR #39 fixes it by installing curl in the runtime stage of
+`docker/otjService.Dockerfile`. It needs a rebuild and redeploy, not just a template push.
+
+Until that lands, **do not use `podman ps` health as a cutover signal** — curl from the host, or
+`podman inspect <name> --format '{{json .State.Health}}'` to see the real reason.
 
 `hours-api.container.template` is functionally unchanged, but the box's copy was installed by
 pasting and carries ~1.7 KB of trailing whitespace on 19 of its 20 lines (389 bytes in the repo,
@@ -187,16 +250,21 @@ sudo apt-mark hold caddy
 cannot parse our Caddyfile at all — the public API would fail to start. Use `sudo caddy upgrade` for
 updates; it preserves the module set.
 
-**Leave `/etc/caddy/Caddyfile` as the packaged default.** That is what keeps you safe during the
-merge window.
+~~**Leave `/etc/caddy/Caddyfile` as the packaged default.** That is what keeps you safe during the
+merge window.~~ **No longer required** — the merge window has closed, so you can go straight on to
+Phase 3 and install the Caddyfile in the same session. See "The one thing you must not do" above.
 
-### 1.6 Point DNS at the box
+### 1.6 Point DNS at the box — **outstanding, and it gates everything else**
 
-Cloudflare dashboard, zone `otj-services.com`:
+Cloudflare dashboard, zone `otj-services.com` (the zone already exists and is delegated —
+`dan.ns.cloudflare.com` / `ollie.ns.cloudflare.com` — it simply has no `api` record yet):
 
 ```
-Type: A    Name: api    Content: <ELASTIC_IP>    Proxy status: DNS only (grey cloud)
+Type: A    Name: api    Content: 18.169.107.161    Proxy status: DNS only (grey cloud)
 ```
+
+`18.169.107.161` is the current `ElasticIp` output of `OtjServicesStack`. Re-read it rather than
+trusting this line if the stack has been recreated since 2026-08-16.
 
 Grey cloud, not orange — orange changes both certificate issuance and what `{remote_host}` means in
 the Caddyfile, and belongs in its own deliberate change.
@@ -221,13 +289,27 @@ DOCKER_HOST=unix:///run/user/1000/podman/podman.sock TESTCONTAINERS_RYUK_DISABLE
 
 ---
 
-## Phase 2 — merge
+## Phase 2 — merge — **done (PR #21)**
 
-Merge `staging` → `master`.
+Merge `staging` → `master`. `origin/master` is at `583ddff`, and that image is what both containers
+are running.
 
-CI runs `mvn -B test` → `cdk deploy OtjServicesStack` (this opens 80 and 443) → build and push the
-image → `deploy.sh` over SSM → poll for health. Watch it to green. Nothing is publicly reachable
-during this window because Caddy still has no site config for your domain.
+CI runs `mvn -B test` → `cdk deploy OtjServicesStack` → build and push the image → `deploy.sh` over
+SSM → poll for health.
+
+**Correction to the original text: this merge did *not* open 80 and 443.** The ingress rules live in
+PR #39, which was still unmerged, so `cdk deploy` ran against a stack that opens nothing. The
+security group still has zero ingress rules today:
+
+```bash
+aws ec2 describe-security-groups --region eu-west-2 \
+  --filters Name=tag:aws:cloudformation:stack-name,Values=OtjServicesStack \
+  --query 'SecurityGroups[].IpPermissions'                       # [] as of 2026-08-16
+```
+
+The ports therefore open when **PR #39** merges, not when this phase ran. That is the moment the box
+becomes publicly reachable, so have DNS (1.6) and Caddy (1.5) in place first — otherwise 80/443 are
+open onto a host with nothing listening for the duration.
 
 Confirm both containers came up:
 

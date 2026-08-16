@@ -33,12 +33,23 @@ The tailnet path to the main API bypasses Caddy entirely, so it is unmetered. Th
 it is an operator path, reachable only by devices on the tailnet — but it means "I tested it
 over Tailscale and the rate limit didn't fire" is expected behaviour, not a bug.
 
-**The main API's tailnet port is 8444, not 443.** Caddy owns 443 on this host now. Whether
-`tailscaled` would actually contend for that port is murky enough that it is not worth finding
-out on a live box; giving each its own port removes the question. The alternative — binding
-Caddy to the instance's private IP so it never touches the tailscale interface — is worse: the
-instance is built from `MachineImage.fromSsmParameter`, so a new Ubuntu AMI can replace it on
-an ordinary `cdk deploy`, and the private IP would change with it.
+**The main API's tailnet port is 8444, not 443.** Caddy owns 443 on this host now, and the move
+is required rather than tidy-minded. `tailscaled` binds 443 on the tailnet interface
+specifically, not on the wildcard:
+
+```
+LISTEN  100.120.113.30:443              users:(("tailscaled",...))
+LISTEN  [fd7a:115c:a1e0::d637:711f]:443 users:(("tailscaled",...))
+```
+
+Caddy binds the wildcard `:443`, which collides with an existing bind on the same port unless
+both sockets opt into `SO_REUSEPORT` — so leaving the old `--https=443` mapping in place risks
+Caddy failing to start on a box where the API is otherwise healthy. This is why the tailnet
+listener is moved (step 3) before the Caddyfile is installed (step 4).
+
+The alternative — binding Caddy to the instance's private IP so it never touches the tailscale
+interface — is worse: the instance is built from `MachineImage.fromSsmParameter`, so a new
+Ubuntu AMI can replace it on an ordinary `cdk deploy`, and the private IP would change with it.
 
 ## Provisioning the edge
 
@@ -94,7 +105,26 @@ Caddy would fail to start and the public API would go down. It fails closed rath
 unlimited traffic, which is the right way round, but it is still an outage. Held package plus
 `sudo caddy upgrade` for updates keeps the plugin set across upgrades.
 
-### 3. Install the Caddyfile
+### 3. Move the main API's tailnet listener off 443
+
+**Before installing the Caddyfile, not after.** Until this runs, `tailscaled` holds 443 and the
+Caddyfile below cannot bind it — see the port note above.
+
+```bash
+tailscale serve --bg --https=8444 http://127.0.0.1:8945    # main API, was 443
+tailscale serve --bg --https=8443 http://127.0.0.1:8946    # admin API, unchanged
+tailscale serve status
+```
+
+If a `--https=443` mapping is still there from the old setup, remove it:
+`tailscale serve --https=443 off`. Confirm 443 is actually free before continuing — adding the
+8444 mapping does not by itself drop the old one:
+
+```bash
+ss -lntp | grep ':443 ' || echo "443 free"
+```
+
+### 4. Install the Caddyfile
 
 ```bash
 sudo install -m 644 -o root -g root Caddyfile /etc/caddy/Caddyfile
@@ -106,16 +136,8 @@ Certificates are obtained automatically on first start and stored under `/var/li
 `caddy` user already holds `CAP_NET_BIND_SERVICE` from the packaged unit, so 80/443 bind without
 running as root and without touching `net.ipv4.ip_unprivileged_port_start`.
 
-### 4. Move the main API's tailnet listener off 443
-
-```bash
-tailscale serve --bg --https=8444 http://127.0.0.1:8945    # main API, was 443
-tailscale serve --bg --https=8443 http://127.0.0.1:8946    # admin API, unchanged
-tailscale serve status
-```
-
-If a `--https=443` mapping is still there from the old setup, remove it:
-`tailscale serve --https=443 off`.
+If Caddy fails to start here, check for `address already in use` before anything else — it means
+step 3 did not actually free 443.
 
 ## Verifying
 
