@@ -141,7 +141,7 @@ Authenticated (`Authorization: Bearer …`, all under `/otj-services`):
 | POST | `/azure-id/prepare` | `{username, password}` → 200 `{status, message, challengeNumber?}` |
 | POST | `/submit-with-mfa` | `{mfaCode}` → 200/207/502 `{status, posted, failed}` |
 | GET | `/azure-id/complete` | → 200/207/408/502 `{status, posted, failed}` |
-| POST | `/log-activities` | `{content}` → 200 `ActivityLogResponse` |
+| POST | `/log-activities` | `{content}` → 200 `ActivityLogResponse`, or 429 + `Retry-After` |
 | POST | `/register` | `{username, password, learnerId}` → 201 |
 | GET | `/pending` | → 200 `PendingResponse` |
 | DELETE | `/pending/{id}` | → 204 |
@@ -239,7 +239,7 @@ they must be named explicitly, and they need a container runtime:
 ```bash
 DOCKER_HOST=unix:///run/user/1000/podman/podman.sock \
 TESTCONTAINERS_RYUK_DISABLED=true \
-mvn -B test -Dtest='CucumberIT,UserRepositoryIT,ActivityLogRepositoryIT,SessionTokenServiceIT,InviteCodeRepositoryIT,SessionRepositoryIT'
+mvn -B test -Dtest='CucumberIT,UserRepositoryIT,ActivityLogRepositoryIT,SessionTokenServiceIT,InviteCodeRepositoryIT,SessionRepositoryIT,LlmQuotaServiceIT'
 ```
 
 Local Mongo: `podman run -d --name otj-mongo -p 27017:27017 mongo:8`.
@@ -269,6 +269,25 @@ on the prod box):
 `.env` is gitignored and contains real secrets — never print, commit, or echo it.
 
 ## Conventions and gotchas
+
+- **`log-activities` is capped at 10 LLM calls per user per day** by `quota/LlmQuotaService`,
+  counted in the `llmQuota` collection, one document per user per day. Things to preserve:
+  - The check sits after the 400s and before the model call, so a malformed request never spends
+    quota and a refused one never reaches Anthropic. Content diffing is gone, so every request
+    that gets past those 400s does cost a call — there is no resubmit-is-free path to lean on.
+  - `tryConsume` is a single atomic `findOneAndUpdate` + `$inc` + upsert. **An over-limit call
+    still increments** — that is what keeps it one round trip with no read-modify-write, so the
+    count cannot be raced. The stored number is calls *attempted*; clamp it before showing it.
+  - The upsert plus the unique `{userId, date}` index means two concurrent first calls race and
+    one sees a duplicate key; there is a single bounded retry for exactly that.
+  - The day is **UTC**, deliberately unlike `logActivtiesWithLlmHelp`'s system-zone
+    `LocalDate.now()` for the date stamped on rows. UTC is DST-free and cannot silently give a
+    23- or 25-hour quota window. They disagree for an hour under BST; both are right.
+  - Two different 429s can come from this endpoint — quota, and the upstream Anthropic rate
+    limit. Only the quota one carries `Retry-After`, which is how a client tells them apart.
+  - **Any feature whose scenarios POST `/log-activities` must reset the quota in its
+    `Background:`.** The suite's Mongo is not wiped between scenarios and `llm_quota.feature` sets
+    the counter to its limit, so without the reset those scenarios start over quota and 429.
 
 - Nothing logs OneAdvanced credentials, MFA codes, Microsoft flow tokens, cookie values or
   learner IDs. The app's own `userId` is the most that should reach a log line. This is

@@ -20,6 +20,7 @@ import com.github.grepHammerspace.llm.exception.LlmException;
 import com.github.grepHammerspace.llm.exception.LlmRateLimitException;
 import com.github.grepHammerspace.llm.LlmResult;
 import com.github.grepHammerspace.llm.LlmService;
+import com.github.grepHammerspace.quota.LlmQuotaService;
 import com.github.grepHammerspace.stateStore.LoginFlow;
 import com.github.grepHammerspace.stateStore.LoginSession;
 import com.github.grepHammerspace.stateStore.UserState;
@@ -31,6 +32,7 @@ import com.github.grepHammerspace.web.OtjSubmitResult;
 import com.github.grepHammerspace.web.PrepareResult;
 import jakarta.ws.rs.*;
 import jakarta.ws.rs.core.Context;
+import jakarta.ws.rs.core.HttpHeaders;
 import jakarta.ws.rs.core.Response;
 import jakarta.ws.rs.core.SecurityContext;
 import org.bson.types.ObjectId;
@@ -88,12 +90,20 @@ public class OtjServicesResource {
             "This session expects a typed code — call POST /otj-services/submit-with-mfa instead.");
     private static final ApiError NO_LEARNER_ID = new ApiError(
             "No learner ID on this account. Set one via PATCH /auth/me before submitting.");
+    /**
+     * Interpolates the enforced limit rather than repeating the number in prose, so the message
+     * cannot drift from {@link LlmQuotaService#DAILY_LIMIT}.
+     */
+    private static final ApiError QUOTA_EXHAUSTED = new ApiError(
+            "Daily limit of " + LlmQuotaService.DAILY_LIMIT
+                    + " AI requests reached. It resets at midnight UTC.");
 
     private final UserStateStore userStateStore;
     private final UserRepository userRepository;
     private final ActivityLogRepository activityLogRepository;
     private final LlmService llmService;
     private final PasswordHasher passwordHasher;
+    private final LlmQuotaService llmQuotaService;
     private final Provider<Driver> keycloakDriverProvider;
     private final Provider<Driver> azurePushDriverProvider;
 
@@ -102,6 +112,7 @@ public class OtjServicesResource {
                                ActivityLogRepository activityLogRepository,
                                LlmService llmService,
                                PasswordHasher passwordHasher,
+                               LlmQuotaService llmQuotaService,
                                @Keycloak Provider<Driver> keycloakDriverProvider,
                                @AzurePush Provider<Driver> azurePushDriverProvider) {
         this.userStateStore = userStateStore;
@@ -109,6 +120,7 @@ public class OtjServicesResource {
         this.activityLogRepository = activityLogRepository;
         this.llmService = llmService;
         this.passwordHasher = passwordHasher;
+        this.llmQuotaService = llmQuotaService;
         this.keycloakDriverProvider = keycloakDriverProvider;
         this.azurePushDriverProvider = azurePushDriverProvider;
     }
@@ -169,6 +181,18 @@ public class OtjServicesResource {
             log.warn("User {} not found in repository", userId);
             return Response.status(Response.Status.BAD_REQUEST)
                     .entity("{\"error\": \"" + msg + "\"}").build();
+        }
+
+        // After the 400s, so a malformed request never spends quota, and before the call, so a
+        // request that is refused never reaches the model. Content diffing is gone, which means
+        // every request that gets this far does cost a call — there is no resubmit-is-free path
+        // left to lean on.
+        if (!llmQuotaService.tryConsume(userId)) {
+            log.info("Rejected log-activities for user {} — daily LLM quota reached", userId);
+            return Response.status(429)
+                    .header(HttpHeaders.RETRY_AFTER, llmQuotaService.secondsUntilReset())
+                    .entity(QUOTA_EXHAUSTED)
+                    .build();
         }
 
         log.info("Calling LLM with {} chars", content.length());
