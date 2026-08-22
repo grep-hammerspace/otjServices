@@ -89,7 +89,10 @@ aws/                      CDK (TypeScript): OtjServicesStack (VPC + EC2 + ECR),
                           image to ECR + roll out on the box via SSM
 docker/                   otjService.Dockerfile, start.sh
 deploy/                   self-host path: podman-compose.yaml, bootstrap.sh, shell.nix,
-                          README.md (Tailscale trust model), prod/ (deploy.sh + Quadlet template)
+                          README.md (Tailscale trust model)
+  prod/                   what is installed by hand on the AWS box: deploy.sh, the two Quadlet
+                          templates, Caddyfile (public edge), README.md (provisioning runbook,
+                          rate-limit rationale, the shared-IP problem)
 scripts/                  (tailscale branch only) `otj` CLI for hand-testing the API
 ```
 
@@ -101,10 +104,10 @@ and `auth-multiuser-plan.html` (the multi-user rollout plan), `notes.md` (idea b
 
 The jar has two entrypoints, selected by `APP_ROLE` in `docker/start.sh`:
 
-| Role | Main class | Port | Graph | Exposure |
+| Role | Main class | Port | Graph | Exposure (AWS box) |
 |---|---|---|---|---|
-| `api` (default) | `Main` | 8945 | `AppComponent` | `tailscale serve --https=443` |
-| `admin` | `admin.AdminMain` | 8946 | `AdminComponent` | `tailscale serve --https=8443` |
+| `api` (default) | `Main` | 8945 | `AppComponent` | **public** — Cloudflare → Caddy on 443 → `127.0.0.1:8945`; also `tailscale serve --https=8444` |
+| `admin` | `admin.AdminMain` | 8946 | `AdminComponent` | tailnet only — `tailscale serve --https=8443` |
 
 Same image tag for both, so they cannot drift and a rollback moves them together. The admin
 graph never constructs a driver, the LLM client or session handling — which is also why the
@@ -220,15 +223,20 @@ Two **protected** branches, both deployment targets:
 
 Do not push directly to either; open a PR.
 
-`staging` is the working integration branch for the in-flight multi-user auth
-rollout (steps 01–08). It is well ahead of `master`: session tokens, bcrypt users,
-invite-gated signup and `SessionRepository` all live there and have not reached
-`master` yet. `master` still carries the older `tailscale/TailscaleIdentity*` classes
-that `staging` removed — so if a file exists in one branch and not the other, check
-which side you are on before concluding something is missing.
+`staging` was the working integration branch for the multi-user auth rollout
+(steps 01–08). **That rollout has landed:** `staging` was merged into `master` by
+PR #21 on 2026-08-16, so session tokens, bcrypt users, invite-gated signup and
+`SessionRepository` are all on `master` now, and the old
+`tailscale/TailscaleIdentity*` classes are gone from it. `master` is the branch that
+deploys and is currently *ahead* of `staging` — reverse of the old advice. Treat
+`master` as the source of truth unless you have a reason not to.
 
-Step branches are cut fresh off `staging` and merged back into it. For stacked PRs
-use a regular merge or rebase, **not squash**.
+The one place `Tailscale-User-Login` is still trusted is `admin/AdminIdentityFilter`,
+for the admin API on 8946, and that rests entirely on nothing but loopback and
+`tailscale serve` being able to reach that port.
+
+Step branches are cut fresh off the branch they target and merged back into it. For
+stacked PRs use a regular merge or rebase, **not squash**.
 
 ## Build, run, test
 
@@ -266,7 +274,7 @@ on the prod box):
   that never touch the LLM. `dummy` is fine for auth work.
 - `LLM_API_KEY` / `LLM_BASE_URL` / `LLM_MODEL` — for the in-progress move to an
   OpenAI-compatible provider (OpenRouter/Groq/NIM) on the `use-free-ai` branch; not
-  yet read by `AppModule` on `staging`.
+  yet read by `AppModule` on `master`.
 - `APP_ROLE` — `api` (default) or `admin`; selects the entrypoint.
 - `ADMIN_ALLOWED_LOGINS` — comma-separated tailnet logins allowed to mint/revoke invite
   codes. Admin process only. Unset means nobody.
@@ -287,12 +295,18 @@ on the prod box):
     attacker can otherwise grow the map one invented name at a time.
   - `tryAcquire` rejects a window longer than `RateLimiter.MAX_WINDOW`; the sweep is global and
     prunes against that bound, so a longer window would have its live counters collected.
-- **There is no signup rate limit, deliberately.** Behind `tailscale serve` every request comes
-  from `127.0.0.1` and `X-Forwarded-For` is unverified, so there is no forgery-resistant per-client
-  key. Keying on the invite code would let an attacker lock a legitimate invitee out of the only
-  code they have, and a global limit would let anyone deny signup to everybody. Invite codes carry
-  40 bits, which `InviteCodeGenerator`'s javadoc rightly calls far past online guessing. Revisit
-  when there is an edge proxy with a real client IP.
+- **There is still no signup rate limit in the app**, and the reasoning has changed. The app
+  cannot key one: every request reaches it from `127.0.0.1` — through Caddy or through
+  `tailscale serve` — and it does not read `X-Forwarded-For`, so it has no forgery-resistant
+  per-client key. Keying on the invite code would let an attacker lock a legitimate invitee out
+  of the only code they have, and a global limit would let anyone deny signup to everybody.
+  Invite codes carry 40 bits, which `InviteCodeGenerator`'s javadoc rightly calls far past
+  online guessing.
+  What *has* changed is that the cap now exists a layer out: **Caddy rate limits
+  `/auth/signup` and `/auth/session` per source IP** (10/min and 250/day — see
+  `deploy/prod/Caddyfile`). If you ever want the limit inside the app instead, the prerequisite
+  is trusting `X-Forwarded-For` from the loopback Caddy hop *only*, and that is a deliberate
+  change to the trust model, not a one-line addition.
 - **`log-activities` is capped at 10 LLM calls per user per day** by `quota/LlmQuotaService`,
   counted in the `llmQuota` collection, one document per user per day. Things to preserve:
   - The check sits after the 400s and before the model call, so a malformed request never spends
@@ -331,8 +345,11 @@ on the prod box):
   message for invalid/used/expired alike. Don't "helpfully" make these more specific.
 - The shade plugin strips `META-INF/*.SF|DSA|RSA|EC` — signed bcrypt jars otherwise
   make the JVM reject the uber-jar. Don't remove that filter.
-- Prod has **no inbound ports**. Admin is SSM Session Manager; app traffic arrives via
-  `tailscale serve` proxying to `127.0.0.1:8945`. The identity header trust model is
-  only valid because of that loopback binding — see `deploy/README.md` before touching
-  networking.
+- Prod has **exactly two inbound ports, 80 and 443, and both terminate at Caddy** — not at the
+  app. Caddy handles TLS and per-IP rate limiting, then proxies to `127.0.0.1:8945`. Shell
+  access is still SSM Session Manager (no SSH port), and the admin API is still tailnet-only
+  on 8443. **Both Quadlets still bind loopback, and that must not change**: it is the only
+  reason `AdminIdentityFilter` can believe the `Tailscale-User-Login` header, and the only
+  reason the public route cannot reach 8946. Read `deploy/prod/README.md` and `deploy/README.md`
+  before touching networking.
 - `dependency-reduced-pom.xml` is a shade-plugin artifact, not a file to edit.

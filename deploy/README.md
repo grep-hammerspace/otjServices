@@ -18,7 +18,15 @@ clean-mongo              # stop + wipe Mongo data volume
 | `app` | main REST API, backs the mobile client | `127.0.0.1:8945` | `tailscale serve --https=443` |
 | `admin` | mint/revoke signup invite codes | `127.0.0.1:8946` | `tailscale serve --https=8443` |
 
-The admin API is a separate server rather than a path on the main API because the main API is destined to sit behind a public domain (auth plan step 09). A path would inherit that exposure the moment the proxy lands; a distinct port cannot.
+Those `Reached via` ports are the **self-host** ones, wired by `bootstrap.sh`. The AWS box
+differs: the main API is public on 443 through Caddy and its tailnet listener has moved to 8444
+to leave 443 free. See `deploy/prod/README.md`.
+
+The admin API is a separate server rather than a path on the main API because the main API sits
+behind a public domain. That has now happened — `otj-services.com`, proxied by Cloudflare and
+terminated by Caddy — and
+the decision paid off exactly as expected: a path under the main API would have inherited that
+exposure the moment the proxy landed, whereas a distinct port on a loopback binding could not.
 
 ## Identity: header instead of in-container Tailscale
 

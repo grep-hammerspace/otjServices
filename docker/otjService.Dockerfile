@@ -13,6 +13,16 @@ RUN mvn package -DskipTests -q
 # Stage 2 — runtime
 FROM docker.io/library/eclipse-temurin:25-jre
 
+# curl is here for exactly one caller: the `HealthCmd=` line in each Quadlet template under
+# deploy/prod/. Do not remove it as an unused dependency. The base image ships no HTTP client at
+# all — no curl, no wget, no nc — so without this the healthcheck runs `curl -f ...`, exits 127
+# with "curl: not found", and every container reports `unhealthy` forever while serving traffic
+# perfectly well. That failure is silent in the way that matters: `deploy.sh` health-checks from
+# the *host*, so deploys still go green, and only `podman ps` shows the rot.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl \
+    && rm -rf /var/lib/apt/lists/*
+
 RUN useradd --system --create-home --uid 10001 appuser
 
 WORKDIR /app

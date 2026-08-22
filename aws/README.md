@@ -18,16 +18,36 @@ Two stacks:
 
 ## Access model
 
-- **No inbound rules** on the instance's security group at all.
-- **Admin access** — SSM Session Manager, not SSH. IAM-gated, no open port:
+- **Inbound is 443 only, and only from Cloudflare's published ranges**, reaching
+  **Caddy on the host**, never the app directly. Caddy terminates TLS and rate
+  limits, then proxies to `127.0.0.1:8945`. Port 80 is not opened: Cloudflare
+  terminates the visitor's HTTP at its own edge, and the origin's certificate is
+  a Cloudflare Origin CA pair rather than ACME, so there is no HTTP-01 challenge
+  to serve. See `deploy/prod/README.md` for the provisioning steps and
+  `deploy/prod/Caddyfile` for the config.
+  The CIDR list here and the `trusted_proxies` list in the Caddyfile are the same
+  set and must be refreshed together — see "Keeping the Cloudflare ranges
+  current" in `deploy/prod/README.md`.
+- **Shell access** — SSM Session Manager, not SSH. IAM-gated, no open port:
   ```
   aws ssm start-session --target <instance-id> --region eu-west-2
   ```
   (printed as a stack output after deploy)
-- **App access** — the host's own `tailscale serve`, once Tailscale is
-  installed and podman/Quadlets are set up on the box (manual, see
-  `deployment-migration-plan.html` steps 05–07). Same trust model as the
-  current local setup: nothing is listening on the public interface.
+- **Admin API** — tailnet only, via the host's own `tailscale serve` on 8443.
+  Nothing in the security group can reach it. This is load-bearing:
+  `AdminIdentityFilter` trusts the `Tailscale-User-Login` header *because* 8946
+  is bound to loopback and `tailscale serve` is the only thing that can reach
+  it. Read `deploy/README.md` before adding an inbound rule.
+- **DNS** — `otj-services.com`, an apex A record pointing at the Elastic IP and
+  **proxied (orange cloud)**, so the name resolves to Cloudflare and the origin
+  address is never published. It is **not** a CDK resource: the domain is
+  registered with Cloudflare Registrar, which mandates Cloudflare's nameservers,
+  so there is no Route 53 hosted zone to hold an `ARecord`. Like the MongoDB
+  Atlas IP allowlist, it is a manual step that has to be redone by hand if the
+  Elastic IP is ever recreated.
+  Because the record is proxied, `dig` returns Cloudflare's addresses, not the
+  Elastic IP — that is expected, and it means DNS cannot be used to check the
+  origin. Read the record content in the Cloudflare dashboard instead.
 
 ## Commands
 
