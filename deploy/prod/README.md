@@ -96,13 +96,25 @@ Cloudflare before it reaches Caddy. Neither alone covers both.
 Caddy's limits are also what protects the origin if someone finds the Elastic IP and the security
 group is ever widened — the edge rule is not in that path at all.
 
-**Two things to check on the edge rule** (see "Verifying" for the commands):
+**The edge block is a `429` with `Retry-After`** — the same shape Caddy's limiter sends, so the
+mobile client's existing backoff handles both layers without knowing which one blocked it.
+Verified against production on 2026-08-22:
 
-- **What status the block actually returns.** The mobile client keys its backoff off `429` plus
-  `Retry-After`, which is what Caddy's limiter sends. A Cloudflare block is not guaranteed to be
-  the same response, and if the edge returns a `403` or an HTML challenge page instead, the client
-  sees an error it has no handling for rather than a "try again shortly". Confirm what comes back
-  before assuming the client degrades gracefully.
+```
+1:401 2:401 3:401 4:429 5:429 6:429
+
+HTTP/2 429
+content-type: text/plain; charset=UTF-8
+retry-after: 10
+server: cloudflare
+```
+
+Worth re-checking if the rule's action is ever changed. A **Managed Challenge** in place of
+**Block** would return an interactive challenge page instead, which the Expo client cannot solve
+and has no handling for — it would surface as a hard error rather than "try again shortly".
+
+**One thing to watch:**
+
 - **3 / 10 s is tight for a shared egress IP.** On campus wifi every student is one address. Three
   sign-ins inside ten seconds anywhere on that network trips it for all of them, and the ten
   second block means it recovers quickly but will recur under any real concurrency. It is the
@@ -442,16 +454,18 @@ for i in $(seq 1 6); do
 done; echo
 ```
 
-Expect three `401`s and then the block. **Note what the block status actually is** — this is the
-open question from the section above. If it is `429`, the mobile client's existing backoff covers
-it. If it is `403`, or an HTML challenge page, the client has no handling for that and the failure
-will present as a hard error:
+Expect `401 401 401 429 429 429` — three through, then blocked on the fourth. Confirm the block
+still carries `Retry-After`, which is what the mobile client backs off on:
 
 ```bash
 curl -si -X POST https://otj-services.com/auth/session \
   -H 'Content-Type: application/json' -d '{"username":"x","password":"y"}' \
   | head -20                                   # status line, and any Retry-After
 ```
+
+As of 2026-08-22 this returns `HTTP/2 429`, `retry-after: 10`, `server: cloudflare`. A `403` or an
+HTML challenge page instead means the rule's action has been changed away from **Block**, and the
+Expo client has no handling for either.
 
 ### Caddy's own limiter
 

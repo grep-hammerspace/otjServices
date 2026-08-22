@@ -1,159 +1,59 @@
 # What is left of the cutover
 
-One-time. The multi-user auth rollout and the admin API are **already live**; what remains is the
-public Caddy edge. Delete this file once the last box is ticked.
+The public edge is **live**. `https://otj-services.com` serves through Cloudflare to Caddy to the
+app. What remains is a handful of follow-ups. Delete this file once they are done — ongoing
+operations live in `deploy/prod/README.md`.
 
-Operational detail lives in `deploy/prod/README.md` — this is the ordering, not the instructions.
+## Done — 2026-08-22
 
-## Status as of 2026-08-22
+Verified against the live stack and the public endpoint, not assumed.
 
-Verified against `origin/master` and the live stack, not assumed.
-
-| | State |
+| | |
 |---|---|
-| App code on `master` (auth, admin API, rate limiting, LLM quota) | **done** — merged by PR #21, `583ddff` |
-| App deployed and serving | **done** — both containers, `/health` 200 on 8945 and 8946 |
-| Admin env file, deploy script, Quadlet templates on the box | **done** |
-| DNS — apex A record, proxied | **done** — `18.169.107.161`, orange cloud |
-| Cloudflare WAF rate limiting rule | **done** — 3 req / 10 s per IP on the two `/auth` paths, block 10 s |
-| Tailnet listener moved off 443 | **done** — 2026-08-22, main API on 8444, 443 free |
-| Caddy installed on the box | **done** — 2026-08-22, v2.11.4 from Cloudsmith + `caddy-ratelimit` v0.1.0 |
-| Origin CA certificate | **done** — 2026-08-22, installed `root:caddy` 644/640, expires 2041-08-18 |
-| Caddyfile installed | **done** — 2026-08-22, reloaded clean, Caddy active on 443 |
-| PR #39 merged → security group opens 443 | **not done** |
-| First invite minted | **not done** |
+| App code on `master` | PR #21, then #39 and #41 |
+| DNS — apex A record, proxied | `18.169.107.161`, orange cloud |
+| Cloudflare WAF rate limiting rule | 3 req / 10 s per IP on the two `/auth` paths, Block 10 s |
+| Tailnet listener moved off 443 | main API on 8444, admin on 8443 |
+| Caddy | v2.11.4 from Cloudsmith, `caddy-ratelimit` v0.1.0, `apt-mark hold` |
+| Origin CA certificate | `root:caddy` 644/640, expires 2041-08-18, Full (strict) |
+| Caddyfile | loaded, Caddy owns `*:443`, no ACME attempted |
+| Security group opens 443 | `sg-07a5d6b9dfdaf4e97`, 15 IPv4 + 7 IPv6 rules, **updated in place** |
+| Public path works | `HTTP/2 200`, `cf-ray` present |
+| Origin not bypassable | all three direct probes to the Elastic IP **time out** |
+| Edge block shape | `429` + `retry-after: 10` — same as Caddy's, client backoff works |
 
-`OtjServicesStack`: instance `i-06dd830c8fbde9685`, Elastic IP `18.169.107.161`, security group
-`sg-07a5d6b9dfdaf4e97` with **zero ingress rules** — confirmed 2026-08-22.
+The security group kept its id and the instance was never touched — see the `GroupDescription`
+comment in `aws/lib/otj-services-stack.ts` for why that matters and what not to change.
 
-## The ordering that matters
+## Outstanding
 
-**Provision the box completely, then merge PR #39. Not the other way round.**
+### 1. Confirm Caddy's limiter keys on the real client IP
 
-CI is `on: push: branches: [master]` and its first deploy step is `npx cdk deploy
-OtjServicesStack`. The Cloudflare ingress rules are in PR #39. So the merge opens 443 on its own,
-within minutes, with nothing further from you. Merge before Caddy is listening and the public name
-is down for however long provisioning takes.
+**The one load-bearing check still unverified**, and the one that fails silently. If
+`trusted_proxies` is not matching, `{client_ip}` falls back to the Cloudflare edge address and
+every user in the world shares one rate-limit bucket — the site works perfectly until it doesn't.
 
-The old version of this document had merging as step 1.1 and installing Caddy as 1.5. That order
-is wrong and is the reason this section exists.
+It cannot be tested while the WAF rule is enabled: the edge blocks at 3 requests per 10 s, well
+before Caddy's 10/min zone sees enough traffic. **Pause the rate limiting rule in the Cloudflare
+dashboard**, run the paced loop in `deploy/prod/README.md` under "Caddy's own limiter", then
+re-enable it. Nothing will remind you to re-enable it — the site behaves normally with it off.
 
-Two consequences of the merge worth knowing before you trigger it:
+### 2. Confirm the container healthcheck fix landed
 
-- **The security group is amended in place** — `Replacement: False`, group id unchanged. That is
-  true only because the `GroupDescription` is left as-is: it is immutable in CloudFormation, so
-  editing it replaces the group, and the new `GroupId` would put the instance's `SecurityGroupIds`
-  into `RequiresRecreation: Conditionally`. Do not "tidy" that string. See the note in
-  `otj-services-stack.ts` and `deploy/prod/README.md`.
-- **The container healthcheck fix ships with it.** `master`'s runtime image has no `curl`, so both
-  containers report `unhealthy` while serving perfectly well — the `HealthCmd` exits 127. PR #39
-  adds `curl` to `docker/otjService.Dockerfile`, which needs the rebuild that the merge triggers.
-  Until then, **do not use `podman ps` health as a signal**; curl from the host instead.
-
-## Steps
-
-Full instructions for each are in `deploy/prod/README.md` under "Provisioning the edge" — the
-section numbers below match.
-
-### 1. Get a shell and the file helper
+`master` before #39 had no `curl` in the runtime image, so both containers reported `unhealthy`
+while serving fine. #39 added it, and the deploy rebuilt the image, so this should now be clean:
 
 ```bash
-cd ~/Projects/personal/java/otjServices && nix-shell    # aws, cdk, node, jq
-aws ssm start-session --target i-06dd830c8fbde9685 --region eu-west-2
+ssm_run "sudo -u otjapp XDG_RUNTIME_DIR=/run/user/\$(id -u otjapp) podman ps --format '{{.Names}} {{.Status}}'"
 ```
 
-No SSH port and no SSH key. `sudo -i` for root, `sudo -u otjapp -i` for the app user — and
-`systemctl --user` as `otjapp` needs `XDG_RUNTIME_DIR=/run/user/$(id -u otjapp)` or it fails with
-`Failed to connect to bus`.
+Both should read `healthy` rather than `unhealthy`. If they still say `unhealthy`, the rebuild did
+not pick up the Dockerfile change.
 
-SSM has no `scp`. For pushing files: `source deploy/prod/push-file.sh`, which gives you
-`push_file`, `ssm_run` and `verify_files`. It base64-encodes locally so content survives JSON
-encoding and two layers of shell quoting.
+### 3. Mint the first invite
 
-### 2. Install Caddy with the rate limiting module — **done 2026-08-22**
-
-Caddy v2.11.4 from Cloudsmith, with `http.handlers.rate_limit` v0.1.0 via `caddy add-package`.
-
-Two traps hit on the way, both now written up in `deploy/prod/README.md` step 2:
-
-- **Ubuntu `noble/universe` ships its own `caddy 2.6.2`**, and `add-package` did not exist until
-  2.7. The first attempt installed that one: apt reported complete success, the service unit was
-  created, and nothing was visibly wrong until `add-package` failed with `unknown command`. The
-  root cause was that `/etc/apt/sources.list.d/caddy-stable.list` had never been written, so apt
-  silently fell back. `apt-cache policy caddy` must name cloudsmith as the candidate's origin
-  before you install.
-- **The multi-line `curl … \` + `| sudo tee` forms from Caddy's own docs do not survive this SSM
-  shell.** The continuation gets split, and the downloaded content is concatenated onto the
-  command line instead of written to the file — silently. Both the keyring and the source list
-  were missing afterwards. Use the single-line, pipe-free forms in the README.
-
-`caddy` is held at 2.11.4, and the service has been restarted so the **running** process is the
-`add-package` binary — `sudo caddy list-modules --packages` reports `Non-standard modules: 1`.
-That restart is what makes `reload` safe at step 5; see the note there.
-
-### 3. Move the main API's tailnet listener off 443 — **done 2026-08-22**
-
-Main API now on 8444, admin API unchanged on 8443, and `ss -lntp | grep ':443 '` returns nothing —
-so Caddy can bind 443 in step 5.
-
-Anything still calling the tailnet name on `:443` is now broken and needs `:8444`. The smoke test
-in `deployment-checklist.md` was one; it has been updated.
-
-### 4. Issue and install the Origin CA certificate — **done 2026-08-22**
-
-Cloudflare → SSL/TLS → Origin Server → Create Certificate. **The private key is shown once.**
-Install as root: cert `644 root:caddy`, key `640 root:caddy`. Set the zone's SSL/TLS mode to
-**Full (strict)** — plain "Full" accepts any certificate at all, which wastes the exercise.
-
-There is no ACME here. Let's Encrypt cannot reach an origin that only admits Cloudflare.
-
-### 5. Install the Caddyfile — **done 2026-08-22**
-
-```bash
-push_file deploy/prod/Caddyfile /etc/caddy/Caddyfile root 644
-sudo -u caddy caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
-sudo systemctl reload caddy
-```
-
-Validate before reloading. `validate` also opens the certificate and key, so a missing or
-unreadable pair fails here rather than at reload. If it says `rate_limit is not a registered
-directive`, step 2 did not take — do not "fix" it by deleting the rate limit blocks.
-
-**Validate as `caddy`, never as root** — including via `ssm_run`, which runs as root. Validating
-provisions the `log` block's file writer, which *creates* `/var/log/caddy/access.log`; as root
-that file lands `root:root` 600, the service (which runs as `caddy`) then cannot open it, and the
-reload fails with `permission denied` pointing at the log writer. The validation step causes the
-outage it was meant to prevent. Hit on 2026-08-22; recovery is
-`chown caddy:caddy /var/log/caddy/access.log`.
-
-**`reload` only works if Caddy has been restarted since `add-package`.** Reload hands the config
-to the process already in memory over the admin API; it does not re-exec. A process started before
-the binary swap has no `rate_limit` module and rejects the config with an unknown-module error
-that reads exactly like a broken Caddyfile. `sudo systemctl restart caddy` once, at step 2, avoids
-this entirely.
-
-Caddy is now listening on 443 but unreachable: the security group still admits nothing.
-
-### 6. Merge PR #39 — **outstanding**
-
-This is the cutover. CI opens 443 from Cloudflare's ranges and rebuilds the image with the
-healthcheck fix.
-
-### 7. Verify — **outstanding**
-
-Run the checks in `deploy/prod/README.md` under "Verifying". The three that matter:
-
-- `/health` returns 200 with a `cf-ray` header — traffic is going through Cloudflare to Caddy.
-- The origin is unreachable directly: `curl -k --max-time 5 https://18.169.107.161/health` must
-  **time out**. A refusal means the packet reached the host; an answer means the proxy is
-  bypassable and the whole design is moot.
-- Caddy's limiter keys on the real client IP, not the edge address. **This needs the WAF rule
-  paused** — 3 req/10 s at the edge stops you generating enough traffic to reach Caddy's 10/min
-  zone. Re-enable it afterwards; nothing will remind you.
-
-### 8. Mint the first invite — **outstanding**
-
-From a tailnet device whose login is in `ADMIN_ALLOWED_LOGINS`:
+Nobody can sign up until this exists. From a tailnet device whose login is in
+`ADMIN_ALLOWED_LOGINS`:
 
 ```bash
 curl -s -X POST https://hours-api.<tailnet>.ts.net:8443/admin/invites \
@@ -163,24 +63,31 @@ curl -s -X POST https://hours-api.<tailnet>.ts.net:8443/admin/invites \
 Then confirm the gate holds — the same call from a tailnet device **not** on the allowlist must
 return `403`. If it succeeds, stop before minting anything real.
 
-Sign up against the public endpoint to close the loop:
+Close the loop against the public endpoint:
 
 ```bash
 curl -s -X POST https://otj-services.com/auth/signup -H 'Content-Type: application/json' \
   -d '{"inviteCode":"OTJ-XXXX-XXXX","username":"asad","password":"...","learnerId":"..."}'
 ```
 
-## After the cutover
+### 4. Point the mobile client at the public name
 
-- **Update the mobile client.** `otj-mobile/.env.example` still reads
-  `EXPO_PUBLIC_API_URL=https://example.ts.net`; it becomes `https://otj-services.com`.
-- **Check what the edge block returns.** The client backs off on `429` + `Retry-After`, which is
-  what Caddy sends. Cloudflare's block may not be the same response — if it is a `403` or a
-  challenge page, the client needs handling for it. See `deploy/prod/README.md`.
+`otj-mobile/.env.example` still reads `EXPO_PUBLIC_API_URL=https://example.ts.net`; it becomes
+`https://otj-services.com`.
+
+### 5. Reboot for the pending kernel
+
+`needrestart` reports the box running `6.17.0-1019-aws` with `7.0.0-1011-aws` installed. This is
+no longer free — 443 is public now, so a reboot is visible downtime. It is also still an untested
+path: neither `caddy.service` nor the `tailscale serve` config has ever come back from a reboot on
+this host. Pick a quiet moment and watch both come up.
+
+## Worth knowing afterwards
+
 - **Your rollback floor has moved.** With the two-service `deploy.sh` installed you cannot roll
-  back past the commit that added the admin API: `master`'s old `start.sh` has no `APP_ROLE`
-  handling, so an older image in the `admin-api` container would listen on 8945 while the Quadlet
-  health-checks 8946, never go healthy, and fail the whole deploy.
+  back past the commit that added the admin API: the old `start.sh` has no `APP_ROLE` handling, so
+  an older image in the `admin-api` container would listen on 8945 while the Quadlet health-checks
+  8946, never go healthy, and fail the whole deploy.
 - **Taking the public endpoint down fast:** `sudo systemctl stop caddy`. The tailnet paths on 8444
   and 8443 keep working, so you keep admin access and a way to test.
-- **Delete this file.**
+- **Then delete this file.**
