@@ -37,7 +37,27 @@ export class OtjServicesStack extends cdk.Stack {
     // relays, ECR pulls, Anthropic, and MongoDB Atlas connectivity.
     const instanceSecurityGroup = new ec2.SecurityGroup(this, "InstanceSecurityGroup", {
       vpc,
-      description: "otjServices EC2 host - 443 from Cloudflare to Caddy; SSM for shell, tailscale for the admin API",
+      // DELIBERATELY STALE — do not "fix" this to describe the current rules.
+      //
+      // GroupDescription is immutable in CloudFormation, so editing this string replaces the
+      // security group. That is survivable in itself, but the replacement changes GroupId, which
+      // feeds the instance's SecurityGroupIds, which CloudFormation marks
+      // `RequiresRecreation: Conditionally` — i.e. it decides at execution time whether to
+      // recreate the instance. For a VPC instance it should not, and EC2-Classic is long retired,
+      // but "should" is not a guarantee worth making against this box: Caddy, its rate-limit
+      // plugin build, the Cloudflare Origin CA pair, the Caddyfile and the `tailscale serve`
+      // config were all installed by hand and exist nowhere in this repo. Losing the instance
+      // loses all of it.
+      //
+      // Keeping the original string means the group is updated in place — the ingress rules below
+      // are simply added — and the instance drops out of the changeset entirely. Verified with
+      // `cdk deploy --no-execute` plus `describe-change-set` on 2026-08-22.
+      //
+      // Once the box is reproducible from code (userdata, Ansible, an AMI — see issue #40's
+      // direction of travel), this becomes safe to correct. Until then the accurate description
+      // of the access model lives in aws/README.md and deploy/prod/README.md, which cost nothing
+      // to change.
+      description: "otjServices EC2 host - no inbound; SSM for admin, tailscale serve for app access",
       allowAllOutbound: true,
     });
 
@@ -63,18 +83,24 @@ export class OtjServicesStack extends cdk.Stack {
       "2405:8100::/32", "2a06:98c0::/29", "2c0f:f248::/32",
     ];
 
+    // Rule descriptions are validated by EC2 against a fixed character set:
+    //     a-zA-Z0-9. _-:/()#,@[]+=&;{}!$*
+    // and a space. Notably absent is ">", so the obvious "edge -> Caddy" arrow is rejected —
+    // with a 400 at UPDATE time, not at synth. CDK will happily build a template containing one,
+    // CloudFormation gets as far as creating the replacement security group, and only then fails
+    // and rolls the whole stack back. Keep these to plain words.
     for (const cidr of CLOUDFLARE_IPV4) {
       instanceSecurityGroup.addIngressRule(
         ec2.Peer.ipv4(cidr),
         ec2.Port.tcp(443),
-        "Cloudflare edge -> Caddy -> 127.0.0.1:8945",
+        "Cloudflare edge to Caddy on 443, proxied to 127.0.0.1:8945",
       );
     }
     for (const cidr of CLOUDFLARE_IPV6) {
       instanceSecurityGroup.addIngressRule(
         ec2.Peer.ipv6(cidr),
         ec2.Port.tcp(443),
-        "Cloudflare edge (v6) -> Caddy -> 127.0.0.1:8945",
+        "Cloudflare edge v6 to Caddy on 443, proxied to 127.0.0.1:8945",
       );
     }
 
