@@ -25,32 +25,36 @@ Verified against the live stack and the public endpoint, not assumed.
 The security group kept its id and the instance was never touched — see the `GroupDescription`
 comment in `aws/lib/otj-services-stack.ts` for why that matters and what not to change.
 
-## Outstanding
+Two further checks were run with the WAF rule temporarily paused, and both passed.
 
-### 1. Confirm Caddy's limiter keys on the real client IP
+**Caddy's limiter fires at the right point and keys on the real client.** The paced loop returned
+`401` ten times and `429` on the eleventh — `auth_burst` at 10/min. The 429 was Caddy's own
+(`content-type: application/json`, the custom body) and **still carried `Retry-After`**, which is
+the thing the `handle_errors` override was at risk of dropping.
 
-**The one load-bearing check still unverified**, and the one that fails silently. If
-`trusted_proxies` is not matching, `{client_ip}` falls back to the Cloudflare edge address and
-every user in the world shares one rate-limit bucket — the site works perfectly until it doesn't.
+`trusted_proxies` is matching. Two consecutive requests arrived through *different* Cloudflare edge
+nodes and resolved to the same client:
 
-It cannot be tested while the WAF rule is enabled: the edge blocks at 3 requests per 10 s, well
-before Caddy's 10/min zone sees enough traffic. **Pause the rate limiting rule in the Cloudflare
-dashboard**, run the paced loop in `deploy/prod/README.md` under "Caddy's own limiter", then
-re-enable it. Nothing will remind you to re-enable it — the site behaves normally with it off.
-
-### 2. Confirm the container healthcheck fix landed
-
-`master` before #39 had no `curl` in the runtime image, so both containers reported `unhealthy`
-while serving fine. #39 added it, and the deploy rebuilt the image, so this should now be clean:
-
-```bash
-ssm_run "sudo -u otjapp XDG_RUNTIME_DIR=/run/user/\$(id -u otjapp) podman ps --format '{{.Names}} {{.Status}}'"
+```
+remote_ip 172.68.229.95   client_ip 83.167.185.11
+remote_ip 172.70.162.233  client_ip 83.167.185.11
 ```
 
-Both should read `healthy` rather than `unhealthy`. If they still say `unhealthy`, the rebuild did
-not pick up the Dockerfile change.
+Both counted into the same bucket. Had the key fallen back to the edge address they would have
+been two separate buckets — so this rules out the silent failure where the whole user base shares
+one counter.
 
-### 3. Mint the first invite
+**The container healthcheck fix landed.** Both `hours-api` and `admin-api` now report `healthy`;
+before #39 added `curl` to the runtime image they reported `unhealthy` while serving perfectly.
+
+One thing deliberately not changed: the access log records **full request headers**, so bearer
+tokens will appear in it once real traffic starts. Accepted — the file is root-readable on a box
+with no SSH and IAM-gated SSM access. Revisit if logs are ever shipped off the host, since that
+changes who can read them.
+
+## Outstanding
+
+### 1. Mint the first invite
 
 Nobody can sign up until this exists. From a tailnet device whose login is in
 `ADMIN_ALLOWED_LOGINS`:
@@ -70,12 +74,12 @@ curl -s -X POST https://otj-services.com/auth/signup -H 'Content-Type: applicati
   -d '{"inviteCode":"OTJ-XXXX-XXXX","username":"asad","password":"...","learnerId":"..."}'
 ```
 
-### 4. Point the mobile client at the public name
+### 2. Point the mobile client at the public name
 
 `otj-mobile/.env.example` still reads `EXPO_PUBLIC_API_URL=https://example.ts.net`; it becomes
 `https://otj-services.com`.
 
-### 5. Reboot for the pending kernel
+### 3. Reboot for the pending kernel
 
 `needrestart` reports the box running `6.17.0-1019-aws` with `7.0.0-1011-aws` installed. This is
 no longer free — 443 is public now, so a reboot is visible downtime. It is also still an untested
