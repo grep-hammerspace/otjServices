@@ -82,6 +82,13 @@ otj-services.com {
 	#
 	# The app's own limiter keys on the *submitted username*, so it does nothing against an
 	# attacker who rotates usernames. This is the layer that covers that gap.
+	#
+	# A Cloudflare WAF rate limiting rule also covers these two paths, at 3 requests per 10s per
+	# IP. It is not a duplicate of the zones below and neither replaces the other: 3/10s sheds a
+	# flood at the edge for free, but permits 18/min sustained — which is *above* auth_burst's
+	# 10/min, so a paced attacker passes the edge and is stopped here. These zones are also the
+	# only limit left if the origin is ever reached directly. Do not relax them because the edge
+	# rule exists. See ./README.md, "The two rate limits, and why there are two".
 	@anon path /auth/signup /auth/session
 	handle @anon {
 		rate_limit {

@@ -105,10 +105,13 @@ for ordinary deploys. To roll back, re-run `deploy.sh` on the box (or via
 
 ## 7. Verify end-to-end
 
-- [ ] From a tailnet-joined device: `curl https://hours-api.<tailnet>.ts.net/health`
-      → 200
-- [ ] A real register/log-activity call resolves the correct tailnet identity
-      in the app logs
+- [ ] From a tailnet-joined device: `curl https://hours-api.<tailnet>.ts.net:8444/health`
+      → 200. **Port 8444, not the bare name** — the main API's tailnet listener
+      moves off 443 so Caddy can bind it (`deploy/prod/README.md` step 3).
+- [ ] A real register/log-activity call resolves the correct user in the app
+      logs. Identity on the main API is the **bearer token**, not the tailnet
+      header — `Tailscale-User-Login` is read by `AdminIdentityFilter` alone,
+      i.e. the admin API on 8946. A tailnet-identity check here tests nothing.
 - [ ] Admin API reachable and gated. From an allowlisted device:
       ```
       curl -X POST https://hours-api.<tailnet>.ts.net:8443/admin/invites \
