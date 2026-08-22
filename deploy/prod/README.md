@@ -127,11 +127,30 @@ Once, as root over SSM. The box is assumed already provisioned per the app-side 
 >
 > Do steps 2–5, then merge. Step 1 (DNS) is already done and can be ignored.
 >
-> **`cdk deploy` will replace the security group, not amend it.** PR #39 also changes the group's
-> `description`, and `GroupDescription` is immutable in CloudFormation — so the deploy creates a
-> new group, attaches it to the instance, and deletes the old one. No instance interruption, but
-> it is not the in-place rule addition the diff looks like, and it means the group id changes.
-> `sg-07a5d6b9dfdaf4e97` is the pre-merge id; anything referencing it by id needs updating.
+> **Never edit the security group's `GroupDescription`.** It is immutable in CloudFormation, so
+> changing it replaces the whole group. The replacement changes `GroupId`, which feeds the
+> instance's `SecurityGroupIds`, which CloudFormation marks `RequiresRecreation: Conditionally` —
+> it decides at execution time whether to recreate the instance. It should not for a VPC instance,
+> but this box is hand-provisioned and reproducible from nothing, so the safe move is not to ask
+> the question. The description in `otj-services-stack.ts` is deliberately stale and carries a
+> comment saying so; the accurate account of the access model lives here and in `aws/README.md`.
+>
+> With the description left alone, `cdk deploy` adds the ingress rules **in place**:
+> `Replacement: False` on the group, and the instance's entry in the changeset drops to
+> `Evaluation: Dynamic` — listed because CloudFormation cannot statically prove `GroupId` is
+> unchanged, not because anything will happen to it. Confirm before any deploy that touches this
+> group:
+>
+> ```bash
+> cdk deploy OtjServicesStack --no-execute --require-approval never
+> aws cloudformation describe-change-set --stack-name OtjServicesStack \
+>   --change-set-name cdk-deploy-change-set --region eu-west-2 \
+>   --query 'Changes[].ResourceChange.{L:LogicalResourceId,R:Replacement,D:Details}'
+> aws cloudformation delete-change-set --stack-name OtjServicesStack \
+>   --change-set-name cdk-deploy-change-set --region eu-west-2
+> ```
+>
+> `Evaluation: Static` on the instance means the change is real and it may be recreated. Stop.
 
 ### 1. Point DNS at the box, and add the edge rate limit — **done**
 

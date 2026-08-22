@@ -40,9 +40,11 @@ is wrong and is the reason this section exists.
 
 Two consequences of the merge worth knowing before you trigger it:
 
-- **The security group is replaced, not amended.** PR #39 changes its `description`, and
-  `GroupDescription` is immutable in CloudFormation. `cdk deploy` creates a new group, attaches it,
-  and deletes the old one. No instance interruption, but the group id changes.
+- **The security group is amended in place** — `Replacement: False`, group id unchanged. That is
+  true only because the `GroupDescription` is left as-is: it is immutable in CloudFormation, so
+  editing it replaces the group, and the new `GroupId` would put the instance's `SecurityGroupIds`
+  into `RequiresRecreation: Conditionally`. Do not "tidy" that string. See the note in
+  `otj-services-stack.ts` and `deploy/prod/README.md`.
 - **The container healthcheck fix ships with it.** `master`'s runtime image has no `curl`, so both
   containers report `unhealthy` while serving perfectly well — the `HealthCmd` exits 127. PR #39
   adds `curl` to `docker/otjService.Dockerfile`, which needs the rebuild that the merge triggers.
