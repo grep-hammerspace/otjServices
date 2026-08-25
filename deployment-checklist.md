@@ -84,7 +84,14 @@ On the box:
       `deploy/prod/admin-api.container.template` from this repo, then
       `chmod +x ~/otj-deploy/deploy.sh`
 - [ ] As `otjapp`, create `~/otj-hours-api.env` (`chmod 600`) holding
-      `MONGO_URI=`, `ANTHROPIC_API_KEY=`
+      `MONGO_URI=`, `ANTHROPIC_API_KEY=`, `CREDENTIAL_IDENTITY_SEED=`
+- [ ] Mint that seed with
+      `java -cp target/app.jar com.github.grepHammerspace.crypto.IdentityKeyTool generate`
+      and put the public key it prints alongside into `otj-mobile/.env` as
+      `EXPO_PUBLIC_CREDENTIAL_IDENTITY_KEY`. They are a pair: the app pins the public
+      half and refuses to send OneAdvanced credentials to a box that cannot sign for
+      it. Missing seed = the api role will not start, which is the intended failure.
+      See `credential-encryption-spec.md`.
 - [ ] As `otjapp`, create `~/otj-admin-api.env` (`chmod 600`) holding
       `MONGO_URI=` and `ADMIN_ALLOWED_LOGINS=` — the latter a comma-separated
       list of tailnet logins permitted to mint and revoke invite codes. If it is

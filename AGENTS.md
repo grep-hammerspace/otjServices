@@ -140,8 +140,9 @@ Authenticated (`Authorization: Bearer …`, all under `/otj-services`):
 
 | Method | Path | Body → Result |
 |---|---|---|
-| POST | `/prepare-browser` | `{username, password}` → 200 `{status, message}` |
-| POST | `/azure-id/prepare` | `{username, password}` → 200 `{status, message, challengeNumber?}` |
+| GET | `/crypto/public-key` | → 200 `{algorithm, keyId, publicKey, expiresAt, signature}` |
+| POST | `/prepare-browser` | `SealedEnvelope` → 200 `{status, message}` |
+| POST | `/azure-id/prepare` | `SealedEnvelope` → 200 `{status, message, challengeNumber?}` |
 | POST | `/submit-with-mfa` | `{mfaCode}` → 200/207/502 `{status, posted, failed}` |
 | GET | `/azure-id/complete` | → 200/207/408/502 `{status, posted, failed}` |
 | POST | `/log-activities` | `{content}` → 200 `ActivityLogResponse`, or 429 + `Retry-After` |
@@ -151,16 +152,22 @@ Authenticated (`Authorization: Bearer …`, all under `/otj-services`):
 | DELETE | `/pending/{id}` | → 204 |
 | DELETE | `/delete-last-row` | → 200 |
 
-The `username`/`password` on the two prepare endpoints are the user's **OneAdvanced**
-credentials. They are **not stored** — the multi-user rollout deleted the encrypted-at-rest copy,
-so they have to arrive per request. They exist as a local for the length of the call, go straight
-into `Driver.prepare`, and never reach a log line or a response body. Do not add a field, a cache,
-or a "remember me" for them.
+The two prepare endpoints carry the user's **OneAdvanced** credentials, and they arrive
+**encrypted to this process** rather than as plaintext JSON — see "Sealed credentials" below and
+`credential-encryption-spec.md` for the format. They are still **not stored**: the multi-user
+rollout deleted the encrypted-at-rest copy, so they have to arrive per request. They exist as a
+local for the length of the call, go straight into `Driver.prepare`, and never reach a log line or
+a response body. Do not add a field, a cache, or a "remember me" for them.
 
 `prepare*` answers `status` of `login_complete`, `otp_required` or `push_sent`; `challengeNumber`
 is present only for a Microsoft number match. The learner ID is **server-side** and is never
-accepted on these bodies — Jackson rejects the unknown property with a 400, and
-`prepare_and_submit.feature` pins that.
+accepted on these bodies — Jackson rejects the unknown property with a 400, at both layers now
+(the envelope and the JSON sealed inside it), and `prepare_and_submit.feature` pins both.
+
+`/submit-with-mfa` is deliberately *not* sealed. A TOTP is six digits with about thirty seconds of
+life and cannot be replayed after that, so a copy taken at the edge is worthless by the time
+anyone could use it — while sealing it would put a key fetch in front of the most time-critical
+call in the app.
 
 Authenticated, outside `/otj-services` — the account itself, on `AccountResource`:
 
@@ -181,6 +188,52 @@ Admin API (separate process/port, tailnet identity instead of bearer tokens):
 | POST | `/admin/invites` | `{note?, expiresInDays?}` → 201 `{code, status, expiresAt, …}` |
 | GET | `/admin/invites` | 200, newest first, `status` ∈ ACTIVE/USED/REVOKED/EXPIRED |
 | DELETE | `/admin/invites/{code}` | 204; 404 unknown; 409 already claimed |
+
+## Sealed credentials
+
+`otj-services.com` is proxied by Cloudflare: the visitor's TLS terminates at an edge node, which
+opens its own connection to Caddy on the box. A password in a request body is therefore plaintext
+inside Cloudflare for that hop. The bearer token can live with that — it is ours and revocable —
+but the OneAdvanced password is the user's real institutional credential, and this service goes out
+of its way not to store it precisely so that only one copy exists. So the two prepare endpoints
+take a `SealedEnvelope` instead.
+
+```
+crypto/CredentialKeyRing   the identity key, the rotating X25519 key, and open()
+crypto/Hkdf                HKDF-SHA256, hand-rolled, RFC 5869 vectors in HkdfTest
+crypto/RawKeys             raw 32-byte keys ↔ the JDK's DER-encoded key specs
+crypto/IdentityKeyTool     `generate` mints the pair; `verify` checks a live announcement
+api/CryptoResource         GET /otj-services/crypto/public-key
+credential-encryption-spec.md   the wire format — the contract with the Expo client
+```
+
+Five things not to undo:
+
+- **The pinned identity key is the whole point.** The announcement crosses the same Cloudflare hop
+  the credentials do, so a client that trusted the key it was handed would be defended against an
+  edge that reads and not at all against one that answers. `CredentialKeyRing` signs the
+  announcement with a long-lived Ed25519 key; the app carries the public half as a build constant
+  and refuses to submit when a signature does not verify. Do not add the identity public key to the
+  response "for convenience" — verifying a signature against a key from the same channel proves
+  nothing.
+- **There is no plaintext fallback and no flag for one.** A server that still accepted the old body
+  would leave the plaintext path open to exactly the party being defended against, and no
+  client-side setting can close a door the server holds open. The cutover is hard, which is why the
+  backend and the app deploy together.
+- **The service will not boot without `CREDENTIAL_IDENTITY_SEED`.** Fails closed, like
+  `AdminAllowlist`. A generated key would publish announcements no released app can verify, and
+  every submit in the field would fail with what looks like an attack.
+- **Decryption failures are one answer.** Wrong key, flipped bit and truncated ciphertext all come
+  back `undecryptable`, and the reason never quotes the envelope. Distinguishing them is a
+  decryption oracle. `unknown_key` is the one code the client acts on: it re-fetches and seals
+  again, once.
+- **`iat` is not a replay defence.** Whatever holds the bearer token can replay the whole request.
+  It bounds how long a captured envelope stays useful, and lives inside the ciphertext so nothing
+  on the path can edit it.
+
+Note that the Cucumber suite does not run under `mvn test` — surefire's default includes skip
+`*IT`, and there is no failsafe plugin, so CI's `mvn -B test` never reaches `crypto.feature` or
+`prepare_and_submit.feature`. Run it by hand: `mvn test -Dtest=CucumberIT`.
 
 Notes:
 - Tokens are 32 random bytes, base64url; only the SHA-256 hash is stored. Sliding
@@ -242,10 +295,15 @@ stacked PRs use a regular merge or rebase, **not squash**.
 
 ```bash
 mvn -q package -DskipTests           # build target/app.jar
-MONGO_URI=mongodb://localhost:27017 ANTHROPIC_API_KEY=dummy java -jar target/app.jar
+MONGO_URI=mongodb://localhost:27017 ANTHROPIC_API_KEY=dummy \
+CREDENTIAL_IDENTITY_SEED=$(openssl rand -base64 32) java -jar target/app.jar
 
 mvn -B clean test                    # unit tests only
 ```
+
+Any 32 bytes is a valid seed, so `openssl rand` is fine when the server is being poked at with
+curl. It is **not** fine when the Expo app is pointed at it: the app pins the matching public key,
+which only `IdentityKeyTool generate` prints. Use that, and put both halves where they belong.
 
 Integration tests are `*IT` classes and Surefire's default includes **skip** them —
 they must be named explicitly, and they need a container runtime:
@@ -275,6 +333,11 @@ on the prod box):
 - `LLM_API_KEY` / `LLM_BASE_URL` / `LLM_MODEL` — for the in-progress move to an
   OpenAI-compatible provider (OpenRouter/Groq/NIM) on the `use-free-ai` branch; not
   yet read by `AppModule` on `master`.
+- `CREDENTIAL_IDENTITY_SEED` — **required to boot the api role**: the base64 32-byte Ed25519 seed
+  that signs the credential key announcement. Mint it with
+  `java -cp target/app.jar com.github.grepHammerspace.crypto.IdentityKeyTool generate`, which
+  prints this and the public key the Expo app has to pin. The two are a pair — a mismatch fails
+  every submit. Not needed by the admin role, which never builds the key ring.
 - `APP_ROLE` — `api` (default) or `admin`; selects the entrypoint.
 - `ADMIN_ALLOWED_LOGINS` — comma-separated tailnet logins allowed to mint/revoke invite
   codes. Admin process only. Unset means nobody.

@@ -2,6 +2,7 @@ package com.github.grepHammerspace.bind;
 
 import com.anthropic.client.AnthropicClient;
 import com.anthropic.client.okhttp.AnthropicOkHttpClient;
+import com.github.grepHammerspace.crypto.CredentialKeyRing;
 import com.github.grepHammerspace.llm.LlmService;
 import com.github.grepHammerspace.llm.LlmServiceImpl;
 import com.github.grepHammerspace.stateStore.UserStateStore;
@@ -30,6 +31,21 @@ public class AppModule {
     @Singleton
     UserStateStore provideUserStateStore() {
         return new UserStateStore();
+    }
+
+    /**
+     * One ring for the process. It generates a key at startup and rotates it in place, so a second
+     * instance would publish a key that the first one cannot open envelopes for — and since both
+     * prepare endpoints and the key endpoint would then disagree, half of every submit would fail.
+     *
+     * <p>Constructed eagerly at graph creation rather than lazily on the first submit: it throws
+     * when {@code CREDENTIAL_IDENTITY_SEED} is missing, and that failure belongs at boot, where a
+     * deploy can catch it, not at the moment a user tries to send their password.
+     */
+    @Provides
+    @Singleton
+    CredentialKeyRing provideCredentialKeyRing() {
+        return new CredentialKeyRing();
     }
 
     @Provides

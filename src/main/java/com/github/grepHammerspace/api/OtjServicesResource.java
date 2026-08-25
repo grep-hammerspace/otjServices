@@ -1,18 +1,23 @@
 package com.github.grepHammerspace.api;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.grepHammerspace.api.dto.ActivityLogRequest;
 import com.github.grepHammerspace.api.dto.ActivityLogResponse;
 import com.github.grepHammerspace.api.dto.ApiError;
+import com.github.grepHammerspace.api.dto.CryptoError;
 import com.github.grepHammerspace.api.dto.OneAdvancedCredentials;
 import com.github.grepHammerspace.api.dto.PendingActivity;
 import com.github.grepHammerspace.api.dto.PendingResponse;
 import com.github.grepHammerspace.api.dto.PrepareResponse;
 import com.github.grepHammerspace.api.dto.RegisterRequest;
+import com.github.grepHammerspace.api.dto.SealedEnvelope;
 import com.github.grepHammerspace.api.dto.SubmitResponse;
 import com.github.grepHammerspace.api.dto.SubmitWithMfaRequest;
 import com.github.grepHammerspace.api.dto.UpdateActivityRequest;
 import com.github.grepHammerspace.auth.Authenticated;
 import com.github.grepHammerspace.auth.PasswordHasher;
+import com.github.grepHammerspace.crypto.CredentialKeyRing;
+import com.github.grepHammerspace.crypto.SealedCredentialsException;
 import com.github.grepHammerspace.db.ActivityLogRepository;
 import com.github.grepHammerspace.db.UserRepository;
 import com.github.grepHammerspace.db.model.ActivityLog;
@@ -68,6 +73,9 @@ import java.util.concurrent.TimeoutException;
 public class OtjServicesResource {
     private static final Logger log = LoggerFactory.getLogger(OtjServicesResource.class);
 
+    /** Reads the JSON inside an envelope. Jersey's own mapper never sees these bytes. */
+    private static final ObjectMapper CREDENTIALS_JSON = new ObjectMapper();
+
     /*
      * One constant per failure, in the style of AuthResource's INVITE_REJECTED /
      * CREDENTIALS_REJECTED. A driver's own exception message is never forwarded: it carries URLs
@@ -105,6 +113,7 @@ public class OtjServicesResource {
     private final LlmService llmService;
     private final PasswordHasher passwordHasher;
     private final LlmQuotaService llmQuotaService;
+    private final CredentialKeyRing credentialKeyRing;
     private final Provider<Driver> keycloakDriverProvider;
     private final Provider<Driver> azurePushDriverProvider;
 
@@ -114,6 +123,7 @@ public class OtjServicesResource {
                                LlmService llmService,
                                PasswordHasher passwordHasher,
                                LlmQuotaService llmQuotaService,
+                               CredentialKeyRing credentialKeyRing,
                                @Keycloak Provider<Driver> keycloakDriverProvider,
                                @AzurePush Provider<Driver> azurePushDriverProvider) {
         this.userStateStore = userStateStore;
@@ -122,6 +132,7 @@ public class OtjServicesResource {
         this.llmService = llmService;
         this.passwordHasher = passwordHasher;
         this.llmQuotaService = llmQuotaService;
+        this.credentialKeyRing = credentialKeyRing;
         this.keycloakDriverProvider = keycloakDriverProvider;
         this.azurePushDriverProvider = azurePushDriverProvider;
     }
@@ -129,8 +140,10 @@ public class OtjServicesResource {
     /**
      * Signs in to OneAdvanced through Keycloak and stops at the OTP prompt.
      *
-     * <p>Takes the user's OneAdvanced credentials in the request body — this service does not
-     * store them. They are used for the length of this call and handed straight to the driver.
+     * <p>Takes the user's OneAdvanced credentials as a {@link SealedEnvelope} — encrypted by the
+     * client to this server's published key, so the plaintext never exists inside Cloudflare's TLS
+     * termination. This service still does not store them: they are decrypted for the length of
+     * this call and handed straight to the driver.
      *
      * <p>The half-finished session is parked in
      * {@link com.github.grepHammerspace.stateStore.UserStateStore} because a TOTP is only valid
@@ -139,7 +152,7 @@ public class OtjServicesResource {
      */
     @POST
     @Path("/prepare-browser")
-    public Response prepareBrowser(OneAdvancedCredentials body, @Context SecurityContext sc) {
+    public Response prepareBrowser(SealedEnvelope body, @Context SecurityContext sc) {
         String userId = resolveUserState(sc);
         log.info("Received request from user {} to do {}", userId, "prepare-browser");
         return prepare(userId, body, LoginFlow.KEYCLOAK_TOTP);
@@ -360,14 +373,14 @@ public class OtjServicesResource {
     /**
      * Logs in to OneAdvanced's cloud-education platform via the QMUL Azure AD path.
      *
-     * <p>Takes the user's OneAdvanced credentials in the request body — this service does not
-     * store them. Sends a Microsoft Authenticator push and returns immediately, along with the
-     * number to tap when Microsoft asks for a number match. Approval is then waited on by a
+     * <p>Takes the user's OneAdvanced credentials as a {@link SealedEnvelope}, exactly as
+     * {@code /prepare-browser} does — see there for why. Sends a Microsoft Authenticator push and
+     * returns immediately, along with the number to tap when Microsoft asks for a number match. Approval is then waited on by a
      * background poll, so call {@code GET /azure-id/complete} to pick up the result.
      */
     @POST
     @Path("/azure-id/prepare")
-    public Response azureIdPrepare(OneAdvancedCredentials body, @Context SecurityContext sc) {
+    public Response azureIdPrepare(SealedEnvelope body, @Context SecurityContext sc) {
         String userId = resolveUserState(sc);
         log.info("Received request from user {} to do {}", userId, "azure-id/prepare");
         return prepare(userId, body, LoginFlow.AZURE_PUSH);
@@ -376,13 +389,25 @@ public class OtjServicesResource {
     /**
      * The shared body of both prepare endpoints.
      *
-     * <p>The credentials never leave this method: they go from the request record into
-     * {@link Driver#prepare} and are not stored, logged, or echoed. On failure the driver's own
+     * <p>The credentials never leave this method: they are decrypted here, go straight into
+     * {@link Driver#prepare}, and are not stored, logged, or echoed. On failure the driver's own
      * message is dropped in favour of {@link #LOGIN_FAILED}, because that message embeds URLs
      * from the login chain and the chain carries the username in {@code login_hint}.
      */
-    private Response prepare(String userId, OneAdvancedCredentials body, LoginFlow flow) {
-        if (body == null || isBlank(body.username()) || isBlank(body.password())) {
+    private Response prepare(String userId, SealedEnvelope envelope, LoginFlow flow) {
+        OneAdvancedCredentials body;
+        try {
+            body = unseal(envelope);
+        } catch (SealedCredentialsException e) {
+            // The reason, never the envelope. Which of the five it was is useful in the log and
+            // to the client; the bytes that produced it are an oracle.
+            log.warn("Rejected sealed credentials from user {} on {} — {}",
+                    userId, flow, e.reason().code());
+            return Response.status(Response.Status.BAD_REQUEST)
+                    .entity(new CryptoError(e.reason().message(), e.reason().code())).build();
+        }
+
+        if (isBlank(body.username()) || isBlank(body.password())) {
             return Response.status(Response.Status.BAD_REQUEST).entity(CREDENTIALS_MISSING).build();
         }
 
@@ -517,6 +542,37 @@ public class OtjServicesResource {
         }
         return Response.status(207)
                 .entity(new SubmitResponse("partial", result.posted().size(), result.failed().size())).build();
+    }
+
+    /**
+     * Decrypts one envelope into the credentials it was sealed around.
+     *
+     * <p>Two steps that look like one: {@link CredentialKeyRing} owns the seal — the key, the tag,
+     * and how old an envelope may be — while the JSON inside it is this class's business, the same
+     * way every other body here is. That is why the freshness check happens on this side of the
+     * parse rather than inside {@code open()}: {@code iat} is only readable once the plaintext is.
+     *
+     * <p>A payload that is not JSON is reported as a malformed envelope rather than as a bad
+     * request. From outside they are the same thing — the only way to produce plaintext at all is
+     * to hold the right key — and a distinct message would tell a prober that their guess
+     * decrypted.
+     */
+    private OneAdvancedCredentials unseal(SealedEnvelope envelope) throws SealedCredentialsException {
+        byte[] plaintext = credentialKeyRing.open(envelope);
+        try {
+            OneAdvancedCredentials credentials =
+                    CREDENTIALS_JSON.readValue(plaintext, OneAdvancedCredentials.class);
+            credentialKeyRing.checkFreshness(credentials.iat());
+            return credentials;
+        } catch (IOException e) {
+            throw new SealedCredentialsException(
+                    SealedCredentialsException.Reason.MALFORMED_ENVELOPE);
+        } finally {
+            // The plaintext is a byte[] this method owns; the credentials it produced are a String
+            // that the JVM will hold until GC either way. Wiping what can be wiped is not theatre
+            // here — it is the only copy with a defined lifetime.
+            java.util.Arrays.fill(plaintext, (byte) 0);
+        }
     }
 
     private static boolean isBlank(String value) {

@@ -39,6 +39,29 @@ public class ServerHooks {
     static final String ADMIN_LOGIN = "admin@test.tailnet";
 
     /**
+     * The credential identity key every scenario's key ring signs with, standing in for the real
+     * deployment's {@code CREDENTIAL_IDENTITY_SEED}. Generated once for the suite rather than
+     * hard-coded: {@code crypto.feature} verifies an announcement the way the app does, and that
+     * needs the public half, which the JDK cannot derive from a seed. The seed is taken out of the
+     * PKCS#8 encoding exactly as {@code IdentityKeyTool generate} does.
+     */
+    static final java.security.KeyPair IDENTITY = generateIdentity();
+    static final byte[] IDENTITY_SEED = seedOf(IDENTITY);
+
+    private static java.security.KeyPair generateIdentity() {
+        try {
+            return java.security.KeyPairGenerator.getInstance("Ed25519").generateKeyPair();
+        } catch (java.security.NoSuchAlgorithmException e) {
+            throw new IllegalStateException("this JDK has no Ed25519", e);
+        }
+    }
+
+    private static byte[] seedOf(java.security.KeyPair pair) {
+        byte[] encoded = pair.getPrivate().getEncoded();
+        return java.util.Arrays.copyOfRange(encoded, encoded.length - 32, encoded.length);
+    }
+
+    /**
      * The OneAdvanced credentials and MFA code every scenario sends, and that no log line may
      * ever contain. Distinctive on purpose: a check against {@code "password"} would pass by
      * coincidence, whereas these strings can only appear if something logged the real value.
@@ -75,7 +98,7 @@ public class ServerHooks {
         String authToken = component.sessionTokenService().issue(TEST_USER_ID);
 
         server = ServerBootstrap.start(port, component.otjServicesResource(), component.authResource(),
-            component.accountResource(), component.authenticationFilter());
+            component.accountResource(), component.cryptoResource(), component.authenticationFilter());
 
         // The admin API is a genuinely separate server in production, so the tests run it as one
         // too — on its own port, with its own resources. Booting it inside the main server would

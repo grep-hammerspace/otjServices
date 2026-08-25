@@ -54,6 +54,10 @@ services:
       APP_ROLE: api
       MONGO_URI: mongodb://${MONGO_USER}:${MONGO_PASSWORD}@mongo:27017/otjdb?authSource=admin
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      # Signs the credential key announcement the Expo app verifies against its pinned copy. The
+      # api role refuses to start without it. Mint the pair with `IdentityKeyTool generate` — a
+      # seed invented here and a key pinned there are a mismatch, and every submit fails.
+      CREDENTIAL_IDENTITY_SEED: ${CREDENTIAL_IDENTITY_SEED}
       JAVA_DEBUG: ${JAVA_DEBUG:-true}
       # Turns on the OtjDriver submission diagnostics — target URL, the exact JSON posted, and
       # OneAdvanced's rejection body. Defaults to INFO so the payload and learner ID stay out of

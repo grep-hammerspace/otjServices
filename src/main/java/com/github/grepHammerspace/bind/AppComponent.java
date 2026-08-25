@@ -2,6 +2,7 @@ package com.github.grepHammerspace.bind;
 
 import com.github.grepHammerspace.api.AccountResource;
 import com.github.grepHammerspace.api.AuthResource;
+import com.github.grepHammerspace.api.CryptoResource;
 import com.github.grepHammerspace.api.OtjServicesResource;
 import com.github.grepHammerspace.auth.AuthenticationFilter;
 import com.mongodb.client.MongoDatabase;
@@ -16,6 +17,7 @@ public interface AppComponent {
     OtjServicesResource otjServicesResource();
     AuthResource authResource();
     AccountResource accountResource();
+    CryptoResource cryptoResource();
     AuthenticationFilter authenticationFilter();
     MongoDatabase mongoDatabase();
 }
