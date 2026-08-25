@@ -1,16 +1,21 @@
 package com.github.grepHammerspace.api;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.grepHammerspace.api.dto.ActivityLogRequest;
 import com.github.grepHammerspace.api.dto.ActivityLogResponse;
 import com.github.grepHammerspace.api.dto.ApiError;
+import com.github.grepHammerspace.api.dto.CryptoError;
 import com.github.grepHammerspace.api.dto.OneAdvancedCredentials;
 import com.github.grepHammerspace.api.dto.PendingActivity;
 import com.github.grepHammerspace.api.dto.PendingResponse;
 import com.github.grepHammerspace.api.dto.PrepareResponse;
+import com.github.grepHammerspace.api.dto.SealedEnvelope;
 import com.github.grepHammerspace.api.dto.SubmitResponse;
 import com.github.grepHammerspace.api.dto.SubmitWithMfaRequest;
 import com.github.grepHammerspace.api.dto.UpdateActivityRequest;
 import com.github.grepHammerspace.auth.Authenticated;
+import com.github.grepHammerspace.crypto.CredentialKeyRing;
+import com.github.grepHammerspace.crypto.SealedCredentialsException;
 import com.github.grepHammerspace.db.ActivityLogRepository;
 import com.github.grepHammerspace.db.UserRepository;
 import com.github.grepHammerspace.db.model.ActivityLog;
@@ -59,6 +64,8 @@ import java.util.concurrent.TimeoutException;
 public class OtjServicesResource {
     private static final Logger log = LoggerFactory.getLogger(OtjServicesResource.class);
 
+    private static final ObjectMapper CREDENTIALS_JSON = new ObjectMapper();
+
     // A driver's own message is never forwarded: it carries login-chain URLs with the username in
     // them.
     private static final ApiError LOGIN_FAILED = new ApiError(
@@ -88,6 +95,7 @@ public class OtjServicesResource {
     private final ActivityLogRepository activityLogRepository;
     private final LlmService llmService;
     private final LlmQuotaService llmQuotaService;
+    private final CredentialKeyRing credentialKeyRing;
     private final Provider<Driver> keycloakDriverProvider;
     private final Provider<Driver> azurePushDriverProvider;
 
@@ -96,6 +104,7 @@ public class OtjServicesResource {
                                ActivityLogRepository activityLogRepository,
                                LlmService llmService,
                                LlmQuotaService llmQuotaService,
+                               CredentialKeyRing credentialKeyRing,
                                @Keycloak Provider<Driver> keycloakDriverProvider,
                                @AzurePush Provider<Driver> azurePushDriverProvider) {
         this.userStateStore = userStateStore;
@@ -103,13 +112,14 @@ public class OtjServicesResource {
         this.activityLogRepository = activityLogRepository;
         this.llmService = llmService;
         this.llmQuotaService = llmQuotaService;
+        this.credentialKeyRing = credentialKeyRing;
         this.keycloakDriverProvider = keycloakDriverProvider;
         this.azurePushDriverProvider = azurePushDriverProvider;
     }
 
     @POST
     @Path("/prepare-browser")
-    public Response prepareBrowser(OneAdvancedCredentials body, @Context SecurityContext sc) {
+    public Response prepareBrowser(SealedEnvelope body, @Context SecurityContext sc) {
         String userId = resolveUserState(sc);
         log.info("Received request from user {} to do {}", userId, "prepare-browser");
         return prepare(userId, body, LoginFlow.KEYCLOAK_TOTP);
@@ -279,14 +289,25 @@ public class OtjServicesResource {
 
     @POST
     @Path("/azure-id/prepare")
-    public Response azureIdPrepare(OneAdvancedCredentials body, @Context SecurityContext sc) {
+    public Response azureIdPrepare(SealedEnvelope body, @Context SecurityContext sc) {
         String userId = resolveUserState(sc);
         log.info("Received request from user {} to do {}", userId, "azure-id/prepare");
         return prepare(userId, body, LoginFlow.AZURE_PUSH);
     }
 
-    private Response prepare(String userId, OneAdvancedCredentials body, LoginFlow flow) {
-        if (body == null || isBlank(body.username()) || isBlank(body.password())) {
+    private Response prepare(String userId, SealedEnvelope envelope, LoginFlow flow) {
+        OneAdvancedCredentials body;
+        try {
+            body = unseal(envelope);
+        } catch (SealedCredentialsException e) {
+            // The reason code only, never the envelope's bytes.
+            log.warn("Rejected sealed credentials from user {} on {} — {}",
+                    userId, flow, e.reason().code());
+            return Response.status(Response.Status.BAD_REQUEST)
+                    .entity(new CryptoError(e.reason().message(), e.reason().code())).build();
+        }
+
+        if (isBlank(body.username()) || isBlank(body.password())) {
             return Response.status(Response.Status.BAD_REQUEST).entity(CREDENTIALS_MISSING).build();
         }
 
@@ -404,6 +425,23 @@ public class OtjServicesResource {
         }
         return Response.status(207)
                 .entity(new SubmitResponse("partial", result.posted().size(), result.failed().size())).build();
+    }
+
+    // Unparseable plaintext reports as a malformed envelope: a distinct message would tell a prober
+    // their guess decrypted.
+    private OneAdvancedCredentials unseal(SealedEnvelope envelope) throws SealedCredentialsException {
+        byte[] plaintext = credentialKeyRing.open(envelope);
+        try {
+            OneAdvancedCredentials credentials =
+                    CREDENTIALS_JSON.readValue(plaintext, OneAdvancedCredentials.class);
+            credentialKeyRing.checkFreshness(credentials.iat());
+            return credentials;
+        } catch (IOException e) {
+            throw new SealedCredentialsException(
+                    SealedCredentialsException.Reason.MALFORMED_ENVELOPE);
+        } finally {
+            java.util.Arrays.fill(plaintext, (byte) 0);
+        }
     }
 
     private static boolean isBlank(String value) {

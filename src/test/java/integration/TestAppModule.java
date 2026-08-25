@@ -1,6 +1,7 @@
 package integration;
 
 import com.github.grepHammerspace.admin.AdminAllowlist;
+import com.github.grepHammerspace.crypto.CredentialKeyRing;
 import com.github.grepHammerspace.db.model.ActivityLog;
 import com.github.grepHammerspace.llm.LlmResult;
 import com.github.grepHammerspace.llm.LlmService;
@@ -32,6 +33,11 @@ public class TestAppModule {
 
     @Provides @Singleton
     AdminAllowlist provideAdminAllowlist() { return AdminAllowlist.parse(ServerHooks.ADMIN_LOGIN); }
+
+    @Provides @Singleton
+    CredentialKeyRing provideCredentialKeyRing() {
+        return new CredentialKeyRing(ServerHooks.IDENTITY_SEED);
+    }
 
     @Provides @Singleton
     MongoClient provideMongoClient() { return MongoClients.create(mongoUri); }

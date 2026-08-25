@@ -24,6 +24,24 @@ public class ServerHooks {
     static final String TEST_USER_ID = "test-user-id";
     static final String ADMIN_LOGIN = "admin@test.tailnet";
 
+    // Generated, not hard-coded: crypto.feature needs the public half, which the JDK can't derive
+    // from a seed.
+    static final java.security.KeyPair IDENTITY = generateIdentity();
+    static final byte[] IDENTITY_SEED = seedOf(IDENTITY);
+
+    private static java.security.KeyPair generateIdentity() {
+        try {
+            return java.security.KeyPairGenerator.getInstance("Ed25519").generateKeyPair();
+        } catch (java.security.NoSuchAlgorithmException e) {
+            throw new IllegalStateException("this JDK has no Ed25519", e);
+        }
+    }
+
+    private static byte[] seedOf(java.security.KeyPair pair) {
+        byte[] encoded = pair.getPrivate().getEncoded();
+        return java.util.Arrays.copyOfRange(encoded, encoded.length - 32, encoded.length);
+    }
+
     // Distinctive on purpose: these can only appear in a log if something logged the real value.
     static final String OA_USERNAME = "leaktest@example.invalid";
     static final String OA_PASSWORD = "pw-DO-NOT-LOG-9f2a";
@@ -51,7 +69,7 @@ public class ServerHooks {
         String authToken = component.sessionTokenService().issue(TEST_USER_ID);
 
         server = ServerBootstrap.start(port, component.otjServicesResource(), component.authResource(),
-            component.accountResource(), component.authenticationFilter());
+            component.accountResource(), component.cryptoResource(), component.authenticationFilter());
 
         adminServer = ServerBootstrap.start(adminPort, component.adminInviteResource(),
             component.adminIdentityFilter());
