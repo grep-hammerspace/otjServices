@@ -13,7 +13,8 @@ public class Main {
         AppComponent component = DaggerAppComponent.create();
 
         ServerBootstrap.start(8945, component.otjServicesResource(), component.authResource(),
-                component.accountResource(), component.authenticationFilter());
+                component.accountResource(), component.cryptoResource(),
+                component.authenticationFilter());
 
         log.info("Server started at http://0.0.0.0:8945");
         Thread.currentThread().join();
