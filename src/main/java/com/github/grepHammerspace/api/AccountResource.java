@@ -97,8 +97,8 @@ public class AccountResource {
      * under the fixed one. Without that, a typo noticed after logging could not be repaired at all.
      *
      * <p>A true back-fill, rewriting the stored rows, is still not done and should not be added.
-     * Note the mobile client's warning about queued activities is stale — see
-     * {@code learner-id-api-spec.md}.
+     * Note the mobile client's warning about queued activities is stale: it tells the user queued
+     * rows are beyond rescue while the learner ID editor is open, and they are not.
      */
     @PATCH
     public Response updateLearnerId(UpdateLearnerIdRequest body, @Context SecurityContext sc) {

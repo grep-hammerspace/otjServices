@@ -1,6 +1,6 @@
 # Steps 04–08: Detailed Implementation Plan
 
-Continuation of `auth-multiuser-plan.html`. Steps 01–03 are done:
+Continuation of the multi-user rollout plan (`auth-multiuser-plan.html`, deleted; see git history). Steps 01–03 are done:
 01 merged to master (PR #12), 02 in PR #14 (`02-session-token-core` → `staging`),
 03 in PR #16 (`03-user-model-bcrypt`, stacked on #14).
 
@@ -447,7 +447,7 @@ tests something real.
 
 ### 08.4 Run the plan's verification checklist
 
-From `auth-multiuser-plan.html`, each with where it's now proven:
+From the original rollout plan, each with where it's now proven:
 
 | Check | Proven by |
 |---|---|
