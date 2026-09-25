@@ -1,0 +1,38 @@
+# One play, run on the box against itself by otj-converge (ansible-migration-plan.md §4.2), and on
+# a GitHub runner by the PR rehearsal (§8.3).
+#
+# Role order matters:
+#   - tailscale before edge, so a `serve` mapping that wrongly claims 443 is caught before HAProxy
+#     fails to bind it.
+#   - app after edge only for readability; nothing in app depends on the proxy.
+#   - verify last. It is skipped in --check mode, where nothing was restarted.
+#   - otj-converge is replaced after verify, so a broken script only ever affects the NEXT run
+#     (plan R4).
+- name: otjServices box
+  hosts: localhost
+  gather_facts: true
+  become: true
+
+  pre_tasks:
+    - name: An image tag is given, and it is a full commit SHA or the CI placeholder
+      ansible.builtin.assert:
+        that:
+          - image_tag is defined
+          - image_tag is match('^([0-9a-f]{40}|ci)$')
+        fail_msg: "Run with -e image_tag=<40-char commit SHA>; otj-converge does this for you."
+        quiet: true
+
+  roles:
+    - base
+    - otjapp
+    - role: tailscale
+      tags: [tailnet]
+    - edge
+    - app
+    - verify
+
+  post_tasks:
+    - name: Install otj-converge last
+      ansible.builtin.include_role:
+        name: base
+        tasks_from: converge_script

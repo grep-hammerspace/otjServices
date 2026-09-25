@@ -55,59 +55,16 @@ first, then deploys).
 
 ## 6. Provision the box itself (manual — SSM, no SSH)
 
-```
-aws ssm start-session --target <instance-id> --region eu-west-2
-```
-
-On the box:
-
-- [ ] `curl -fsSL https://tailscale.com/install.sh | sh` then
-      `sudo tailscale up --hostname=hours-api`
-- [ ] One-time: `sudo tailscale set --operator=$USER` (lets `tailscale serve`
-      run without sudo)
-- [ ] Install Podman (`apt install podman` on Ubuntu 24.04)
-- [ ] Install AWS CLI v2 (needed for `aws ecr get-login-password` — not covered
-      by `apt`'s stale v1):
-      ```
-      curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o awscliv2.zip
-      unzip awscliv2.zip && sudo ./aws/install
-      ```
-      No credentials to configure — it picks up the instance role automatically.
-- [ ] Create the `otjapp` user and enable lingering so `systemd --user` survives
-      logout/reboot:
-      ```
-      sudo useradd -m -s /bin/bash otjapp
-      sudo loginctl enable-linger otjapp
-      ```
-- [ ] As `otjapp`, create `~/otj-deploy/` and paste in the contents of
-      `deploy/prod/deploy.sh`, `deploy/prod/hours-api.container.template` and
-      `deploy/prod/admin-api.container.template` from this repo, then
-      `chmod +x ~/otj-deploy/deploy.sh`
-- [ ] As `otjapp`, create `~/otj-hours-api.env` (`chmod 600`) holding
-      `MONGO_URI=`, `ANTHROPIC_API_KEY=`
-- [ ] As `otjapp`, create `~/otj-admin-api.env` (`chmod 600`) holding
-      `MONGO_URI=` and `ADMIN_ALLOWED_LOGINS=` — the latter a comma-separated
-      list of tailnet logins permitted to mint and revoke invite codes. If it is
-      unset the admin API rejects every request, which is the intended failure
-      mode but an easy one to misread as a broken deploy. No `ANTHROPIC_API_KEY`
-      here: the admin graph never builds the LLM client.
-- [ ] `tailscale serve --bg --https=443 http://127.0.0.1:8945`
-- [ ] `tailscale serve --bg --https=8443 http://127.0.0.1:8946` — the admin API,
-      on its own tailnet port. Keep it off 443: once step 09 puts a public domain
-      in front of the main API, anything sharing that listener inherits its
-      exposure, and invite minting is the last thing that should.
-
-Once this is done, merges to `master` build the app image, push it to ECR
-tagged with the commit SHA, and run `deploy.sh` on the box via SSM
-automatically (see `.github/workflows/ci-cd.yml`) — no further manual steps
-for ordinary deploys. To roll back, re-run `deploy.sh` on the box (or via
-`aws ssm send-command`) pointed at an older SHA tag; ECR retains the last 20.
+**Superseded.** The box is no longer provisioned by hand. It's built and deployed by Ansible:
+follow `ansible-deploy-checklist.md`, and see `deploy/ansible/README.md` for what runs on the
+box. The hand-provisioning steps that used to be here described the box lost on 2026-09-25;
+git history has them.
 
 ## 7. Verify end-to-end
 
 - [ ] From a tailnet-joined device: `curl https://hours-api.<tailnet>.ts.net:8444/health`
-      → 200. **Port 8444, not the bare name** — the main API's tailnet listener
-      moves off 443 so Caddy can bind it (`deploy/prod/README.md` step 3).
+      → 200. **Port 8444, not the bare name**: HAProxy owns 443 on the box
+      (`deploy/ansible/README.md`).
 - [ ] A real register/log-activity call resolves the correct user in the app
       logs. Identity on the main API is the **bearer token**, not the tailnet
       header — `Tailscale-User-Login` is read by `AdminIdentityFilter` alone,

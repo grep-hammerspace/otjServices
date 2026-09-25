@@ -85,14 +85,19 @@ aws/                      CDK (TypeScript): OtjServicesStack (VPC + EC2 + ECR),
                           GithubOidcStack (CI deploy role). node_modules/ is committed-ish noise —
                           ignore it when searching.
 .github/workflows/ci-cd.yml  test on PR; on push to master, deploy CDK + build/push
-                          image to ECR + roll out on the box via SSM
+                          image to ECR (the rollout to the box comes back with deploy.yml)
+.github/workflows/box.yml    box-static (ansible-lint, syntax, shellcheck, haproxy -c) and
+                          box-rehearsal: applies the playbook to a runner twice, then tests
+                          rate limits, loopback-only ports and logs through HAProxy
 docker/                   otjService.Dockerfile, start.sh
 deploy/                   self-host path: podman-compose.yaml, bootstrap.sh, shell.nix,
                           README.md (Tailscale trust model)
-  prod/                   what was installed by hand on the OLD AWS box (destroyed 2026-09-25):
-                          deploy.sh, the two Quadlet templates, Caddyfile (public edge), README.md
-                          (provisioning runbook, rate-limit rationale, the shared-IP problem).
-                          The spec the Ansible roles reproduce; deleted when they land
+  ansible/                the AWS box as code: site.yml, roles (base, otjapp, tailscale, edge,
+                          app, verify), group_vars (nothing secret), ci-vars.yml (rehearsal
+                          only). README.md: how it runs, secrets, the edge, rate-limit rationale,
+                          the shared-IP problem, Cloudflare ranges, reading logs
+  haproxy/                haproxy.cfg (the public edge) and cloudflare-ips.lst
+  bin/otj-converge        the one script on the box: pull a SHA's image, run its playbook
 scripts/                  (tailscale branch only) `otj` CLI for hand-testing the API
 ```
 
@@ -108,7 +113,7 @@ The jar has two entrypoints, selected by `APP_ROLE` in `docker/start.sh`:
 
 | Role | Main class | Port | Graph | Exposure (AWS box) |
 |---|---|---|---|---|
-| `api` (default) | `Main` | 8945 | `AppComponent` | **public** — Cloudflare → Caddy on 443 → `127.0.0.1:8945`; also `tailscale serve --https=8444` |
+| `api` (default) | `Main` | 8945 | `AppComponent` | **public** — Cloudflare → HAProxy on 443 → `127.0.0.1:8945`; also `tailscale serve --https=8444` |
 | `admin` | `admin.AdminMain` | 8946 | `AdminComponent` | tailnet only — `tailscale serve --https=8443` |
 
 Same image tag for both, so they cannot drift and a rollback moves them together. The admin
@@ -265,6 +270,16 @@ mvn -B test -Dtest='CucumberIT,UserRepositoryIT,ActivityLogRepositoryIT,SessionT
 
 Local Mongo: `podman run -d --name otj-mongo -p 27017:27017 mongo:8`.
 
+The box's config (`deploy/ansible/`) has its own checks, in `.github/workflows/box.yml`. Locally:
+
+```bash
+cd deploy/ansible && ansible-lint && ansible-playbook site.yml --syntax-check -e image_tag=ci
+shellcheck deploy/bin/otj-converge deploy/ansible/roles/app/files/otj-render-env
+```
+
+The rehearsal (applying the playbook to a real systemd host, twice) only runs in CI. Write the
+roles for ansible-core 2.16, the apt version the box runs, not whatever is newest.
+
 **The container runtime here is Podman, not Docker** — check `podman info`, and use
 `podman`/`podman-compose` in anything you write.
 
@@ -303,17 +318,17 @@ on the prod box):
   - `tryAcquire` rejects a window longer than `RateLimiter.MAX_WINDOW`; the sweep is global and
     prunes against that bound, so a longer window would have its live counters collected.
 - **There is still no signup rate limit in the app**, and the reasoning has changed. The app
-  cannot key one: every request reaches it from `127.0.0.1` — through Caddy or through
+  cannot key one: every request reaches it from `127.0.0.1` — through HAProxy or through
   `tailscale serve` — and it does not read `X-Forwarded-For`, so it has no forgery-resistant
   per-client key. Keying on the invite code would let an attacker lock a legitimate invitee out
   of the only code they have, and a global limit would let anyone deny signup to everybody.
   Invite codes carry 40 bits, which `InviteCodeGenerator`'s javadoc rightly calls far past
   online guessing.
-  What *has* changed is that the cap now exists a layer out: **Caddy rate limits
+  What *has* changed is that the cap now exists a layer out: **HAProxy rate limits
   `/auth/signup` and `/auth/session` per source IP** (10/min and 250/day — see
-  `deploy/prod/Caddyfile`). If you ever want the limit inside the app instead, the prerequisite
-  is trusting `X-Forwarded-For` from the loopback Caddy hop *only*, and that is a deliberate
-  change to the trust model, not a one-line addition.
+  `deploy/haproxy/haproxy.cfg`). If you ever want the limit inside the app instead, the
+  prerequisite is trusting `X-Forwarded-For` from the loopback HAProxy hop *only*, and that is a
+  deliberate change to the trust model, not a one-line addition.
 - **`log-activities` is capped at 10 LLM calls per user per day** by `quota/LlmQuotaService`,
   counted in the `llmQuota` collection, one document per user per day. Things to preserve:
   - The check sits after the 400s and before the model call, so a malformed request never spends
@@ -352,11 +367,18 @@ on the prod box):
   message for invalid/used/expired alike. Don't "helpfully" make these more specific.
 - The shade plugin strips `META-INF/*.SF|DSA|RSA|EC` — signed bcrypt jars otherwise
   make the JVM reject the uber-jar. Don't remove that filter.
-- Prod has **exactly two inbound ports, 80 and 443, and both terminate at Caddy** — not at the
-  app. Caddy handles TLS and per-IP rate limiting, then proxies to `127.0.0.1:8945`. Shell
-  access is still SSM Session Manager (no SSH port), and the admin API is still tailnet-only
-  on 8443. **Both Quadlets still bind loopback, and that must not change**: it is the only
-  reason `AdminIdentityFilter` can believe the `Tailscale-User-Login` header, and the only
-  reason the public route cannot reach 8946. Read `deploy/prod/README.md` and `deploy/README.md`
-  before touching networking.
+- Prod has **exactly one inbound port, 443, from Cloudflare's ranges only, and it terminates at
+  HAProxy** — not at the app. HAProxy handles TLS and per-IP rate limiting, then proxies to
+  `127.0.0.1:8945`. Shell access is SSM Session Manager (no SSH port, sshd masked), and the admin
+  API is tailnet-only on 8443. **Both Quadlets bind loopback, and that must not change**: it is
+  the only reason `AdminIdentityFilter` can believe the `Tailscale-User-Login` header, and the
+  only reason the public route cannot reach 8946. The `PublishPort=` lines are literals for that
+  reason, and the playbook's verify role fails a deploy that leaves anything but 443 on a
+  wildcard address. Read `deploy/ansible/README.md` and `deploy/README.md` before touching
+  networking.
+- **Don't change the box by hand; change `deploy/ansible/` and merge.** A converge undoes hand
+  changes. Ansible never reads a secret (they reach the containers through `otj-render-env`
+  at unit start), and the origin certificate is the one thing installed by hand and only
+  `stat`ed. Any new task that could print a secret needs `no_log: true`: the deploy output
+  goes to CloudWatch and the Actions job.
 - `dependency-reduced-pom.xml` is a shade-plugin artifact, not a file to edit.

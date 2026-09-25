@@ -1,24 +1,30 @@
+# Written by the app role for release {{ image_tag }}. Don't edit on the box: the next converge
+# puts it back, and the nightly drift check reports the change.
 [Unit]
 Description=otjServices admin API (invite codes)
 After=network-online.target
 Wants=network-online.target
 
 [Container]
-Image=__IMAGE_URI__
+Image={{ app_image }}
 ContainerName=admin-api
 Environment=APP_ROLE=admin
-# Loopback only. This is not a defence-in-depth nicety — AdminIdentityFilter trusts the
+# Loopback only. This is not a defence-in-depth nicety: AdminIdentityFilter trusts the
 # Tailscale-User-Login header precisely because `tailscale serve` is the only process that can
 # reach this port. Publishing it wider silently turns that header into a self-declared identity.
+# A literal, not a variable, so it can't be widened by accident.
 PublishPort=127.0.0.1:8946:8946
-EnvironmentFile=%h/otj-admin-api.env
+EnvironmentFile=%t/otj/admin-api.env
+LogDriver=journald
 HealthCmd=curl -f http://localhost:8946/health || exit 1
 HealthInterval=15s
 HealthRetries=3
 
 [Service]
+ExecStartPre=%h/.local/bin/otj-render-env admin-api
 Restart=always
 RestartSec=5
+TimeoutStartSec=300
 
 [Install]
 WantedBy=default.target

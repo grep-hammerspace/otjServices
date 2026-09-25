@@ -1,0 +1,143 @@
+# Everything here runs as otjapp, against otjapp's own systemd manager and rootless Podman storage.
+# `otjapp_env` (set by the otjapp role) is what lets `scope: user` find that manager.
+
+- name: otjapp's directories
+  become: true
+  become_user: "{{ otjapp_user }}"
+  ansible.builtin.file:
+    path: "{{ otjapp_home }}/{{ item }}"
+    state: directory
+    mode: "0700"
+  loop:
+    - .config/containers/systemd
+    - .config/otj
+    - .local/bin
+
+- name: otj-render-env
+  become: true
+  become_user: "{{ otjapp_user }}"
+  ansible.builtin.copy:
+    src: otj-render-env
+    dest: "{{ otjapp_home }}/.local/bin/otj-render-env"
+    mode: "0755"
+  notify: [Restart hours-api, Restart admin-api]
+
+- name: Where otj-render-env gets secrets from
+  become: true
+  become_user: "{{ otjapp_user }}"
+  ansible.builtin.template:
+    src: render-env.conf.j2
+    dest: "{{ otjapp_home }}/.config/otj/render-env.conf"
+    mode: "0600"
+  notify: [Restart hours-api, Restart admin-api]
+
+- name: Which parameters each service gets
+  become: true
+  become_user: "{{ otjapp_user }}"
+  ansible.builtin.template:
+    src: service.params.j2
+    dest: "{{ otjapp_home }}/.config/otj/{{ svc }}.params"
+    mode: "0600"
+  loop: "{{ app_services.keys() | list }}"
+  loop_control:
+    loop_var: svc
+  notify: "Restart {{ svc }}"
+
+# PR rehearsal only (render_env_source: fixture, from ci-vars.yml): dummy values in place of
+# Parameter Store, which a runner can't reach. Never set on the box.
+- name: CI only, the fixture values otj-render-env reads instead of Parameter Store
+  when: render_env_source == 'fixture'
+  become: true
+  become_user: "{{ otjapp_user }}"
+  block:
+    - name: Fixture directory
+      ansible.builtin.file:
+        path: "{{ otjapp_home }}/.config/otj/fixture"
+        state: directory
+        mode: "0700"
+
+    - name: Fixture values
+      ansible.builtin.copy:
+        content: "{{ item.value }}"
+        dest: "{{ otjapp_home }}/.config/otj/fixture/{{ item.key }}"
+        mode: "0600"
+      loop: "{{ render_env_fixture | dict2items }}"
+      loop_control:
+        label: "{{ item.key }}"
+
+# ── The image, into otjapp's storage ─────────────────────────────────────────────────────────
+# otj-converge already pulled it once as root, only to read the playbook out of it. The containers
+# run rootless, so they need their own copy.
+- name: The release image is in otjapp's storage
+  become: true
+  become_user: "{{ otjapp_user }}"
+  environment: "{{ otjapp_env }}"
+  ansible.builtin.command: podman image exists {{ app_image }}
+  register: app_image_present
+  changed_when: false
+  failed_when: app_image_present.rc not in [0, 1]
+  check_mode: false
+  when: not ansible_check_mode or otjapp_uid != 'UNKNOWN'
+
+- name: Pull it from ECR
+  when:
+    - app_image_present.rc | default(1) == 1
+    - app_image_archive == ''
+    - not ansible_check_mode
+  tags: [aws]
+  become: true
+  become_user: "{{ otjapp_user }}"
+  environment: "{{ otjapp_env }}"
+  ansible.builtin.shell:
+    cmd: |
+      set -euo pipefail
+      aws ecr get-login-password --region {{ aws_region }} \
+        | podman login --username AWS --password-stdin {{ image_repo.split('/')[0] }}
+      podman pull --quiet {{ app_image }}
+    executable: /bin/bash
+  changed_when: true
+
+- name: Load it from the CI archive
+  when:
+    - app_image_present.rc | default(1) == 1
+    - app_image_archive != ''
+    - not ansible_check_mode
+  become: true
+  become_user: "{{ otjapp_user }}"
+  environment: "{{ otjapp_env }}"
+  ansible.builtin.command: podman load --quiet --input {{ app_image_archive }}
+  changed_when: true
+
+# ── The units ────────────────────────────────────────────────────────────────────────────────
+# A new SHA changes Image=, which changes the file, which restarts that unit. The same SHA
+# converged again changes nothing, so nothing restarts (plan §4.3).
+- name: Quadlets
+  become: true
+  become_user: "{{ otjapp_user }}"
+  ansible.builtin.template:
+    src: "{{ svc }}.container.j2"
+    dest: "{{ otjapp_home }}/.config/containers/systemd/{{ svc }}.container"
+    mode: "0644"
+  loop: "{{ app_services.keys() | list }}"
+  loop_control:
+    loop_var: svc
+  notify: [Reload otjapp's systemd, "Restart {{ svc }}"]
+
+# The daemon-reload has to happen before the first start, or the units don't exist yet.
+- name: Apply unit changes now
+  ansible.builtin.meta: flush_handlers
+
+# Quadlet units are generated, so they can't be `enabled`. Their [Install] section starts them at
+# boot, and linger keeps otjapp's manager running without a login.
+- name: Both services running
+  become: true
+  become_user: "{{ otjapp_user }}"
+  environment: "{{ otjapp_env }}"
+  ansible.builtin.systemd_service:
+    name: "{{ svc }}.service"
+    scope: user
+    state: started
+  loop: "{{ app_services.keys() | list }}"
+  loop_control:
+    loop_var: svc
+  when: not ansible_check_mode or otjapp_uid != 'UNKNOWN'

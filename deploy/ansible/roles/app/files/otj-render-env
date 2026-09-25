@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+# otj-render-env <service>
+#
+# Runs as each app unit's ExecStartPre (ansible-migration-plan.md §7). Fetches that service's
+# secrets from Parameter Store with the instance role and writes them as KEY=value lines to a
+# tmpfs file only its user can read, which the container then loads with --env-file. A restart
+# re-renders it, so rotating a secret is `put-parameter --overwrite` plus a restart.
+#
+# Nothing here prints a value. A missing parameter fails the unit's start with its NAME, so the
+# service never boots half-configured and fails on its first request instead.
+#
+# Config, all written by the app role, none of it secret:
+#   ~/.config/otj/<service>.params   one "ENV_VAR /parameter/name" per line
+#   ~/.config/otj/render-env.conf    SOURCE=ssm|fixture and REGION=<aws region>
+# SOURCE=fixture is the PR rehearsal's (plan §8.3): values come from ~/.config/otj/fixture/<basename
+# of the parameter name> instead of AWS.
+set -euo pipefail
+
+svc="${1:?usage: otj-render-env <service>}"
+conf_dir="${HOME:?}/.config/otj"
+params_file="$conf_dir/$svc.params"
+out_dir="${XDG_RUNTIME_DIR:?XDG_RUNTIME_DIR is not set}/otj"
+out_file="$out_dir/$svc.env"
+
+# shellcheck source=/dev/null
+. "$conf_dir/render-env.conf"
+: "${SOURCE:?} ${REGION:?}"
+
+[[ -r "$params_file" ]] || { echo "otj-render-env: no $params_file" >&2; exit 1; }
+
+declare -A env_for_param=()
+while read -r var param; do
+  [[ -z "$var" || "$var" == \#* ]] && continue
+  env_for_param["$param"]="$var"
+done < "$params_file"
+
+umask 077
+mkdir -p "$out_dir"
+tmp=$(mktemp "$out_dir/.$svc.XXXXXX")
+trap 'rm -f "$tmp"' EXIT
+
+case "$SOURCE" in
+  ssm)
+    # One call for all of them. --output json, not text, so a value can't be split by the parser.
+    resp=$(aws ssm get-parameters --region "$REGION" --with-decryption \
+             --names "${!env_for_param[@]}" --output json)
+    missing=$(jq -r '.InvalidParameters[]?' <<<"$resp")
+    if [[ -n "$missing" ]]; then
+      echo "otj-render-env: $svc: missing from Parameter Store: $(tr '\n' ' ' <<<"$missing")" >&2
+      exit 1
+    fi
+    while IFS=$'\t' read -r name value_b64; do
+      value=$(base64 -d <<<"$value_b64")
+      printf '%s=%s\n' "${env_for_param[$name]}" "$value" >> "$tmp"
+    done < <(jq -r '.Parameters[] | [.Name, (.Value | @base64)] | @tsv' <<<"$resp")
+    ;;
+  fixture)
+    for param in "${!env_for_param[@]}"; do
+      f="$conf_dir/fixture/${param##*/}"
+      [[ -r "$f" ]] || { echo "otj-render-env: $svc: no fixture for $param" >&2; exit 1; }
+      printf '%s=%s\n' "${env_for_param[$param]}" "$(cat "$f")" >> "$tmp"
+    done
+    ;;
+  *)
+    echo "otj-render-env: unknown SOURCE '$SOURCE'" >&2
+    exit 1
+    ;;
+esac
+
+# An env file is one line per variable. A value with a newline in it would silently become two
+# variables, or none.
+if [[ $(wc -l < "$tmp") -ne ${#env_for_param[@]} ]]; then
+  echo "otj-render-env: $svc: a value contains a newline; refusing to write it" >&2
+  exit 1
+fi
+
+mv -f "$tmp" "$out_file"
+trap - EXIT

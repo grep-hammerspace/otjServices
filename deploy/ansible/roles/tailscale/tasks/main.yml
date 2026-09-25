@@ -1,0 +1,100 @@
+# Installing runs everywhere, the PR rehearsal included. Joining the tailnet and `serve` are
+# tagged `tailnet`: a runner can't join it, so the rehearsal skips them (plan §8.3).
+- name: Tailscale apt repository
+  ansible.builtin.deb822_repository:
+    name: tailscale
+    types: deb
+    uris: https://pkgs.tailscale.com/stable/ubuntu
+    suites: "{{ ansible_distribution_release }}"
+    components: main
+    signed_by: "https://pkgs.tailscale.com/stable/ubuntu/{{ ansible_distribution_release }}.noarmor.gpg"
+
+- name: Tailscale
+  ansible.builtin.apt:
+    name: tailscale
+    state: present
+    update_cache: true
+
+- name: tailscaled running
+  ansible.builtin.systemd_service:
+    name: tailscaled
+    enabled: true
+    state: started
+
+- name: Join the tailnet, and serve the two APIs on it
+  tags: [tailnet]
+  block:
+    - name: Tailnet state
+      ansible.builtin.command: tailscale status --json
+      register: tailscale_status_raw
+      changed_when: false
+      failed_when: false # exits non-zero when logged out, which is the state we're checking for
+      check_mode: false
+
+    # Only when not already Running, so a re-run never re-authenticates the node. It fires once, on
+    # a new box's first converge. The key goes through a 0600 file in /run, never an argument, so
+    # it isn't in `ps`, and the task is no_log so it isn't in the deploy output.
+    #
+    # Before a rebuild, remove the old `hours-api` machine in the Tailscale admin console, or this
+    # one joins as `hours-api-1` (plan §11).
+    - name: Join the tailnet as {{ tailscale_hostname }}
+      when: (tailscale_status_raw.stdout | default('{}') | from_json).BackendState | default('') != 'Running'
+      ansible.builtin.shell:
+        cmd: |
+          set -euo pipefail
+          umask 077
+          keyfile=$(mktemp /run/otj-tailscale-key.XXXXXX)
+          trap 'rm -f "$keyfile"' EXIT
+          key=$(aws ssm get-parameter --region {{ aws_region }} --name {{ tailscale_authkey_param }} \
+                  --with-decryption --query Parameter.Value --output text)
+          # An OAuth client secret mints the node's key itself, and has to be told what kind.
+          case "$key" in
+            tskey-client-*) key="${key}?ephemeral=false&preauthorized=true" ;;
+          esac
+          printf '%s' "$key" > "$keyfile"
+          tailscale up --auth-key="file:$keyfile" --hostname={{ tailscale_hostname }} \
+            --advertise-tags={{ tailscale_tag }}
+        executable: /bin/bash
+      no_log: true
+      changed_when: true
+
+    - name: Tailnet name and serve config
+      ansible.builtin.shell:
+        cmd: |
+          set -euo pipefail
+          tailscale status --json | jq -r '.Self.DNSName | rtrimstr(".")'
+          tailscale serve status --json
+        executable: /bin/bash
+      register: tailscale_serve_raw
+      changed_when: false
+      check_mode: false
+
+    # `serve status --json` is {"TCP": {"<port>": {...}}, "Web": {"<name>:<port>": {"Handlers":
+    # {"/": {"Proxy": "<target>"}}}}}. (Verify against the installed version on the first converge;
+    # `serve get-config`/`set-config` in newer releases would make this declarative.)
+    - name: Parse it
+      ansible.builtin.set_fact:
+        tailscale_dns_name: "{{ tailscale_serve_raw.stdout_lines[0] }}"
+        tailscale_serve_config: "{{ ((tailscale_serve_raw.stdout_lines[1:] | join('\n') | trim) or '{}') | from_json }}"
+
+    - name: What each tailnet port proxies to now
+      ansible.builtin.set_fact:
+        tailscale_current: >-
+          {{ tailscale_current | default({}) | combine({item.key: (((((tailscale_serve_config.Web | default({}))
+          [tailscale_dns_name ~ ':' ~ item.key] | default({})).Handlers | default({}))['/'] | default({}))
+          .Proxy | default(''))}) }}
+      loop: "{{ tailscale_serve | dict2items }}"
+
+    # HAProxy owns 443. tailscaled binds 443 on the tailnet address specifically, which collides
+    # with HAProxy's wildcard bind: the old box had to move the main API from 443 to 8444 for
+    # exactly this (the reason site.yml runs this role before edge).
+    - name: Nothing served on 443
+      ansible.builtin.command: tailscale serve --https=443 off
+      when: "'443' in (tailscale_serve_config.TCP | default({}))"
+      changed_when: true
+
+    - name: Serve each API on its tailnet port {{ item.key }}
+      ansible.builtin.command: tailscale serve --bg --https={{ item.key }} {{ item.value }}
+      loop: "{{ tailscale_serve | dict2items }}"
+      when: tailscale_current[item.key] != item.value
+      changed_when: true
