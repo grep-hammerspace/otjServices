@@ -117,10 +117,19 @@ export class OtjServicesStack extends cdk.Stack {
       ],
     });
 
-    const ubuntu = ec2.MachineImage.fromSsmParameter(
-      "/aws/service/canonical/ubuntu/server/24.04/stable/current/amd64/hvm/ebs-gp3/ami-id",
-      { os: ec2.OperatingSystemType.LINUX },
-    );
+    // Pinned, deliberately. This used to be `MachineImage.fromSsmParameter` on Canonical's
+    // `.../24.04/stable/current/.../ami-id`, which CloudFormation re-resolves on EVERY deploy.
+    // Canonical moves that pointer every few weeks, and a new ImageId on AWS::EC2::Instance is a
+    // replacement: on 2026-09-25 an unrelated merge created a fresh instance, moved the Elastic IP
+    // to it and terminated the hand-provisioned box, root volume and all.
+    //
+    // This is the AMI that replacement launched with, so pinning it changes nothing on the live
+    // instance. Moving to a newer AMI is now a deliberate PR, and it IS a rebuild: the stack policy
+    // in aws/stack-policy.json refuses it unless overridden for that one update (aws/README.md).
+    // Security updates in between come from unattended-upgrades on the box, not from new AMIs.
+    const ubuntu = ec2.MachineImage.genericLinux({
+      "eu-west-2": "ami-05a81b93a249716f9", // ubuntu 24.04 amd64 gp3, Canonical, 2026-09-23
+    });
 
     const instance = new ec2.Instance(this, "Instance", {
       vpc,
