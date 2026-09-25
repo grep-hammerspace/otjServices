@@ -1,0 +1,66 @@
+# Runs last on every apply (ansible-migration-plan.md §4.4). Any failure here fails the deploy.
+# Skipped in --check, where nothing was restarted and there is nothing new to check.
+- name: Checks after the apply
+  when: not ansible_check_mode
+  block:
+    - name: Both APIs answer /health on loopback
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ item.value.port }}/health"
+        status_code: 200
+      register: verify_health
+      until: verify_health.status == 200
+      retries: 45
+      delay: 2
+      loop: "{{ app_services | dict2items }}"
+      loop_control:
+        label: "{{ item.key }}"
+
+    - name: HAProxy unit state
+      ansible.builtin.systemd_service:
+        name: haproxy
+      register: verify_haproxy
+
+    - name: HAProxy is running
+      ansible.builtin.assert:
+        that: verify_haproxy.status.ActiveState == 'active'
+        fail_msg: "haproxy.service is {{ verify_haproxy.status.ActiveState }}"
+        quiet: true
+
+    - name: The live HAProxy config is valid
+      ansible.builtin.command: haproxy -c -q -f /etc/haproxy/haproxy.cfg
+      changed_when: false
+
+    # A 15-year certificate, so this fires once, as a reminder, long before it matters.
+    - name: The origin certificate has more than 90 days left
+      ansible.builtin.command: openssl x509 -checkend 7776000 -noout -in {{ origin_cert_path }}
+      changed_when: false
+
+    # AGENTS.md's loopback rule, turned into a check that fails the deploy. 8945 and 8946 must only
+    # ever be reachable through HAProxy and `tailscale serve`; if anything publishes wider, the
+    # admin API's identity header becomes self-declared. Only HAProxy's 443 may be on a wildcard.
+    - name: Listening TCP sockets
+      ansible.builtin.command: ss -Hltn
+      register: verify_listeners
+      changed_when: false
+
+    - name: Nothing but HAProxy listens on a wildcard address
+      vars:
+        wildcard: >-
+          {{ verify_listeners.stdout_lines | map('split') | map(attribute=3)
+             | select('match', '^(0\.0\.0\.0|\[::\]|\*):') | list }}
+        allowed: "{{ verify_wildcard_allowed + verify_wildcard_allowed_extra }}"
+      ansible.builtin.assert:
+        that: (wildcard | difference(allowed)) | length == 0
+        fail_msg: "Unexpected wildcard listeners: {{ wildcard | difference(allowed) }}"
+        quiet: true
+
+    - name: tailscale serve maps exactly 8443 and 8444, and nothing on 443
+      tags: [tailnet]
+      ansible.builtin.shell:
+        cmd: |
+          set -euo pipefail
+          tailscale serve status --json | jq -r '.TCP // {} | keys[]' | sort | paste -sd,
+        executable: /bin/bash
+      register: verify_ts_ports
+      changed_when: false
+      failed_when: verify_ts_ports.stdout != (tailscale_serve.keys() | map('string') | sort | join(','))

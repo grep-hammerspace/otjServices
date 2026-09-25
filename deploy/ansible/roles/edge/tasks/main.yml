@@ -1,0 +1,76 @@
+# The public listener on 443: HAProxy from Ubuntu main (plan D3). Config from deploy/haproxy/.
+- name: HAProxy
+  ansible.builtin.apt:
+    name: haproxy
+    state: present
+
+# The origin certificate is installed BY HAND (ansible-deploy-checklist.md step 4) and never copied,
+# templated or read here: any task that did would print the private key under --diff, and that
+# output reaches CloudWatch and the Actions job (plan §7). `stat` sees only its metadata.
+- name: The origin certificate is in place
+  ansible.builtin.stat:
+    path: "{{ origin_cert_path }}"
+    get_checksum: false
+  register: edge_origin_cert
+
+- name: It exists, and only root can read it
+  ansible.builtin.assert:
+    that:
+      - edge_origin_cert.stat.exists
+      - edge_origin_cert.stat.pw_name == 'root'
+      - edge_origin_cert.stat.mode == '0600'
+    fail_msg: >-
+      {{ origin_cert_path }} must exist as root 0600, cert then key in one file. Issue one in the
+      Cloudflare dashboard and install it over SSM: ansible-deploy-checklist.md step 4, and
+      ansible-migration-plan.md §7. Stopping here so HAProxy isn't left unable to start.
+    quiet: true
+
+- name: Cloudflare's ranges, the only sources whose CF-Connecting-IP is believed
+  ansible.builtin.copy:
+    content: |
+      {{ lookup('ansible.builtin.file', playbook_dir ~ '/../haproxy/cloudflare-ips.lst') }}
+      {% for cidr in edge_trusted_extra | default([]) %}
+      {{ cidr }}
+      {% endfor %}
+    dest: /etc/haproxy/cloudflare-ips.lst
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload haproxy
+
+# Checked with the installed HAProxy before it replaces the live file, so a bad config never
+# reaches a running proxy.
+- name: haproxy.cfg
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../haproxy/haproxy.cfg"
+    dest: /etc/haproxy/haproxy.cfg
+    owner: root
+    group: root
+    mode: "0644"
+    validate: haproxy -c -q -f %s
+  notify: Reload haproxy
+
+# journald allows 10,000 messages per 30 s per unit by default, then silently drops the rest. A
+# traffic burst is exactly when the access log matters, so the limit is off for HAProxy.
+- name: haproxy.service drop-in directory
+  ansible.builtin.file:
+    path: /etc/systemd/system/haproxy.service.d
+    state: directory
+    mode: "0755"
+
+- name: journald never drops HAProxy's access log
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/haproxy.service.d/otj-logging.conf
+    mode: "0644"
+    content: |
+      [Service]
+      LogRateLimitIntervalSec=0
+  notify:
+    - Reload systemd
+    - Restart haproxy
+
+- name: HAProxy running
+  ansible.builtin.systemd_service:
+    name: haproxy
+    enabled: true
+    state: started

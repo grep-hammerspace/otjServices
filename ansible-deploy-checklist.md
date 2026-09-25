@@ -19,7 +19,7 @@ Session Manager plugin. Check first that `aws sts get-caller-identity` works.
 
 ## Step 1 — Stop it happening again
 
-- [ ] 🧑 Merge **#45**. It pins the AMI and adds `aws/stack-policy.json`. `cdk diff` against the live
+- [x] 🧑 Merge **#45**. It pins the AMI and adds `aws/stack-policy.json`. `cdk diff` against the live
       stack shows no resource changes, so the instance is untouched.
 - [ ] 🧑 Set the stack policy. `cdk deploy` can't, so this is by hand, once:
 
@@ -34,10 +34,10 @@ Session Manager plugin. Check first that `aws sts get-caller-identity` works.
 
 ## Step 2 — Repo work (PRs)
 
-- [ ] **Runner spike:** a throwaway workflow proving rootless Podman, linger and `systemctl --user`
+- [x] **Runner spike:** a throwaway workflow proving rootless Podman, linger and `systemctl --user`
       work on GitHub's `ubuntu-24.04` runner. The rehearsal depends on it, and the fallback (a systemd
       container) is much more work, so find out first.
-- [ ] **Playbook PR:** `deploy/ansible/` (roles `base`, `otjapp`, `tailscale`, `edge`, `app`,
+- [ ] **Playbook PR (#48):** `deploy/ansible/` (roles `base`, `otjapp`, `tailscale`, `edge`, `app`,
       `verify`), `deploy/bin/otj-converge`, `deploy/haproxy/haproxy.cfg` ported from the Caddyfile,
       `COPY deploy/ /deploy/` in the Dockerfile, and `pr.yml` (lint, syntax check, shellcheck,
       `haproxy -c`, the Quadlet dry-run, and the **rehearsal applied twice**). Also deletes
@@ -47,7 +47,7 @@ Session Manager plugin. Check first that `aws sts get-caller-identity` works.
 - [ ] **Ops-workflows PR:** `converge-check`, `converge`, `rollback` and `restart` (plan §9.2).
       They have to be on `master` before their buttons appear. None of them runs on push, and no
       workflow prints app or edge logs.
-- [ ] **IAM PR** (`aws/lib/`):
+- [x] **IAM PR** (`aws/lib/`, #47):
   - `otj-services-stack.ts`, for the instance role: `ssm:GetParameters` on `/otj/prod/*`,
     `kms:Decrypt` on `aws/ssm` through `ssm.eu-west-2.amazonaws.com`, and write access to the
     converge-output log group.
@@ -58,12 +58,12 @@ Session Manager plugin. Check first that `aws sts get-caller-identity` works.
 
 GitHub:
 
-- [ ] Settings → Environments → **New environment `production`**, with deployment branches limited
+- [x] Settings → Environments → **New environment `production`**, with deployment branches limited
       to `master`.
 - [ ] Review the IAM PR's `github-oidc-stack.ts` diff, then run
       `cd aws && npx cdk diff GithubOidcStack && npx cdk deploy GithubOidcStack`. CI can't update
       the role it signs in with.
-- [ ] Merge the IAM PR. CI deploys the `OtjServicesStack` half.
+- [x] Merge the IAM PR. CI deploys the `OtjServicesStack` half.
 - [ ] Settings → Branches → `master`: add the `pr.yml` checks, rehearsal included, as **required
       status checks**.
 

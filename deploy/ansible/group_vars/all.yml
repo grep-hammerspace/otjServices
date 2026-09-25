@@ -1,0 +1,56 @@
+# Everything here is NOT secret. Secrets live in Parameter Store and are fetched at unit start by
+# otj-render-env (ansible-migration-plan.md §7); nothing in this playbook reads their values.
+
+aws_region: eu-west-2
+
+# ── The app image ────────────────────────────────────────────────────────────────────────────
+image_repo: 378849626815.dkr.ecr.eu-west-2.amazonaws.com/otj-hours-api
+app_image: "{{ image_repo }}:{{ image_tag }}"
+# Set only by ci-vars.yml: load the image from a `docker save` archive instead of pulling from ECR.
+app_image_archive: ""
+
+# ── The app user ─────────────────────────────────────────────────────────────────────────────
+otjapp_user: otjapp
+otjapp_home: /home/otjapp
+
+# ── Secrets: which Parameter Store names each unit's env file is rendered from ───────────────
+# ENV_VAR: parameter name. otj-render-env fails the unit's start if any of them is missing.
+render_env_source: ssm # ci-vars.yml switches this to `fixture`
+app_services:
+  hours-api:
+    port: 8945
+    params:
+      MONGO_URI: /otj/prod/mongo-uri
+      ANTHROPIC_API_KEY: /otj/prod/anthropic-api-key
+  admin-api:
+    port: 8946
+    params:
+      MONGO_URI: /otj/prod/mongo-uri
+      ADMIN_ALLOWED_LOGINS: /otj/prod/admin-allowed-logins
+
+# ── Tailscale ────────────────────────────────────────────────────────────────────────────────
+tailscale_hostname: hours-api
+tailscale_tag: "tag:otj"
+tailscale_authkey_param: /otj/prod/tailscale-authkey
+# tailnet HTTPS port → loopback target. Nothing ever on 443: HAProxy owns it.
+tailscale_serve:
+  8443: http://127.0.0.1:8946 # admin-api, the ONLY way to reach it (AdminIdentityFilter)
+  8444: http://127.0.0.1:8945 # hours-api, the operator path; bypasses the edge rate limits
+
+# ── Edge ─────────────────────────────────────────────────────────────────────────────────────
+# Installed by hand, never by Ansible (§7): cert then key, one file, 0600 root.
+origin_cert_path: /etc/haproxy/certs/origin.pem
+
+# ── AWS CLI v2 ───────────────────────────────────────────────────────────────────────────────
+# Ubuntu's apt copy is v1 and too old for `ecr get-login-password`. Bump both together; the
+# checksum is sha256 of awscli-exe-linux-x86_64-<version>.zip.
+awscli_version: "2.31.39"
+awscli_sha256: 5a2ad4e63f8f687d735f8e7a132b3622a1cf08fa884c53e3423c9b83a3c0d663
+
+# ── verify ───────────────────────────────────────────────────────────────────────────────────
+# The ONLY listeners allowed on a wildcard address. Everything else must be on loopback or the
+# tailnet address. ci-vars.yml adds the runner's own.
+verify_wildcard_allowed:
+  - "0.0.0.0:443"
+  - "[::]:443"
+verify_wildcard_allowed_extra: []

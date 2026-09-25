@@ -1,0 +1,5 @@
+# Written by the app role (deploy/ansible/group_vars/all.yml, app_services). Not secret: the
+# parameter NAMES otj-render-env fetches for {{ svc }}, and the variable each one becomes.
+{% for var, param in app_services[svc].params.items() %}
+{{ var }} {{ param }}
+{% endfor %}

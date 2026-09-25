@@ -1,0 +1,38 @@
+# The unprivileged user both app containers run as, under rootless Podman.
+- name: The otjapp user
+  ansible.builtin.user:
+    name: "{{ otjapp_user }}"
+    home: "{{ otjapp_home }}"
+    shell: /bin/bash
+    create_home: true
+  register: otjapp_account
+
+- name: Rootless Podman has subordinate IDs to map
+  ansible.builtin.command: grep -q "^{{ otjapp_user }}:" /etc/subuid /etc/subgid
+  changed_when: false
+  when: not ansible_check_mode # on a blank box the user doesn't exist yet in --check
+
+# Linger starts otjapp's own systemd manager at boot and keeps it running with nobody logged in.
+# Without it the containers stop when the last session ends, and every `scope: user` task below
+# fails with no user bus to talk to.
+- name: Linger for otjapp
+  ansible.builtin.command: loginctl enable-linger {{ otjapp_user }}
+  args:
+    creates: /var/lib/systemd/linger/{{ otjapp_user }}
+
+# Every `systemctl --user` call for otjapp needs these two variables, set explicitly. They are the
+# most common Ansible-plus-rootless-Podman failure: `become_user` alone leaves the user's service
+# manager unreachable.
+# `uid` is absent only in --check on a blank box, where no user task below can run anyway.
+- name: Where otjapp's user manager lives
+  ansible.builtin.set_fact:
+    otjapp_uid: "{{ otjapp_account.uid | default('UNKNOWN') }}"
+    otjapp_env:
+      XDG_RUNTIME_DIR: "/run/user/{{ otjapp_account.uid | default('UNKNOWN') }}"
+      DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/{{ otjapp_account.uid | default('UNKNOWN') }}/bus"
+
+- name: otjapp's user manager is up
+  ansible.builtin.wait_for:
+    path: "/run/user/{{ otjapp_uid }}/bus"
+    timeout: 30
+  when: not ansible_check_mode
