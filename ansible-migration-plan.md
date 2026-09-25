@@ -707,9 +707,31 @@ GitHub's `ubuntu-24.04` runner is a VM with systemd and the same OS as the box. 
    carry a **truncated** client IP (§4.5), not the full one.
 5. `verify` has already run inside step 2, so the wildcard-listener check is covered.
 
-This would have caught the missing-`curl` healthcheck and a wrong-order 443 bind. It costs only runner minutes. *(Verify: linger and rootless Podman work on
-the hosted runner; Podman is preinstalled there, and the fallback is a `ubuntu:24.04` container
-with systemd, which is fiddlier.)*
+This would have caught the missing-`curl` healthcheck and a wrong-order 443 bind. It costs only
+runner minutes.
+
+**Verified on the hosted runner (2026-09-25, spike run 36152214141).** `ubuntu-24.04` has the box's
+Ubuntu 24.04, Podman 4.9.3 and systemd 255, and apt gives ansible-core 2.16.3 and HAProxy 2.8.16.
+Rootless Podman under a lingering `otjapp` works. A user Quadlet with `LogDriver=journald` and
+`PublishPort=127.0.0.1:…` listens on loopback only, and isn't reachable on the runner's own address.
+Ansible running as root drives `otjapp`'s user units through `environment: {XDG_RUNTIME_DIR: …}`,
+idempotently. A draft of the rate-limit config (stick tables, `set-src`, a 429 with `Retry-After`)
+passes `haproxy -c`. So no systemd-container fallback is needed.
+
+The runner differs from the box in four ways, and the rehearsal job has to correct each one before
+it applies anything. **None of these corrections belong in the roles**, because the box has none of
+these problems:
+1. **The runner image writes its own environment into `/etc/environment`** (`XDG_CONFIG_HOME=/home/runner/.config`,
+   its `PATH`, and dozens more). `pam_env` hands that to every user's systemd manager, so `otjapp`'s
+   Quadlet generator looks in `/home/runner` and finds nothing. The job resets `/etc/environment` to
+   Ubuntu's default (`PATH` only) **before** creating `otjapp`.
+2. **The runner's `sudo` passes the caller's environment through**, `XDG_RUNTIME_DIR=/run/user/1001`
+   included. The job runs `ansible-playbook` as `sudo env -i HOME=/root PATH=…`, a clean root
+   environment like the one an SSM command gets.
+3. **`otjapp` can't enter the checkout directory** (`/home/runner/work/…`), so the job's steps run
+   from `/tmp`.
+4. **A newer Ansible (2.21, from pipx) comes before apt's in the runner's `PATH`.** The job calls
+   `/usr/bin/ansible-playbook` explicitly, so it tests the 2.16 the box runs. Write the roles for 2.16.
 
 ---
 
