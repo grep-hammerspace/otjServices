@@ -32,7 +32,7 @@ jobs:
         run: /usr/bin/ansible-playbook site.yml --syntax-check -e image_tag=ci
 
       - name: shellcheck
-        run: shellcheck deploy/bin/otj-converge deploy/ansible/roles/app/files/otj-render-env
+        run: shellcheck deploy/bin/otj-converge deploy/ansible/roles/app/files/otj-render-env .github/scripts/box-run.sh
 
       # haproxy.cfg names absolute paths, so the check puts a throwaway cert and the range list
       # where the box has them.
@@ -97,14 +97,14 @@ jobs:
         run: |
           sudo env -i HOME=/root PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
             /usr/bin/ansible-playbook site.yml -e @ci-vars.yml -e image_tag=ci \
-            -e ci_mongo_uri=mongodb://$RUNNER_IP:27017 --skip-tags tailnet,aws
+            -e "ci_mongo_uri=mongodb://$RUNNER_IP:27017" --skip-tags tailnet,aws
 
       - name: Apply it again, and fail if anything changed
         working-directory: deploy/ansible
         run: |
           sudo env -i HOME=/root PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
             /usr/bin/ansible-playbook site.yml -e @ci-vars.yml -e image_tag=ci \
-            -e ci_mongo_uri=mongodb://$RUNNER_IP:27017 --skip-tags tailnet,aws | tee /tmp/second.log
+            -e "ci_mongo_uri=mongodb://$RUNNER_IP:27017" --skip-tags tailnet,aws | tee /tmp/second.log
           grep -E '^localhost +: ok=[0-9]+ +changed=0 ' /tmp/second.log \
             || { echo "::error::The second apply changed something; the playbook isn't idempotent"; exit 1; }
 
@@ -126,7 +126,7 @@ jobs:
               -d "{\"username\":\"u$RANDOM$RANDOM\",\"password\":\"x\"}" \
               | tr -d '\r' | awk '/^HTTP/{s=$2} tolower($1)=="retry-after:"{r=$2} END{print s, r}'
           }
-          eleventh() { local r; for _ in $(seq 1 10); do login "$@" >/dev/null; done; login "$@"; }
+          eleventh() { for _ in $(seq 1 10); do login "$@" >/dev/null; done; login "$@"; }
 
           # Trusted source (127.0.0.1 is in the CI range list): each CF-Connecting-IP is its own
           # client. If this collapses, every user shares one bucket in production.
@@ -167,8 +167,8 @@ jobs:
         run: |
           sudo ss -Hltnp || true
           uid=$(id -u otjapp 2>/dev/null) || exit 0
-          sudo -u otjapp env -i HOME=/home/otjapp XDG_RUNTIME_DIR=/run/user/$uid \
-            DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$uid/bus \
+          sudo -u otjapp env -i HOME=/home/otjapp "XDG_RUNTIME_DIR=/run/user/$uid" \
+            "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$uid/bus" \
             systemctl --user --no-pager status hours-api admin-api || true
-          sudo journalctl _UID=$uid -n 80 --no-pager || true
+          sudo journalctl "_UID=$uid" -n 80 --no-pager || true
           sudo journalctl -u haproxy -n 30 --no-pager || true
