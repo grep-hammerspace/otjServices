@@ -22,9 +22,10 @@ jobs:
       # The same apt packages the box gets, so the checks use the box's versions.
       - run: sudo apt-get update -q && sudo apt-get install -y -q ansible-core ansible-lint shellcheck haproxy
 
+      # With apt's Ansible, not the runner's newer pipx one that comes first in its PATH.
       - name: ansible-lint (production profile)
         working-directory: deploy/ansible
-        run: ansible-lint
+        run: env PATH=/usr/sbin:/usr/bin:/sbin:/bin /usr/bin/ansible-lint
 
       - name: Playbook syntax
         working-directory: deploy/ansible
@@ -79,11 +80,11 @@ jobs:
           docker run -d --name mongo -p "$ip:27017:27017" docker.io/library/mongo:8
 
       # The box's certificate is installed by hand, so the rehearsal does the same, with a
-      # self-signed one.
+      # self-signed one. Valid for more than verify's 90-day expiry check.
       - name: A throwaway origin certificate
         run: |
           sudo install -d -m 0700 /etc/haproxy/certs
-          openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=otj-services.com \
+          openssl req -x509 -newkey rsa:2048 -nodes -days 365 -subj /CN=otj-services.com \
             -keyout /tmp/k.pem -out /tmp/c.pem 2>/dev/null
           cat /tmp/c.pem /tmp/k.pem | sudo install -m 0600 /dev/stdin /etc/haproxy/certs/origin.pem
 
