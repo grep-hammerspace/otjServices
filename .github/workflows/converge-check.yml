@@ -1,0 +1,49 @@
+# What a converge WOULD change, changing nothing: `otj-converge <sha> --check`
+# (ansible-migration-plan.md §9.2). The job summary lists the tasks that would change; the full
+# diff is in CloudWatch. Also the review step before the first converge (checklist step 5), and the
+# nightly drift check once that's on (plan §9.3).
+name: converge-check
+
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: Commit SHA to check against. Empty means the live one (/otj/prod/image-tag).
+        required: false
+        type: string
+
+permissions:
+  id-token: write # OIDC, for the deploy role
+  contents: read
+
+# One thing touches the box at a time: every box workflow, and deploy.yml, share this group.
+concurrency:
+  group: box
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: eu-west-2
+
+      - name: Which release
+        id: sha
+        env:
+          SHA: ${{ inputs.sha }}
+        run: |
+          if [ -z "$SHA" ]; then
+            SHA=$(aws ssm get-parameter --name /otj/prod/image-tag --query Parameter.Value --output text) \
+              || { echo "::error::Nothing is live yet (no /otj/prod/image-tag); give a SHA."; exit 1; }
+          fi
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+
+      - name: otj-converge --check on the box
+        run: .github/scripts/box-run.sh check "$SHA"
+        env:
+          SHA: ${{ steps.sha.outputs.sha }}
