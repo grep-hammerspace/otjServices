@@ -64,6 +64,44 @@ npm run diff                  # cdk diff  OtjServicesStack — compare against w
 npm run deploy                # cdk deploy OtjServicesStack
 ```
 
+## The instance must never be replaced by accident
+
+On 2026-09-25 a routine merge replaced the EC2 instance and terminated the old one, root volume
+and all, because the stack resolved Canonical's *current* Ubuntu AMI on every deploy and Canonical
+had published a new one. Two things now stop that:
+
+1. **The AMI is pinned** in `lib/otj-services-stack.ts`. A newer AMI is a deliberate PR.
+2. **A stack policy** (`stack-policy.json`) denies `Update:Replace` and `Update:Delete` on the
+   instance and the Elastic IP. Any update that would replace either one fails and rolls back,
+   whatever caused it (an AMI, a block device, a security group swap, a subnet change). Nothing
+   else is affected. Set it once, from a laptop; it persists across deploys:
+
+   ```
+   aws cloudformation set-stack-policy --stack-name OtjServicesStack --region eu-west-2 \
+     --stack-policy-body file://stack-policy.json
+   aws cloudformation get-stack-policy --stack-name OtjServicesStack --region eu-west-2
+   ```
+
+   `cdk deploy` does not manage stack policies, so this file is not applied by CI and a change
+   to it has to be re-run by hand.
+
+**When you do want a new instance** (a new AMI, a bigger disk), relax the policy for the
+instance only, deploy that one change from a laptop, and put the policy back. The Elastic IP
+stays denied, so it's carried over rather than recreated, and the Atlas allowlist and Cloudflare
+record stay valid:
+
+```
+npx cdk diff OtjServicesStack          # the instance should be the ONLY replacement
+aws cloudformation set-stack-policy --stack-name OtjServicesStack --region eu-west-2 \
+  --stack-policy-body '{"Statement":[{"Effect":"Deny","Action":["Update:Replace","Update:Delete"],"Principal":"*","Resource":"LogicalResourceId/InstanceEip"},{"Effect":"Allow","Action":"Update:*","Principal":"*","Resource":"*"}]}'
+npx cdk deploy OtjServicesStack
+aws cloudformation set-stack-policy --stack-name OtjServicesStack --region eu-west-2 \
+  --stack-policy-body file://stack-policy.json
+```
+
+Put the policy back even if the deploy fails. The replacement comes up as a blank Ubuntu box,
+which is expected, so whatever the box needs has to be reproducible from the repo first.
+
 ## One-time: wire up CI/CD
 
 `GithubOidcStack` isn't part of the app's ongoing deploys — deploy it once,
@@ -83,9 +121,10 @@ AWS_DEPLOY_ROLE_ARN = <the DeployRoleArn output above>
 After that, `.github/workflows/ci-cd.yml` runs `mvn test` on every push/PR to
 `master`, and on push to `master` (after tests pass) assumes that role via
 OIDC and: runs `cdk deploy OtjServicesStack --require-approval never`, builds
-the app image and pushes it to ECR tagged with the commit SHA, then triggers
-`deploy.sh` on the box via `ssm:SendCommand` and polls for success/failure —
-no static AWS keys anywhere in GitHub.
+the app image and pushes it to ECR tagged with the commit SHA — no static AWS
+keys anywhere in GitHub. It no longer rolls the image out to the box: that went
+with the instance replacement above, and comes back with the Ansible deploy
+(`ansible-migration-plan.md`).
 
 `GithubActionsDeployRole`'s permissions, beyond assuming the CDK bootstrap
 roles:
@@ -100,19 +139,10 @@ roles:
 
 ### Rollback
 
-SHA tags in ECR are immutable, so rolling back is re-running the same deploy
-trigger against an older SHA — from a laptop with the deploy role's
-permissions, or directly on the box via an SSM session as `otjapp`:
-
-```
-aws ssm send-command \
-  --instance-ids <instance-id> \
-  --document-name AWS-RunShellScript \
-  --parameters '{"commands":["sudo -u otjapp -i /home/otjapp/otj-deploy/deploy.sh <account>.dkr.ecr.eu-west-2.amazonaws.com/otj-hours-api:<good-sha>"]}' \
-  --region eu-west-2
-```
-
-No rebuild needed — the lifecycle rule retains the last 20 SHA-tagged images.
+There is nothing on the box to roll back until the Ansible deploy lands. Its `rollback`
+workflow re-applies an older SHA (`ansible-migration-plan.md` §9.2). SHA tags in ECR are
+immutable and the lifecycle rule keeps the last 20, so any recent image can be redeployed without
+a rebuild.
 
 If `GithubOidcStack` fails to deploy because an OIDC provider for
 `token.actions.githubusercontent.com` already exists in the account (only one
