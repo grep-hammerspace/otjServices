@@ -20,11 +20,10 @@ flow programmatically:
 
 **This API is the backend for a mobile app** — currently an **Expo Go** (React
 Native + TypeScript) project living in a separate repo at
-`/home/asad/Projects/personal/java/otj-mobile`. The mobile client is the only
+`/home/asad/Projects/personal/java/otj/otj-mobile`. The mobile client is the only
 intended consumer: it holds the bearer token, renders the notes editor, and calls
-the endpoints below. `mobile-signup-runbook.md` documents the client-side signup
-wiring (`EXPO_PUBLIC_API_URL`, auth context, API helpers). When changing an endpoint's
-shape, assume there is an Expo client that has to change with it.
+the endpoints below; the API base URL comes from `EXPO_PUBLIC_API_URL`. When changing an
+endpoint's shape, assume there is an Expo client that has to change with it.
 
 ## Stack
 
@@ -97,8 +96,9 @@ scripts/                  (tailscale branch only) `otj` CLI for hand-testing the
 ```
 
 Docs worth knowing about (root): `deployment-checklist.md` (AWS bring-up),
-`mobile-signup-runbook.md` (Expo client wiring), `steps-04-08-implementation-plan.md`
-and `auth-multiuser-plan.html` (the multi-user rollout plan), `notes.md` (idea backlog).
+`steps-04-08-implementation-plan.md` (the multi-user rollout plan; step 08 still open),
+`ansible-migration-plan.md` (moving box config into Ansible), `notes.md` (idea backlog). Finished plans and API specs are deleted once they land; git
+history has them.
 
 ## Two processes, one image
 
@@ -171,8 +171,7 @@ Authenticated, outside `/otj-services` — the account itself, on `AccountResour
 
 **These are not on `AuthResource`.** That class carries no `@Authenticated` annotation on purpose
 — its endpoints are the ones you reach before holding a token — and the annotation binds per
-class, so the two that need a token live in their own class under the same URL prefix. See
-`learner-id-api-spec.md`.
+class, so the two that need a token live in their own class under the same URL prefix.
 
 Admin API (separate process/port, tailnet identity instead of bearer tokens):
 

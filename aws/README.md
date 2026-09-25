@@ -5,8 +5,7 @@ Two stacks:
 - **`OtjServicesStack`** — a VPC (`eu-west-2`, single AZ, public subnet only,
   no NAT gateway), a single EC2 instance, and a private ECR repo
   (`otj-hours-api`, immutable SHA-tagged images, lifecycle-capped at 20), for
-  the "more permanent than podman-compose" deployment discussed in
-  `deployment-migration-plan.html`. Local dev keeps using
+  the "more permanent than podman-compose" deployment. Local dev keeps using
   `deploy/podman-compose.yaml` — unrelated to this. The instance is tagged
   `otj:role=app-host` so `GithubOidcStack`'s SSM permissions can scope to it.
 - **`GithubOidcStack`** — lets `.github/workflows/ci-cd.yml` deploy
