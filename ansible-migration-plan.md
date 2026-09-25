@@ -1,9 +1,9 @@
 # Box configuration as code (Ansible) — plan
 
-**Status:** draft for review · 2026-09-24 · branch `plan/deployment-uplift`
+**Status:** draft for review · 2026-09-24, D1–D3 decided 2026-09-25 · branch `plan/deployment-uplift`
 
 **Goal:** nobody opens an SSM session on the EC2 box to change it again. Everything the box has
-(packages, users, Caddy, Tailscale, Quadlets, env files, the deploy script) is declared in this
+(packages, users, the edge proxy, Tailscale, Quadlets, env files, the deploy script) is declared in this
 repo, checked on every PR, and applied by CI on every merge to `master`. The box stays the
 deployment target. Nothing moves to Fargate, and the monthly cost stays about the same (§12).
 
@@ -44,7 +44,7 @@ settings stay manual for now (§13 lists them as follow-ups).
 | **A. On the box, against itself** (`ansible-playbook -c local`), started by CI through `ssm:SendCommand` | The playbook ships inside the app image, and a small bootstrap script on the box extracts it and runs it | No new AWS permissions (CI already has `SendCommand`). No S3 bucket. The config version always matches the image version. | `ansible-core` has to be installed on the box |
 | B. On the GitHub runner, connecting through the `community.aws.aws_ssm` connection plugin | Ansible drives the box remotely over SSM | The textbook controller/target split | The plugin needs an S3 bucket to transfer files, extra IAM, and is slow (one SSM round trip per task) |
 
-**Recommendation: A.**
+**Decided: A** (2026-09-25).
 
 ### D2 — Where secrets live
 
@@ -53,21 +53,27 @@ settings stay manual for now (§13 lists them as follow-ups).
 | **A. SSM Parameter Store `SecureString`** (standard tier, AWS-managed `aws/ssm` key) | **$0** | Encrypted, access controlled by IAM, audited by CloudTrail. No automatic rotation, which nothing here would use anyway. |
 | B. Secrets Manager | $0.40 per secret per month | Adds automatic rotation and cross-account sharing, and neither is needed. |
 
-**Recommendation: A.** Both are read with the instance role, and both are pulled when a unit
-starts, never written by Ansible (§7).
+**Decided: A** (2026-09-25). Both are read with the instance role, and both are pulled when a
+unit starts, never written by Ansible (§7).
 
-### D3 — Where Caddy comes from
+### D3 — The public reverse proxy
 
-Today it is the Cloudsmith apt package with `caddy add-package` replacing the binary, then
-`apt-mark hold`. `deploy/prod/README.md` spends two pages on how that goes wrong.
+Today it is Caddy from the Cloudsmith apt repo, with `caddy add-package` swapping in a binary
+that has the third-party `caddy-ratelimit` plugin, then `apt-mark hold`. `deploy/prod/README.md`
+spends two pages on how that goes wrong. Keeping Caddy means either building it in CI with
+`xcaddy` or keeping `add-package`.
 
-| Option | For | Against |
-|---|---|---|
-| **A. Built in CI with `xcaddy`** (pinned Caddy and `caddy-ratelimit` versions) as a stage of the app Dockerfile, shipped in the image at `/deploy/bin/caddy`, installed by Ansible | Reproducible. The plugin is compiled in rather than bolted on. A rollback carries its Caddy with it. CI can `caddy validate` the real Caddyfile with the real binary. Dependabot bumps the builder image. | The app image grows by ~45 MB. Ansible has to own the `caddy` user and systemd unit that the apt package used to provide. |
-| B. Keep the apt package, and have Ansible do the Cloudsmith repo, `add-package` and hold | Smallest change | Encodes the most fragile part of the current setup. `add-package` downloads from Caddy's build service at run time, so it isn't reproducible and fails if that service is down. |
+| Option | Verdict |
+|---|---|
+| **A. HAProxy 2.8 from Ubuntu 24.04 `main`** | Everything the Caddyfile does is built in (the mapping is in §6). No plugin, no build step, no third-party repo. Ubuntu ships its security fixes. CI validates the config with the same package. |
+| B. Caddy built in CI with `xcaddy` | Rejected: adds a build artifact to CI and ~45 MB to the image |
+| C. Caddy apt + `add-package` (today) | Rejected: `add-package` downloads from Caddy's build service at run time, so it isn't reproducible and fails if that service is down |
+| D. nginx (apt) | Rejected: `limit_req` rates are per second or per minute only, so the 250/day cap can't be expressed |
+| E. Envoy | Rejected: per-client-IP limits need Envoy's separate rate-limit service plus Redis, and the config is far longer |
 
-**Recommendation: A.** Do it as its own step (§10, step 7), after the playbook has taken over
-the box with option B's behaviour, so the two changes can't be confused with each other.
+**Decided: A** (2026-09-25). It is still its own step (§10, step 7), after the playbook has
+taken over the box with Caddy untouched, so "Ansible took over" and "the proxy changed" can't be
+confused with each other.
 
 ### D4 — Cloudflare Tunnel now or later
 
@@ -88,10 +94,10 @@ Only the parts this plan uses.
 | Concept | What it is | Here |
 |---|---|---|
 | **Playbook** | A YAML file listing which roles to apply to which hosts | `deploy/ansible/site.yml`: one play, `hosts: localhost` |
-| **Role** | A folder of related tasks, templates and handlers | `base`, `tailscale`, `caddy`, `app`, … (§6) |
+| **Role** | A folder of related tasks, templates and handlers | `base`, `tailscale`, `edge`, `app`, … (§6) |
 | **Task** | One desired state, e.g. "this package is installed" or "this file has this content" | `ansible.builtin.apt`, `copy`, `template`, `systemd_service`, `uri` |
 | **Idempotence** | Running a task twice changes nothing the second time. Tasks describe *state*, not *steps*. | Every CI run applies the playbook **twice** and fails if the second run changed anything (§8) |
-| **Handler** | A task that runs only when something **changed**, e.g. "restart Caddy if the Caddyfile changed" | Restarts happen only when that unit's config or image actually changed |
+| **Handler** | A task that runs only when something **changed**, e.g. "reload HAProxy if `haproxy.cfg` changed" | Restarts happen only when that unit's config or image actually changed |
 | **Check mode** (`--check --diff`) | A dry run that prints what *would* change, with file diffs | How we adopt the live box safely (§10), and the nightly drift check (§9.3) |
 | **Variables** | Values in `group_vars/`, overridable with `-e` | `image_tag`, ports, the Tailscale hostname. **Never secrets** (§7). |
 | **`become`** | Run a task as a different user | Root by default; `become_user: otjapp` for the rootless Podman parts |
@@ -122,15 +128,15 @@ prevents the problem.
 |---|---|---|
 | Install Tailscale, `tailscale up --hostname=hours-api` | `tailscale` role | Only run `up` when `BackendState != Running`, so re-runs never re-authenticate the live node |
 | `tailscale set --operator=…` | Removed | Ansible runs `serve` as root, so no operator is needed |
-| `tailscale serve` 8444 → 8945, 8443 → 8946; **443 turned off** | `tailscale` role | **8444 before Caddy binds 443.** Role order in `site.yml` enforces it, and a task asserts nothing but Caddy holds `:443` |
+| `tailscale serve` 8444 → 8945, 8443 → 8946; **443 turned off** | `tailscale` role | **8444 before the edge proxy binds 443.** Role order in `site.yml` enforces it, and a task asserts nothing but the edge proxy holds `:443` |
 | Install Podman | `base` role | — |
 | AWS CLI v2 from the zip | `base` role | Ubuntu's apt copy is v1 and too old for `ecr get-login-password` |
 | `useradd otjapp`, `enable-linger` | `otjapp` role | Linger must exist before any `systemctl --user` task, or they fail with no user bus |
 | Paste `deploy.sh` and the two templates into `~/otj-deploy/` | `app` role, sourced from the image | Trailing whitespace from pasting (issue #40) can't happen, because files are copied byte for byte |
 | Write `~/otj-hours-api.env` and `~/otj-admin-api.env` | `app` role + `render-env` (§7) | Secrets never pass through Ansible |
-| Cloudsmith repo, `apt install caddy`, `add-package`, `apt-mark hold`, restart | `caddy` role (D3) | Verify the running binary has `http.handlers.rate_limit`, not just the file on disk |
-| Install the Origin CA pair, `640 root:caddy` | `caddy` role, from Parameter Store (§7) | Caddy runs as `caddy` and must be able to read the key |
-| Install the Caddyfile, validate **as `caddy`**, reload | `caddy` role | Validating as root creates `/var/log/caddy/access.log` as `root:root` and the reload dies. The task sets the log file's owner explicitly and validates with `become_user: caddy`. |
+| Cloudsmith repo, `apt install caddy`, `add-package`, `apt-mark hold`, restart | `edge` role: verified only until step 7, then replaced by apt `haproxy` (D3) | Until step 7, verify the *running* binary has `http.handlers.rate_limit`, not just the file on disk |
+| Install the Origin CA pair, `640 root:caddy` | `edge` role, from Parameter Store (§7) | HAProxy reads its certificate as root before dropping privileges, so the `caddy`-group permissions go away |
+| Install the Caddyfile, validate **as `caddy`**, reload | `edge` role: `haproxy.cfg`, `haproxy -c` before every reload | The Caddy trap (validating as root creates `/var/log/caddy/access.log` as `root:root` and the reload dies) doesn't carry over, because HAProxy logs to syslog rather than a file it owns. Until step 7 the role still asserts that log's owner. |
 | Hand-push files with `push-file.sh` | Deleted | — |
 
 ---
@@ -143,13 +149,13 @@ prevents the problem.
 image otj-hours-api:<sha>
   /app/app.jar
   /deploy/ansible/...          ← the playbook, roles, templates, group_vars
-  /deploy/bin/caddy            ← CI-built Caddy (D3 = A, from step 7)
-  /deploy/Caddyfile
+  /deploy/bin/otj-converge
+  /deploy/haproxy/haproxy.cfg, cloudflare-ips.lst
 ```
 
 Everything the box needs for a release is inside the image for that release, which is #40's
-idea taken all the way. Rolling back to an old SHA brings back that SHA's Quadlets, Caddyfile,
-Caddy binary and playbook together.
+idea taken all the way. Rolling back to an old SHA brings back that SHA's Quadlets, proxy config
+and playbook together. The HAProxy *binary* comes from apt, so a rollback doesn't downgrade it.
 
 ### 4.2 `otj-converge`, the one script on the box
 
@@ -181,9 +187,13 @@ command, and each only touches what actually differs.
 The `verify` role runs last on every apply:
 
 - `GET 127.0.0.1:8945/health` and `:8946/health`, with retries (replaces `deploy.sh`'s loop).
-- `caddy list-modules` from the **running** service includes `http.handlers.rate_limit`.
+- The edge proxy named by `edge_proxy` is the one running. For Caddy, `caddy list-modules` from
+  the **running** service includes `http.handlers.rate_limit`. For HAProxy, `haproxy -c` passes
+  on the live config.
+- The origin certificate has more than 90 days left (`openssl x509 -checkend`). It is a 15-year
+  certificate, so this should only fire once, as a reminder, long before it matters.
 - **No wildcard listeners except the expected ones.** `ss -Hltn` must show `0.0.0.0:443` and
-  `[::]:443` (Caddy) and nothing else on `0.0.0.0` or `[::]`. Ubuntu's AMI ships with `sshd` on
+  `[::]:443` (the edge proxy) and nothing else on `0.0.0.0` or `[::]`. Ubuntu's AMI ships with `sshd` on
   `0.0.0.0:22`: the security group blocks it and nothing uses it, but it still listens. `base`
   disables it (see §6), and until that step lands, the check allows `:22`. This is AGENTS.md's loopback rule
   for 8945 and 8946 turned into a check that fails the deploy.
@@ -202,12 +212,14 @@ deploy/
     group_vars/all.yml       # ports, hostnames, image repo, paths — nothing secret
     group_vars/ci.yml        # overrides for the PR rehearsal (§8.3)
     roles/
-      base/  otjapp/  tailscale/  caddy/  app/  verify/
+      base/  otjapp/  tailscale/  edge/  app/  verify/
   bin/
     otj-converge             # §4.2
-  Caddyfile                  # moved from deploy/prod/
+  haproxy/
+    haproxy.cfg              # replaces deploy/prod/Caddyfile; its comments carry the reasoning over (§6)
+    cloudflare-ips.lst       # still duplicated in aws/lib/otj-services-stack.ts
   podman-compose.yaml, bootstrap.sh, shell.nix, README.md   # self-host path, unchanged
-docker/otjService.Dockerfile # gains a caddy build stage and COPY deploy/ → /deploy
+docker/otjService.Dockerfile # gains COPY deploy/ /deploy/
 ```
 
 `deploy/prod/` is deleted once its contents have moved (§15).
@@ -216,7 +228,7 @@ docker/otjService.Dockerfile # gains a caddy build stage and COPY deploy/ → /d
 
 ## 6. Roles
 
-In `site.yml` order. The order is significant: `tailscale` has to move off 443 before `caddy`
+In `site.yml` order. The order is significant: `tailscale` has to move off 443 before `edge`
 binds it.
 
 ### `base`
@@ -249,18 +261,48 @@ binds it.
   against the box's Tailscale version; newer versions also have `serve get-config`/`set-config`,
   which would make this fully declarative)*.
 
-### `caddy`
-- **Until step 7 (D3 = B behaviour):** assert that the apt package is from Cloudsmith, held, and
-  that the running binary has `rate_limit`. Nothing is *installed* in this mode, only verified,
-  which is how the playbook takes over the live box without touching the working Caddy.
-- **From step 7 (D3 = A):** create the `caddy` system user; install `/deploy/bin/caddy` to
-  `/usr/local/bin/caddy`; install `caddy.service`, a copy of upstream's unit with
-  `AmbientCapabilities=CAP_NET_BIND_SERVICE` and `ExecStartPre=/usr/local/sbin/otj-render-origin-cert`
-  (§7); remove the apt package and the Cloudsmith repo.
-- Both modes: the Caddyfile goes to `/etc/caddy/Caddyfile`; `/var/log/caddy/` and `access.log`
-  are owned by `caddy:caddy` **explicitly** (the runbook's 2026-08-22 failure); `caddy validate`
-  runs with `become_user: caddy`; the handler **restarts** rather than reloads when the binary
-  changed (a reload keeps the old binary in memory), and reloads when only the Caddyfile changed.
+### `edge`
+The public listener on 443. `edge_proxy` in `group_vars/all.yml` picks the mode.
+
+- **`edge_proxy: caddy` (steps 1–6):** nothing is installed, only verified, which is how the
+  playbook takes over the live box without touching the working Caddy. It asserts that the apt
+  package is from Cloudsmith and held, that the running binary has `rate_limit`, that
+  `/var/log/caddy/access.log` is `caddy:caddy` (the runbook's 2026-08-22 failure), and that
+  `caddy.service` is enabled and running. It also stops and disables `haproxy.service` **if that
+  unit exists**. That does nothing until step 7, but it means rolling back to a pre-step-7 SHA
+  brings Caddy back instead of leaving two proxies fighting over 443.
+- **`edge_proxy: haproxy` (from step 7):**
+  - apt `haproxy` from Ubuntu `main`. Not held: Ubuntu's security updates within 2.8 keep the
+    config compatible, and the rehearsal and nightly check catch anything that breaks.
+  - `/etc/haproxy/haproxy.cfg` and `cloudflare-ips.lst` from `deploy/haproxy/`, checked with
+    `haproxy -c -f` (the `template` module's `validate:`) before they replace the live files.
+    The handler **reloads**, and HAProxy's master-worker reload doesn't drop connections.
+  - `otj-origin-cert.service`, a oneshot unit that writes the Origin CA pair from Parameter
+    Store (§7), pulled in by a `haproxy.service` drop-in with `Requires=` and `After=`. It must
+    be its own unit, not an `ExecStartPre=` on `haproxy.service`. Ubuntu's unit already runs
+    `haproxy -c` as its `ExecStartPre`, and drop-in lines go after it, so the config check would
+    run before the certificate existed and fail on every boot.
+  - The cutover stops and disables Caddy, then starts HAProxy. Cloudflare returns 5xx for the
+    few seconds in between, so run it off-peak. Caddy stays installed but disabled until step 8,
+    so rolling back means re-running the previous SHA.
+
+**How the Caddyfile maps to `haproxy.cfg`** *(verify each line against 2.8 in the rehearsal)*:
+
+| Caddyfile | `haproxy.cfg` |
+|---|---|
+| `trusted_proxies static …` + `client_ip_headers Cf-Connecting-Ip` | `http-request set-src req.hdr(CF-Connecting-IP) if { src -f /etc/haproxy/cloudflare-ips.lst }`, first in the frontend. After it, `src` is the real client for every rule below. |
+| `zone auth_burst` 10/1m and `zone auth_daily` 250/24h on `/auth/signup`, `/auth/session` | Two stick tables (`type ipv6`, which also holds IPv4) storing `http_req_rate(1m)` and `http_req_rate(24h)`, tracked with `track-sc0` / `track-sc1` only for those paths |
+| `zone api_burst` 120/1m on everything else, `/health` uncapped | A third table on `track-sc2`, skipped for `/health` |
+| `handle_errors 429` body, plus the plugin's `Retry-After` | `http-request return status 429 content-type application/json string '{"error": …}' hdr Retry-After <n>`. `<n>` is fixed per window (60 for the burst zones, 3600 for the daily one) rather than computed. The Expo client needs the header to be present and numeric. |
+| `request_body { max_size 1MB }` | `http-request deny deny_status 413 if { req.hdr_val(content-length) gt 1048576 }`. This misses chunked bodies with no `Content-Length` *(verify whether Cloudflare ever forwards one, and whether Grizzly caps them anyway)*. |
+| `dial_timeout 10s`, `response_header_timeout 300s` | `timeout connect 10s`, `timeout server 300s`. Cloudflare cuts off at 100 s regardless (R8). |
+| `tls /etc/caddy/origin-*.pem` | `bind :443 ssl crt /run/otj-origin/origin.pem` and `bind :::443 v6only ssl crt …`, so `ss` shows the same two listeners Caddy had. Cert and key are one file. |
+| `auto_https disable_redirects` | Nothing needed: HAProxy only listens where it's told to |
+| `log { output file /var/log/caddy/access.log }` | `option httplog` to the package's rsyslog socket, which writes `/var/log/haproxy.log` |
+
+One behavioural difference: `track-sc` counts a request before any deny, so a client that keeps
+retrying after a 429 stays limited until it slows down, rather than getting a slot back as the
+window slides. That is stricter, and the right behaviour on these paths.
 
 ### `app`
 All `become_user: otjapp` with `XDG_RUNTIME_DIR` set.
@@ -293,7 +335,7 @@ the secret never appears in a file Ansible manages.
 | `/otj/prod/mongo-uri` | hours-api, admin-api | `/run/user/<uid>/otj/<svc>.env` |
 | `/otj/prod/anthropic-api-key` | hours-api | same |
 | `/otj/prod/admin-allowed-logins` (`String`) | admin-api | same |
-| `/otj/prod/origin-cert-key` | Caddy | `/run/caddy/origin-{cert,key}.pem` (0640 `root:caddy`) |
+| `/otj/prod/origin-cert` (`String`: it's public) and `/otj/prod/origin-key` | `otj-origin-cert.service`, from step 7 | `/run/otj-origin/origin.pem` (0600 `root`, cert then key in one file, as HAProxy wants) |
 | `/otj/prod/credential-identity-seed` | hours-api, **only once PR #43 lands**. Carry it over **byte for byte**, because the identity key is pinned in the app bundle. | same as hours-api |
 | `/otj/prod/tailscale-authkey` | `tailscale` role, only on a rebuild (§11) | not written; passed to `tailscale up` with `no_log` |
 
@@ -307,12 +349,19 @@ the instance; the change-set check in `deploy/prod/README.md` still applies):
 `ssm:GetParameters` on `arn:…:parameter/otj/prod/*`, plus `kms:Decrypt` on the `aws/ssm` key
 with an `kms:ViaService = ssm.eu-west-2.amazonaws.com` condition.
 
-**Seeding** (once, and the only time values are handled): from the current env files, over one
-`SendCommand` issued from a `workflow_dispatch` job (§9.2), piping each value straight into
-`aws ssm put-parameter --type SecureString --value file:///dev/stdin`. Nothing is echoed.
+**Seeding** (once, and the only time values are handled): from the current env files and
+`/etc/caddy/origin-{cert,key}.pem`, over one `SendCommand` issued from a `workflow_dispatch` job
+(§9.2), piping each value straight into `aws ssm put-parameter --type SecureString --value
+file:///dev/stdin`. Nothing is echoed. The origin pair is seeded in §10 step 6 with everything
+else, ready for step 7.
 
 **Rotation:** `aws ssm put-parameter --overwrite …`, then the *restart unit* ops workflow (§9.2).
 A restart re-renders the file, and nothing else is needed.
+
+**The origin certificate's life cycle.** Only issuing it is manual: in the Cloudflare dashboard,
+once, and the current one is already on the box. It is valid for 15 years, so there's no ACME
+and no renewal job. When it does need replacing, issue a new one in the dashboard, `put-parameter`
+both halves from your laptop, then restart `haproxy`. `verify` (§4.4) warns 90 days ahead.
 
 ---
 
@@ -326,7 +375,7 @@ New `.github/workflows/pr.yml`, with the existing Java checks kept.
 | `ansible-lint` (production profile) | Non-idempotent patterns, missing `no_log` on obvious secrets, deprecated modules |
 | `ansible-playbook --syntax-check` | Broken YAML and undefined roles |
 | `shellcheck deploy/bin/* deploy/ansible/roles/*/files/*.sh` | The bash parts |
-| `caddy validate` with the **CI-built** Caddy binary against `deploy/Caddyfile` (using a throwaway cert) | "unknown directive `rate_limit`" and every other Caddyfile error, before they reach the box |
+| `haproxy -c -f deploy/haproxy/haproxy.cfg` with Ubuntu's `haproxy` package on the runner (and a throwaway cert) | Bad ACLs, unknown keywords and every other config error, before they reach the box |
 | `podman-system-generator --dryrun` against the rendered Quadlets | Quadlet syntax errors, which today only show up as a unit that silently doesn't exist |
 
 ### 8.2 Integration tests
@@ -341,16 +390,18 @@ GitHub's `ubuntu-24.04` runner is a VM with systemd and the same OS as the box. 
 1. Build the image from the PR and load it into a local `otjapp` user's Podman storage.
 2. `ansible-playbook site.yml -e @group_vars/ci.yml --skip-tags tailnet,aws`. `ci.yml` points
    `otj-render-env` at a fixture file of dummy values instead of Parameter Store, uses a local
-   Mongo container for `MONGO_URI`, and a self-signed certificate for Caddy.
+   Mongo container for `MONGO_URI`, a self-signed certificate, and `edge_proxy: haproxy` from
+   the start. Installing Caddy with its plugin on a runner is exactly the fragile step D3
+   removes. Before step 7, this means the rehearsal tests the proxy the box is *about to get*,
+   and the live `converge-check` covers the Caddy assertions.
 3. **Apply it a second time and fail if anything changed.** This is the idempotence check, the
    single most useful test for a playbook.
-4. Check behaviour through Caddy on `https://localhost` with `--resolve`: `/health` is 200;
+4. Check behaviour through HAProxy on `https://localhost` with `--resolve`: `/health` is 200;
    11 `POST /auth/session` in quick succession returns a **429 with `Retry-After`** on the 11th;
    `:8945` and `:8946` are **not** reachable on the runner's non-loopback address.
 5. `verify` has already run inside step 2, so the wildcard-listener check is covered.
 
-This would have caught the missing-`curl` healthcheck, the root-owned access log and a
-wrong-order 443 bind. It costs only runner minutes. *(Verify: linger and rootless Podman work on
+This would have caught the missing-`curl` healthcheck and a wrong-order 443 bind. It costs only runner minutes. *(Verify: linger and rootless Podman work on
 the hosted runner; Podman is preinstalled there, and the fallback is a `ubuntu:24.04` container
 with systemd, which is fiddlier.)*
 
@@ -385,7 +436,7 @@ Each one sends a **fixed** command through SSM, so there are no free-text shell 
 |---|---|---|
 | `rollback` | `sha` | `otj-converge <sha>` + smoke. The SHA must exist in ECR. Rolls back the app **and** its box config together. |
 | `converge-check` | — | `otj-converge <live sha> --check`, and posts the diff to the job summary |
-| `restart` | `unit` ∈ {hours-api, admin-api, caddy} | `systemctl restart`, then `verify` |
+| `restart` | `unit` ∈ {hours-api, admin-api, haproxy} (`caddy` before step 7) | `systemctl restart`, then `verify` |
 | `logs` | `unit`, `lines` ≤ 500 | `journalctl -u <unit> -n <lines>` into the job log. **App logs don't contain credentials (`ServerHooks` enforces it), but the job log is visible to anyone with repo read access. Keep the repo private, or drop this workflow.** |
 | `seed-secret` | `name` from a fixed list | One-time seeding from the old env file (§7). Deleted after §10 step 6. |
 
@@ -407,14 +458,14 @@ mode before it is applied.
 
 | # | Step | How it is applied | Exit check |
 |---|---|---|---|
-| 1 | Repo work: roles written to match **today's** box exactly (tailnet hostname `hours-api`, serve on 8443/8444, apt Caddy **verified only, not managed**, env files still in `~`, Quadlets matching the current templates) | PR, with §8 green | Rehearsal passes twice with no changes |
+| 1 | Repo work: roles written to match **today's** box exactly (tailnet hostname `hours-api`, serve on 8443/8444, `edge_proxy: caddy` so Caddy is **verified only, not managed**, env files still in `~`, Quadlets matching the current templates) | PR, with §8 green | Rehearsal passes twice with no changes |
 | 2 | **The last manual step, done without a shell:** a `workflow_dispatch` job runs one `SendCommand` that does `apt install ansible-core` and installs `otj-converge` | Actions button | `otj-converge --version` in the job output |
 | 3 | `converge-check` against the live box | Actions button | Read the diff. Every line is either an intended change or a playbook bug. Fix the playbook and repeat **until the diff is empty or intended**. |
 | 4 | First real apply: `otj-converge <live sha>` | Actions button | `verify` passes; public and tailnet checks from `deploy/prod/README.md` "Verifying" |
 | 5 | `deploy.yml` replaces `ci-cd.yml` (§9.1) | Merge | Two ordinary merges deploy through Ansible |
 | 6 | Secrets: IAM (§7), seed the parameters, switch the Quadlets to `render-env`, then after two good deploys remove the old env files | Three PRs | `ls ~otjapp/*.env` is empty; the app restarts cleanly |
-| 7 | Caddy from CI (D3 = A): the new role mode, and the origin pair from Parameter Store | PR, check first | `verify`'s module check; the edge rate-limit test from the runbook |
-| 8 | Nightly drift check on; Session Manager logging on; `push-file.sh` and `deploy/prod/` deleted | PR | A deliberate manual change on the box is reported the next morning |
+| 7 | Caddy → HAProxy (D3): `edge_proxy: haproxy`, origin pair from Parameter Store | PR, check first, applied off-peak | `verify` passes; the runbook's edge rate-limit test through Cloudflare (11th `POST /auth/session` → 429 with `Retry-After`); `/health` from outside |
+| 8 | Nightly drift check on; Session Manager logging on; apt Caddy, the Cloudsmith repo, `/etc/caddy/`, `push-file.sh` and `deploy/prod/` deleted | PR | A deliberate manual change on the box is reported the next morning |
 
 **Rollback at any step:** the old files stay where they are until the step that removes them. For
 steps 1–5, rolling back means going back to `ci-cd.yml` and `deploy.sh`, which are untouched until
@@ -460,7 +511,9 @@ Each of these becomes a role or a small PR once this plan is done:
 
 - **Cloudflare Tunnel** (D4): a `cloudflared` role, the tunnel token in Parameter Store, and a
   DNS change. It removes the Origin CA pair, the security group's Cloudflare list and the 443
-  clash.
+  clash. HAProxy would stay, listening on loopback for `cloudflared`, so the rate limits stay at
+  the origin.
+- **The Cloudflare 100-second timeout** (R8), if the logs confirm it is biting.
 - **Observability** (your tailnet dashboard requirement): a `fluent_bit` role (journald →
   CloudWatch Logs) and a `grafana` role (a Quadlet on `127.0.0.1:3000`, `tailscale serve
   --https=8445`, auth proxy on `Tailscale-User-Login`, users from `admin-allowed-logins`).
@@ -481,20 +534,22 @@ Each of these becomes a role or a small PR once this plan is done:
 | R4 | **`otj-converge` breaks itself.** A bad version is installed by the playbook, and the next deploy can't run. | The playbook installs the new script **last** (after `verify`), so a bad script only affects the *next* run. Recovery is the `rollback` workflow, whose first step runs a known-good inline copy through `SendCommand`. |
 | R5 | **Ansible is new to you** | §2; roles kept small and plain (builtin modules only, no third-party collections); every non-obvious task carries the runbook's reasoning as a comment |
 | R6 | **Rehearsal and box differ** (runner image drift, AWS-only tasks skipped) | The nightly drift check on the real box covers what the rehearsal can't |
-| R7 | **Unattended-upgrades or `apt upgrade` replaces something the playbook owns** | With D3 = A, Caddy is no longer an apt package. The next converge (every deploy, and nightly in check mode) catches any other drift. |
+| R7 | **Unattended-upgrades or `apt upgrade` replaces something the playbook owns** | HAProxy updates come from Ubuntu's security pocket and stay config-compatible within 2.8. The package restarts HAProxy on upgrade, which costs a few seconds of 5xx. The next converge (every deploy, and nightly in check mode) catches any other drift. |
+| R8 | **Cloudflare's 100-second origin timeout.** On every plan below Enterprise, Cloudflare returns a 524 if the origin hasn't sent response headers within 100 s. `GET /azure-id/complete` can hold for about 2 minutes (the Caddyfile's own comment), so slow MFA approvals may already fail at the edge, and `timeout server 300s` can't help. | Not caused or fixed by this plan. Look for 524s on that path first *(verify)*. The fix is in the app: return early and have the client poll, or bring `AzureIdDriver`'s budget under 100 s. |
 
 ---
 
 ## 15. What gets deleted, and docs to update
 
 **Deleted by the end:** `deploy/prod/` (`deploy.sh`, both templates, `push-file.sh`, and the
-Caddyfile, which moves to `deploy/Caddyfile`), `.github/workflows/ci-cd.yml`, the env files and
-hand-installed origin pair on the box, the apt Caddy and Cloudsmith repo.
+Caddyfile, which `deploy/haproxy/haproxy.cfg` replaces), `.github/workflows/ci-cd.yml`, the env
+files and hand-installed origin pair on the box, the apt Caddy, the Cloudsmith repo and
+`/etc/caddy/`.
 
 | Doc | Change |
 |---|---|
-| `AGENTS.md` | Directory structure (`deploy/ansible/`); "Build, run, test" (`mvn verify`, `ansible-lint`, the rehearsal); Conventions: *"don't change the box by hand; change the playbook"* |
-| `deploy/prod/README.md` → `deploy/ansible/README.md` | Rewritten around roles and workflows. The edge/rate-limit reasoning moves across as-is, since the Caddyfile hasn't changed. |
+| `AGENTS.md` | Directory structure (`deploy/ansible/`, `deploy/haproxy/`); "Build, run, test" (`mvn verify`, `ansible-lint`, the rehearsal); Caddy → HAProxy wherever it is named (the "Two processes" table, the signup rate-limit note, the inbound-ports note); Conventions: *"don't change the box by hand; change the playbook"* |
+| `deploy/prod/README.md` → `deploy/ansible/README.md` | Rewritten around roles and workflows. The edge/rate-limit reasoning moves across in HAProxy terms. "The two rate limits, and why there are two" and the shared-IP section stand as written. |
 | `deployment-checklist.md` | §6 becomes "run the bootstrap workflow"; delete the manual steps |
 | `aws/README.md` | Parameter Store IAM, `/otj/prod/image-tag`, Session Manager logging |
 | `staging-to-master-cutover.md` | Unaffected. Still waiting on its own steps 7 and 8. |
