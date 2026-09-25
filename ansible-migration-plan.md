@@ -1,16 +1,19 @@
 # Box configuration as code (Ansible) — plan
 
-**Status:** draft for review · 2026-09-24, D1–D3 decided 2026-09-25 · branch `plan/deployment-uplift`
+**Status:** draft for review · 2026-09-24, D1–D3 and D5 decided 2026-09-25 · branch `plan/deployment-uplift`
 
 **Goal:** nobody opens an SSM session on the EC2 box to change it again. Everything the box has
-(packages, users, the edge proxy, Tailscale, Quadlets, env files, the deploy script) is declared in this
-repo, checked on every PR, and applied by CI on every merge to `master`. The box stays the
-deployment target. Nothing moves to Fargate, and the monthly cost stays about the same (§12).
+(packages, users, the edge proxy, Tailscale, Quadlets, env files, the deploy script, log shipping)
+is declared in this repo, checked on every PR, and applied by CI on every merge to `master`. The
+box stays the deployment target. Nothing moves to Fargate, and the monthly cost stays about the
+same (§12). Nobody needs a shell to *read* the box either: the edge proxy's, the API's and the
+admin API's logs are all in one Grafana Cloud dashboard (§4.5).
 
-**Scope:** the **inside** of the box. AWS resources stay in CDK. Cloudflare and Tailscale admin
-settings stay manual for now (§13 lists them as follow-ups).
+**Scope:** the **inside** of the box. AWS resources stay in CDK. Cloudflare, Tailscale and Grafana
+Cloud account settings stay manual for now (§13 lists them as follow-ups). Metrics are not part of
+this plan, but the log shipper is chosen so that adding them later needs no new agent (§13).
 
-> Sections are numbered so review comments can point at them. Decisions are **D1–D4** in §1.
+> Sections are numbered so review comments can point at them. Decisions are **D1–D5** in §1.
 > Claims not yet checked against the live box or a real run are marked *(verify)*.
 
 ---
@@ -71,7 +74,7 @@ spends two pages on how that goes wrong. Keeping Caddy means either building it 
 | D. nginx (apt) | Rejected: `limit_req` rates are per second or per minute only, so the 250/day cap can't be expressed |
 | E. Envoy | Rejected: per-client-IP limits need Envoy's separate rate-limit service plus Redis, and the config is far longer |
 
-**Decided: A** (2026-09-25). It is still its own step (§10, step 7), after the playbook has
+**Decided: A** (2026-09-25). It is still its own step (§10, step 8), after the playbook has
 taken over the box with Caddy untouched, so "Ansible took over" and "the proxy changed" can't be
 confused with each other.
 
@@ -84,6 +87,22 @@ DNS change.
 **Recommendation: later**, as a separate plan (§13). Adopting Ansible should change *how* the box
 is configured, not *what* it runs. Mixing the two makes the first `--check --diff` impossible to
 read.
+
+### D5 — Where the logs go
+
+Three log trails matter: the edge proxy (Caddy, then HAProxy), `hours-api` and `admin-api`. Today
+they are only readable from an SSM session, with `journalctl` and `/var/log/caddy/access.log`.
+
+| Option | Cost | For | Against |
+|---|---|---|---|
+| **A. Grafana Cloud free tier (hosted Loki), shipped by Grafana Alloy on the box** | **$0** | Nothing extra runs on the box but Alloy. One dashboard for all three trails. The same agent and stack take metrics later (§13). | Logs leave the box for a third party (§4.5 covers what is sent). Retention is about 14 days *(verify current free-tier limits)*. Access is a Grafana Cloud login, not the tailnet. |
+| B. CloudWatch Logs through Fluent Bit, with a Grafana on the tailnet | ~$0.60/GB ingested, so cents at this volume | Logs stay in the AWS account and outlive the box | Grafana still has to run somewhere. Metrics later mean CloudWatch custom metrics at about $0.30 per series per month, or a second stack. |
+| C. Loki and Grafana on the box, over `tailscale serve --https=8445` | $0 in services | Nothing leaves the box. Access through the tailnet, like the admin API. | Two JVMs already share 2 GB, so this probably needs a t3.medium (about +$17/month, and a stop/start of production). Logs are lost with the box. |
+
+**Decided: A** (2026-09-25), **on one condition: you are the only person who can read it.**
+Since the dashboard isn't behind the tailnet, the Grafana Cloud account is the only access
+control. The rules that keep it single-user are in §4.5, and step 7 of §10 checks them before the
+first line is sent.
 
 ---
 
@@ -134,14 +153,164 @@ prevents the problem.
 | `useradd otjapp`, `enable-linger` | `otjapp` role | Linger must exist before any `systemctl --user` task, or they fail with no user bus |
 | Paste `deploy.sh` and the two templates into `~/otj-deploy/` | `app` role, sourced from the image | Trailing whitespace from pasting (issue #40) can't happen, because files are copied byte for byte |
 | Write `~/otj-hours-api.env` and `~/otj-admin-api.env` | `app` role + `render-env` (§7) | Secrets never pass through Ansible |
-| Cloudsmith repo, `apt install caddy`, `add-package`, `apt-mark hold`, restart | `edge` role: verified only until step 7, then replaced by apt `haproxy` (D3) | Until step 7, verify the *running* binary has `http.handlers.rate_limit`, not just the file on disk |
+| Cloudsmith repo, `apt install caddy`, `add-package`, `apt-mark hold`, restart | `edge` role: verified only until step 8, then replaced by apt `haproxy` (D3) | Until step 8, verify the *running* binary has `http.handlers.rate_limit`, not just the file on disk |
 | Install the Origin CA pair, `640 root:caddy` | `edge` role, from Parameter Store (§7) | HAProxy reads its certificate as root before dropping privileges, so the `caddy`-group permissions go away |
-| Install the Caddyfile, validate **as `caddy`**, reload | `edge` role: `haproxy.cfg`, `haproxy -c` before every reload | The Caddy trap (validating as root creates `/var/log/caddy/access.log` as `root:root` and the reload dies) doesn't carry over, because HAProxy logs to syslog rather than a file it owns. Until step 7 the role still asserts that log's owner. |
+| Install the Caddyfile, validate **as `caddy`**, reload | `edge` role: `haproxy.cfg`, `haproxy -c` before every reload | The Caddy trap (validating as root creates `/var/log/caddy/access.log` as `root:root` and the reload dies) doesn't carry over, because HAProxy logs to journald rather than a file it owns (§4.5). Until step 8 the role still asserts that log's owner. |
 | Hand-push files with `push-file.sh` | Deleted | — |
+| Read logs with `journalctl` and `tail /var/log/caddy/access.log` in an SSM session | `observability` role (§4.5, D5) | The Alloy token can only **write** logs. A token with read access, sitting on the box, would be a second way into the dashboard. |
 
 ---
 
 ## 4. Design
+
+### The end state
+
+This is the box once §10 is finished (step 9): HAProxy at the edge, logs in Grafana Cloud, secrets
+from Parameter Store. There are two diagrams, because all of it in one Mermaid chart doesn't lay out
+legibly. The first shows traffic and logs, the second shows deploys and secrets.
+
+**Traffic and logs**
+
+```mermaid
+flowchart LR
+  learner["Learner<br/>Expo mobile app"]
+  you["You, the operator<br/>laptop or phone on the tailnet"]
+
+  subgraph cloudflare["Cloudflare"]
+    cfedge["Cloudflare edge<br/>otj-services.com, proxied<br/>WAF and DDoS protection<br/><b>TLS terminates</b><br/>Cloudflare edge certificate"]
+  end
+
+  subgraph aws["AWS eu-west-2"]
+    sg{{"Security group<br/>inbound TCP 443 from Cloudflare ranges only<br/>nothing else, no SSH"}}
+    subgraph box["EC2 t3.small, Ubuntu 24.04, Elastic IP"]
+      haproxy["HAProxy 2.8<br/>0.0.0.0:443 and [::]:443<br/><b>TLS terminates</b><br/>Cloudflare Origin CA certificate<br/>client IP from CF-Connecting-IP<br/>per-IP rate limits, 1 MB body cap"]
+      tsserve["tailscaled + tailscale serve<br/>tailnet address only<br/>:8443 to admin-api, :8444 to hours-api<br/><b>TLS terminates</b><br/>Let's Encrypt cert for the ts.net name<br/>injects Tailscale-User-Login"]
+      subgraph podman["rootless Podman"]
+        api["hours-api<br/>Jersey on Grizzly, HTTP<br/>published on 127.0.0.1:8945 only"]
+        admin["admin-api<br/>HTTP, published on 127.0.0.1:8946 only<br/>AdminIdentityFilter + allowlist"]
+      end
+      journald[("journald<br/>persistent, 500 MB cap<br/>full local copy")]
+      alloy["Grafana Alloy<br/>rootful Quadlet, read-only mounts<br/>UI on 127.0.0.1:12345<br/>truncates client IPs"]
+    end
+  end
+
+  subgraph thirdparty["Third-party services"]
+    grafana["Grafana Cloud, free tier<br/>Loki + Grafana, EU or UK region<br/>you are the only member"]
+    atlas[("MongoDB Atlas<br/>allowlist: the Elastic IP")]
+    anthropic["Anthropic API"]
+    oneadv["OneAdvanced and<br/>Microsoft login"]
+  end
+
+  %% Public request path
+  learner ==>|"HTTPS over TLS<br/>TCP 443"| cfedge
+  cfedge ==>|"HTTPS, a new TLS session<br/>TCP 443 to the Elastic IP<br/>SSL mode Full (strict)"| sg
+  sg ==> haproxy
+  haproxy -->|"HTTP/1.1, plaintext<br/>loopback 127.0.0.1:8945"| api
+
+  %% Tailnet path
+  you ==>|"WireGuard, UDP 41641<br/>or DERP relay on TCP 443<br/>carrying HTTPS to :8443 and :8444<br/>tailscaled dials out, no inbound rule"| tsserve
+  tsserve -->|"HTTP, loopback :8946<br/>+ Tailscale-User-Login"| admin
+  tsserve -->|"HTTP, loopback :8945"| api
+
+  %% Logs
+  haproxy -.->|"access log to stdout"| journald
+  api -.->|"stdout, Podman journald driver"| journald
+  admin -.->|"stdout, Podman journald driver"| journald
+  journald -.->|"read-only mount"| alloy
+  alloy ==>|"HTTPS over TLS, TCP 443<br/>Loki push API<br/>write-only token"| grafana
+  you ==>|"HTTPS over TLS, TCP 443<br/>SSO + 2FA"| grafana
+
+  %% Outbound dependencies, all leaving from the Elastic IP
+  api ==>|"MongoDB protocol over TLS<br/>TCP 27017"| atlas
+  admin ==>|"MongoDB protocol over TLS<br/>TCP 27017"| atlas
+  api ==>|"HTTPS over TLS, TCP 443"| anthropic
+  api ==>|"HTTPS over TLS, TCP 443"| oneadv
+
+  classDef tls fill:#fde68a,stroke:#b45309,color:#111
+  classDef loopback fill:#dbeafe,stroke:#1d4ed8,color:#111
+  classDef ext fill:#e5e7eb,stroke:#4b5563,color:#111
+  classDef gate fill:#fecaca,stroke:#b91c1c,color:#111
+  class cfedge,haproxy,tsserve tls
+  class api,admin,alloy,journald loopback
+  class grafana,atlas,anthropic,oneadv,learner,you ext
+  class sg gate
+```
+
+**Deploys and secrets**
+
+```mermaid
+flowchart LR
+  gh["GitHub Actions<br/>deploy.yml and ops workflows"]
+
+  subgraph awsapi["AWS APIs, eu-west-2"]
+    direction TB
+    ssm["SSM<br/>SendCommand"]
+    ecr[("ECR<br/>otj-hours-api:SHA<br/>app jar + playbook + configs")]
+    cwl[("CloudWatch Logs<br/>SSM command output")]
+    params[("Parameter Store<br/>SecureString, /otj/prod/*")]
+  end
+
+  subgraph box["EC2 box"]
+    direction TB
+    agent["SSM agent"]
+    converge["otj-converge<br/>ansible-playbook -c local"]
+    render["otj-render-env<br/>at each unit start"]
+    origin["otj-origin-cert.service<br/>before HAProxy"]
+    tmpfs[("tmpfs, mode 0600<br/>/run/user/uid/otj/*.env<br/>/run/otj/alloy.env<br/>/run/otj-origin/origin.pem")]
+    units["hours-api, admin-api,<br/>Alloy, HAProxy"]
+  end
+
+  gh ==>|"ssm:SendCommand"| ssm
+  gh ==>|"push image, OIDC role"| ecr
+  ssm <==>|"agent polls, outbound"| agent
+  agent ==>|"command output"| cwl
+  ecr <==>|"pull image by SHA"| converge
+  params <==>|"GetParameters"| render
+  params <==>|"GetParameters"| origin
+
+  agent -.->|"runs"| converge
+  converge -.->|"Quadlets, haproxy.cfg, Alloy config<br/>restart or reload on change"| units
+  render -.->|"env files"| tmpfs
+  origin -.->|"cert + key"| tmpfs
+  tmpfs -.->|"EnvironmentFile, certificate"| units
+
+  classDef ext fill:#e5e7eb,stroke:#4b5563,color:#111
+  classDef secret fill:#fde68a,stroke:#b45309,color:#111
+  class gh ext
+  class params,tmpfs secret
+```
+
+| In the diagrams | Means |
+|---|---|
+| Thick line | Encrypted on the wire (TLS, or WireGuard). In the second diagram, every thick line is HTTPS on TCP 443. |
+| Two-headed thick line | The box opens the connection and the data comes back to it. Nothing in the second diagram connects **in** to the box: SSM, ECR and Parameter Store are all reached outbound. |
+| Thin line | Plaintext HTTP, which never leaves loopback |
+| Dotted line | Not network traffic: stdout, file reads and writes, or one process starting another |
+| Amber box | TLS terminates here (first diagram); holds or serves secrets (second diagram) |
+| Blue box | Listens on, or reads from, the box only |
+| Red hexagon | The only inbound filter AWS applies |
+
+**Every hop, and where its TLS ends:**
+
+| # | From → to | Protocol and port | Encryption | Terminated by | Certificate |
+|---|---|---|---|---|---|
+| 1 | Learner → Cloudflare | HTTPS, TCP 443 (UDP 443 if HTTP/3 is on for the zone) | TLS | Cloudflare edge | Cloudflare's edge certificate for `otj-services.com` |
+| 2 | Cloudflare → HAProxy | HTTPS, TCP 443 to the Elastic IP, through the security group | TLS, a **separate** session from hop 1. Full (strict) makes Cloudflare validate the origin certificate. | HAProxy | Cloudflare Origin CA, 15 years, from Parameter Store (§7) |
+| 3 | HAProxy → hours-api | HTTP/1.1, `127.0.0.1:8945`, through Podman's port forward | **None**, and that's safe only because it's loopback. AGENTS.md's loopback rule and §4.4's wildcard-listener check keep it that way. | — | — |
+| 4 | You → `tailscale serve` | HTTPS to `:8443` (admin) or `:8444` (hours-api), inside WireGuard on UDP 41641, or DERP relays on TCP 443 when a direct path fails | WireGuard, with TLS inside it | `tailscaled` on the box | Let's Encrypt, for the box's `ts.net` name |
+| 5 | `tailscale serve` → admin-api / hours-api | HTTP, `127.0.0.1:8946` / `:8945`, plus the `Tailscale-User-Login` header | **None**, loopback. This is why the header can be believed (AGENTS.md, "Two processes"). | — | — |
+| 6 | Alloy → Grafana Cloud | HTTPS, TCP 443, Loki push API | TLS | Grafana Cloud | Public CA |
+| 7 | You → Grafana Cloud | HTTPS, TCP 443 | TLS | Grafana Cloud | Public CA |
+| 8 | hours-api, admin-api → MongoDB Atlas | MongoDB wire protocol, TCP 27017 | TLS (Atlas requires it) | Atlas | Public CA |
+| 9 | hours-api → Anthropic, OneAdvanced, Microsoft | HTTPS, TCP 443 | TLS | Each provider | Public CA |
+| 10 | Box, GitHub Actions → AWS APIs (SSM, Parameter Store, ECR, CloudWatch Logs) | HTTPS, TCP 443 | TLS | AWS | Amazon's CA |
+
+Every connection in hops 6 to 10 is **outbound** from the box or from GitHub. The security group needs
+no rule for any of them, or for the tailnet: `tailscaled` dials out first, and the return traffic is
+allowed because the group is stateful. Hop 2 is the only inbound traffic AWS lets in.
+
+*(Verify on the zone: the minimum TLS version and whether HTTP/3 is on for hop 1. Cloudflare's default
+minimum is TLS 1.0, and 1.2 is the sensible floor for an API used only by a current mobile app.)*
 
 ### 4.1 Two layers, one artifact
 
@@ -198,6 +367,109 @@ The `verify` role runs last on every apply:
   disables it (see §6), and until that step lands, the check allows `:22`. This is AGENTS.md's loopback rule
   for 8945 and 8946 turned into a check that fails the deploy.
 - `tailscale serve status --json` shows exactly the 8443 and 8444 mappings and nothing on 443.
+- Alloy answers `GET 127.0.0.1:12345/-/ready` (§4.5). The wildcard check above already covers its
+  port, so if it ever listens on `0.0.0.0`, the deploy fails.
+
+### 4.5 Logs: three trails, one dashboard (D5)
+
+```
+ box                                                         Grafana Cloud (one stack, one user)
+  journald (persistent, 500 MB cap)
+   ├─ haproxy.service ................ service="edge"   ─┐
+   ├─ CONTAINER_NAME=hours-api ....... service="hours-api" ├─► Alloy ──HTTPS push──► Loki ──► Grafana
+   └─ CONTAINER_NAME=admin-api ....... service="admin-api" ─┘   (write-only token)
+  /var/log/caddy/access.log (until step 8) ... service="edge" ─┘
+```
+
+**One source: journald.** Everything goes through the journal, so Alloy needs one reader and the
+box keeps a full local copy that doesn't depend on Grafana Cloud.
+
+| Trail | How it reaches the journal | Labels in Loki |
+|---|---|---|
+| Edge, HAProxy (from step 8) | `log stdout format raw local0` in `haproxy.cfg`'s `global`. Under systemd, stdout **is** the journal, so there's no rsyslog socket inside the chroot and no `/var/log/haproxy.log` *(verify with 2.8 in `-Ws` master-worker mode)*. | `service="edge"`, `proxy="haproxy"` |
+| Edge, Caddy (from step 7 until step 8) | Not in the journal. Alloy tails `/var/log/caddy/access.log` directly, until the cutover removes it. | `service="edge"`, `proxy="caddy"` |
+| `hours-api` | logback to stdout, then Podman's journald log driver into `otjapp`'s user journal. `LogDriver=journald` is written into the Quadlet: it's already Podman's default, but writing it down means nobody changes it by accident. | `service="hours-api"` |
+| `admin-api` | Same | `service="admin-api"` |
+
+Every stream also gets `env="prod"` and `host="hours-api"`. **Labels stay low-cardinality**: no
+user ID, path or IP as a label. Those stay in the log line and are filtered with LogQL. Loki
+indexes labels, and the free tier's limits are easiest to break with a high-cardinality label.
+
+`service="edge"` is the same label before and after the proxy cutover. The dashboard panel doesn't
+change at step 8, and you can compare Caddy's and HAProxy's traffic across it.
+
+Two journald settings matter here:
+- **`Storage=persistent`** in `base`'s journald drop-in, next to `SystemMaxUse=500M`. The local copy
+  then survives reboots, and so do Alloy's read positions.
+- **The rate limit is off for `haproxy.service`.** journald allows 10,000 messages per 30 s per unit
+  by default, then **silently drops** the rest. A burst of traffic, which is exactly when you want the
+  access log, can hit that. A drop-in sets `LogRateLimitIntervalSec=0` on `haproxy.service`.
+
+**Alloy** runs as a **rootful** system Quadlet, `/etc/containers/systemd/alloy.container`. Rootful
+because it has to read both the system journal (HAProxy) and `otjapp`'s user journal, and a
+rootless container can read neither. It's locked down to make up for that:
+- The journal directories and `/etc/machine-id` are mounted **read-only**. So is `/var/log/caddy`,
+  until step 8.
+- `ReadOnly=true`, `DropCapability=all`, `NoNewPrivileges=true`. Root still reads the journal files
+  as their owner, so it needs no capabilities *(verify)*. Caddy's access log is the exception: it
+  is owned by `caddy`, and Caddy may create it `0600` *(verify on the box)*. Root with no
+  capabilities can't read that, so while `edge_proxy: caddy`, the Quadlet adds
+  `AddCapability=DAC_READ_SEARCH`, and step 8 takes it away again. Don't loosen the file's mode
+  instead: the runbook's 2026-08-22 failure was about exactly that file's ownership.
+- `Network=host` with its UI on `127.0.0.1:12345`, Alloy's default. It needs no inbound port at all,
+  since it only pushes out, and the security group already allows all outbound traffic.
+- Its image is **pinned by digest** in `group_vars/all.yml`, like everything else the box runs. An
+  upgrade is a PR.
+- Its state directory, `/var/lib/alloy`, is a host directory, so the journal read positions survive
+  restarts. Without it, a restart either resends lines or skips them.
+
+Its config is `roles/observability/templates/config.alloy.j2`, roughly:
+
+```
+loki.source.journal "box"   { path = "/var/log/journal", relabel_rules = …, forward_to = [loki.process.scrub.receiver] }
+loki.source.file "caddy"    { /var/log/caddy/access.log, labels service="edge", proxy="caddy" }   {# only while edge_proxy == caddy #}
+loki.relabel "box"          { __journal__systemd_unit / __journal_container_name → service, proxy }
+loki.process "scrub"        { edge lines only: client IP truncated (below); forward_to = [loki.write.grafana_cloud.receiver] }
+loki.write "grafana_cloud"  { endpoint { url = "{{ loki_push_url }}", basic_auth { username = "{{ loki_user }}", password = sys.env("GRAFANA_CLOUD_LOGS_TOKEN") } } }
+```
+
+The push URL and the stack's Loki user ID are not secrets, so they go in `group_vars/all.yml`. The
+token is fetched at unit start from Parameter Store like every other secret (§7). *(Verify the
+component and argument names, and `sys.env` rather than the older `env`, against the pinned Alloy
+version.)*
+
+**What leaves the box.** The logs are now copied to a third party, so be deliberate about it:
+- **App logs** already follow AGENTS.md's rule: no OneAdvanced credentials, MFA codes, Microsoft
+  tokens, cookies or learner IDs, and the app's `userId` is the most a log line carries.
+  `ServerHooks` enforces it. That rule now also protects the Grafana Cloud copy: a leak would reach
+  a third party, not just the box.
+- **Edge access logs** carry the client IP (the real one, after the `CF-Connecting-IP` rewrite) and
+  the request path. No endpoint takes query parameters, and the IDs in paths are pending-activity
+  IDs, so paths carry nothing secret. The IPs are personal data, so **Alloy truncates them before
+  sending**: IPv4 to /24, IPv6 to /48. The full address stays in the local journal, readable from
+  an SSM session, for the rare rate-limit investigation that needs it. `option httplog` logs no
+  request headers unless told to. **Never add `capture request header Authorization`.**
+- Create the stack in an **EU or UK region** *(verify which Grafana Cloud offers at signup)*.
+
+**Keeping it single-user** (the D5 condition). These are Grafana Cloud account settings, so they
+are manual (see Scope). §10 step 7 checks them before any line is sent:
+
+1. You are the **only member** of the Grafana Cloud org. The free tier includes spare seats.
+   Don't fill them.
+2. You sign in through Google or GitHub with **strong 2FA** (a passkey or hardware key). That
+   account is now the only thing protecting the logs.
+3. Alloy's token belongs to an access policy, `otj-alloy-prod`, with **only `logs:write`**,
+   restricted to this stack. A leaked token could send junk but read nothing. `metrics:write` is
+   added when metrics arrive (§13), and nothing else ever is.
+4. **No public or externally shared dashboards, and no shared snapshots.** Those are the ways a
+   Grafana dashboard becomes readable without a login. The list of public dashboards under
+   Administration stays empty.
+5. No other service accounts or API keys. Any later Terraform or CLI token has an expiry.
+
+**The dashboard** is built by hand in Grafana for now (dashboards as code is in §13): one row with a
+log panel each for `{service="edge"}`, `{service="hours-api"}` and `{service="admin-api"}`, plus a
+merged panel with a `service` variable and a line filter. Loki can also chart counts from these logs
+(for example, 429s or 5xx per minute from the edge lines) before any real metrics exist.
 
 ---
 
@@ -209,10 +481,10 @@ deploy/
     ansible.cfg              # inventory, roles_path, stdout callback = yaml, no host key checks
     inventory.ini            # localhost ansible_connection=local
     site.yml                 # the one play; role order matters (§6)
-    group_vars/all.yml       # ports, hostnames, image repo, paths — nothing secret
+    group_vars/all.yml       # ports, hostnames, image repo, paths, Alloy digest, Loki push URL — nothing secret
     group_vars/ci.yml        # overrides for the PR rehearsal (§8.3)
     roles/
-      base/  otjapp/  tailscale/  edge/  app/  verify/
+      base/  otjapp/  tailscale/  edge/  app/  observability/  verify/
   bin/
     otj-converge             # §4.2
   haproxy/
@@ -229,7 +501,7 @@ docker/otjService.Dockerfile # gains COPY deploy/ /deploy/
 ## 6. Roles
 
 In `site.yml` order. The order is significant: `tailscale` has to move off 443 before `edge`
-binds it.
+binds it. `observability` comes after `edge` and `app`, because it reads what they log.
 
 ### `base`
 - apt: `podman`, `uidmap`, `jq`, `unzip`, `curl`, `ansible-core`, `unattended-upgrades`
@@ -237,8 +509,9 @@ binds it.
 - AWS CLI v2: download a **pinned** version's zip, check it against a checksum in `group_vars`,
   unarchive, install (`creates:` guards re-runs).
 - `/usr/local/sbin/otj-converge` from `deploy/bin/`, so the script updates itself.
-- journald size cap (`SystemMaxUse=500M`), since there is nothing else stopping logs filling the
-  20 GB disk.
+- journald drop-in: size cap (`SystemMaxUse=500M`), since there is nothing else stopping logs
+  filling the 20 GB disk, and `Storage=persistent`, so the local copy of the logs and Alloy's read
+  positions survive a reboot (§4.5).
 - Disable and mask `ssh.socket` and `ssh.service` (Ubuntu 24.04 starts sshd through a socket).
   Access is SSM only, and there is no key and no open port. For break-glass, EC2 Serial Console
   still works if SSM ever fails. This is its own PR, after §10 step 4, so the wildcard check can
@@ -264,14 +537,14 @@ binds it.
 ### `edge`
 The public listener on 443. `edge_proxy` in `group_vars/all.yml` picks the mode.
 
-- **`edge_proxy: caddy` (steps 1–6):** nothing is installed, only verified, which is how the
+- **`edge_proxy: caddy` (steps 1–7):** nothing is installed, only verified, which is how the
   playbook takes over the live box without touching the working Caddy. It asserts that the apt
   package is from Cloudsmith and held, that the running binary has `rate_limit`, that
   `/var/log/caddy/access.log` is `caddy:caddy` (the runbook's 2026-08-22 failure), and that
   `caddy.service` is enabled and running. It also stops and disables `haproxy.service` **if that
-  unit exists**. That does nothing until step 7, but it means rolling back to a pre-step-7 SHA
+  unit exists**. That does nothing until step 8, but it means rolling back to a pre-step-8 SHA
   brings Caddy back instead of leaving two proxies fighting over 443.
-- **`edge_proxy: haproxy` (from step 7):**
+- **`edge_proxy: haproxy` (from step 8):**
   - apt `haproxy` from Ubuntu `main`. Not held: Ubuntu's security updates within 2.8 keep the
     config compatible, and the rehearsal and nightly check catch anything that breaks.
   - `/etc/haproxy/haproxy.cfg` and `cloudflare-ips.lst` from `deploy/haproxy/`, checked with
@@ -282,8 +555,10 @@ The public listener on 443. `edge_proxy` in `group_vars/all.yml` picks the mode.
     be its own unit, not an `ExecStartPre=` on `haproxy.service`. Ubuntu's unit already runs
     `haproxy -c` as its `ExecStartPre`, and drop-in lines go after it, so the config check would
     run before the certificate existed and fail on every boot.
+  - A second `haproxy.service` drop-in sets `LogRateLimitIntervalSec=0`, so journald never
+    drops access-log lines during a burst (§4.5).
   - The cutover stops and disables Caddy, then starts HAProxy. Cloudflare returns 5xx for the
-    few seconds in between, so run it off-peak. Caddy stays installed but disabled until step 8,
+    few seconds in between, so run it off-peak. Caddy stays installed but disabled until step 9,
     so rolling back means re-running the previous SHA.
 
 **How the Caddyfile maps to `haproxy.cfg`** *(verify each line against 2.8 in the rehearsal)*:
@@ -298,7 +573,7 @@ The public listener on 443. `edge_proxy` in `group_vars/all.yml` picks the mode.
 | `dial_timeout 10s`, `response_header_timeout 300s` | `timeout connect 10s`, `timeout server 300s`. Cloudflare cuts off at 100 s regardless (R8). |
 | `tls /etc/caddy/origin-*.pem` | `bind :443 ssl crt /run/otj-origin/origin.pem` and `bind :::443 v6only ssl crt …`, so `ss` shows the same two listeners Caddy had. Cert and key are one file. |
 | `auto_https disable_redirects` | Nothing needed: HAProxy only listens where it's told to |
-| `log { output file /var/log/caddy/access.log }` | `option httplog` to the package's rsyslog socket, which writes `/var/log/haproxy.log` |
+| `log { output file /var/log/caddy/access.log }` | `option httplog` with `log stdout format raw local0`, so the lines go to journald under `haproxy.service` and from there to Grafana Cloud (§4.5). The package's rsyslog rule is left alone; it just never receives anything. |
 
 One behavioural difference: `track-sc` counts a request before any deny, so a client that keeps
 retrying after a 429 stays limited until it slows down, rather than getting a slot back as the
@@ -311,12 +586,29 @@ All `become_user: otjapp` with `XDG_RUNTIME_DIR` set.
 - Quadlets from templates: `hours-api.container` and `admin-api.container`, with `Image=` set to
   the SHA, `PublishPort=127.0.0.1:…` (a **literal in the template** with a comment pointing at
   AGENTS.md, not a variable anyone could widen), `EnvironmentFile=%t/otj/<svc>.env`,
-  `ExecStartPre=%h/.local/bin/otj-render-env <svc>` (§7).
+  `ExecStartPre=%h/.local/bin/otj-render-env <svc>` (§7), and `LogDriver=journald` (§4.5).
 - `/home/otjapp/.local/bin/otj-render-env` from the role's files.
 - Handlers: `daemon-reload` (user scope), then restart the unit whose Quadlet changed.
 - **Migration only (§10, step 6):** `~/otj-hours-api.env` and `~/otj-admin-api.env` set to
   `state: absent`, gated by a variable that is only turned on once the Parameter Store path has
   been proven.
+
+### `observability`
+Log shipping to Grafana Cloud (§4.5, D5). Root, because Alloy is a system unit.
+- `/usr/local/lib/otj/otj-render-env`, the same script as the `app` role's, installed for system
+  units. It writes `/run/otj/alloy.env` (0600 `root`) from `/otj/prod/grafana-cloud-logs-token`.
+- `/etc/alloy/config.alloy` from the template, checked with `alloy fmt` (as the `template`
+  module's `validate:`) before it replaces the live file *(verify that `fmt` fails on an invalid
+  config, not just a badly formatted one; newer Alloy also has `alloy validate`)*. Which edge
+  source it reads depends on `edge_proxy`: the Caddy file until step 8, the `haproxy.service`
+  journal after.
+- `/etc/containers/systemd/alloy.container`: the pinned image, the read-only mounts,
+  `/var/lib/alloy` for state, `EnvironmentFile=/run/otj/alloy.env`,
+  `ExecStartPre=/usr/local/lib/otj/otj-render-env alloy`.
+- Handlers: `daemon-reload` (system scope), then **reload** Alloy when only its config changed
+  (`POST 127.0.0.1:12345/-/reload`), and restart it only when the Quadlet changed.
+- Rolling back to a SHA from before step 7 leaves Alloy running with the newer config, because
+  that SHA's playbook doesn't know about it. That's harmless: it keeps shipping logs.
 
 ### `verify`
 §4.4. Runs on every apply and is skipped in `--check` mode, where nothing was restarted.
@@ -335,9 +627,10 @@ the secret never appears in a file Ansible manages.
 | `/otj/prod/mongo-uri` | hours-api, admin-api | `/run/user/<uid>/otj/<svc>.env` |
 | `/otj/prod/anthropic-api-key` | hours-api | same |
 | `/otj/prod/admin-allowed-logins` (`String`) | admin-api | same |
-| `/otj/prod/origin-cert` (`String`: it's public) and `/otj/prod/origin-key` | `otj-origin-cert.service`, from step 7 | `/run/otj-origin/origin.pem` (0600 `root`, cert then key in one file, as HAProxy wants) |
+| `/otj/prod/origin-cert` (`String`: it's public) and `/otj/prod/origin-key` | `otj-origin-cert.service`, from step 8 | `/run/otj-origin/origin.pem` (0600 `root`, cert then key in one file, as HAProxy wants) |
 | `/otj/prod/credential-identity-seed` | hours-api, **only once PR #43 lands**. Carry it over **byte for byte**, because the identity key is pinned in the app bundle. | same as hours-api |
 | `/otj/prod/tailscale-authkey` | `tailscale` role, only on a rebuild (§11) | not written; passed to `tailscale up` with `no_log` |
+| `/otj/prod/grafana-cloud-logs-token` | Alloy, from step 7. **Write-only** (`logs:write`, this stack only; §4.5). | `/run/otj/alloy.env` (0600 `root`) |
 
 `otj-render-env <svc>` is about 20 lines of bash: `aws ssm get-parameters --with-decryption`
 for that service's list of names, write `KEY=value` lines to the tmpfs file with `umask 077`,
@@ -353,7 +646,9 @@ with an `kms:ViaService = ssm.eu-west-2.amazonaws.com` condition.
 `/etc/caddy/origin-{cert,key}.pem`, over one `SendCommand` issued from a `workflow_dispatch` job
 (§9.2), piping each value straight into `aws ssm put-parameter --type SecureString --value
 file:///dev/stdin`. Nothing is echoed. The origin pair is seeded in §10 step 6 with everything
-else, ready for step 7.
+else, ready for step 8. The Grafana Cloud token is the exception: it isn't on the box yet. You
+create it in Grafana Cloud and `put-parameter` it from your laptop in §10 step 7, the same way
+a replacement origin certificate would go in.
 
 **Rotation:** `aws ssm put-parameter --overwrite …`, then the *restart unit* ops workflow (§9.2).
 A restart re-renders the file, and nothing else is needed.
@@ -377,6 +672,7 @@ New `.github/workflows/pr.yml`, with the existing Java checks kept.
 | `shellcheck deploy/bin/* deploy/ansible/roles/*/files/*.sh` | The bash parts |
 | `haproxy -c -f deploy/haproxy/haproxy.cfg` with Ubuntu's `haproxy` package on the runner (and a throwaway cert) | Bad ACLs, unknown keywords and every other config error, before they reach the box |
 | `podman-system-generator --dryrun` against the rendered Quadlets | Quadlet syntax errors, which today only show up as a unit that silently doesn't exist |
+| `alloy fmt` on the rendered `config.alloy`, using the pinned Alloy image | Alloy config syntax errors, which would otherwise stop log shipping silently: the app keeps running, and nothing tells you |
 
 ### 8.2 Integration tests
 Unchanged here except for one fix: add `maven-failsafe-plugin` so `*IT` runs under `mvn verify`
@@ -392,13 +688,18 @@ GitHub's `ubuntu-24.04` runner is a VM with systemd and the same OS as the box. 
    `otj-render-env` at a fixture file of dummy values instead of Parameter Store, uses a local
    Mongo container for `MONGO_URI`, a self-signed certificate, and `edge_proxy: haproxy` from
    the start. Installing Caddy with its plugin on a runner is exactly the fragile step D3
-   removes. Before step 7, this means the rehearsal tests the proxy the box is *about to get*,
+   removes. It also points Alloy at a throwaway Loki container on `127.0.0.1:3100`, with no auth,
+   instead of Grafana Cloud. The rehearsal never sends anything to the real stack and needs no
+   token. Before step 8, this means the rehearsal tests the proxy the box is *about to get*,
    and the live `converge-check` covers the Caddy assertions.
 3. **Apply it a second time and fail if anything changed.** This is the idempotence check, the
    single most useful test for a playbook.
 4. Check behaviour through HAProxy on `https://localhost` with `--resolve`: `/health` is 200;
    11 `POST /auth/session` in quick succession returns a **429 with `Retry-After`** on the 11th;
    `:8945` and `:8946` are **not** reachable on the runner's non-loopback address.
+   Then query the local Loki: there is at least one line each for `service="edge"`,
+   `service="hours-api"` and `service="admin-api"`, and the edge lines from step 4's requests
+   carry a **truncated** client IP (§4.5), not the full one.
 5. `verify` has already run inside step 2, so the wildcard-listener check is covered.
 
 This would have caught the missing-`curl` healthcheck and a wrong-order 443 bind. It costs only runner minutes. *(Verify: linger and rootless Podman work on
@@ -436,8 +737,8 @@ Each one sends a **fixed** command through SSM, so there are no free-text shell 
 |---|---|---|
 | `rollback` | `sha` | `otj-converge <sha>` + smoke. The SHA must exist in ECR. Rolls back the app **and** its box config together. |
 | `converge-check` | — | `otj-converge <live sha> --check`, and posts the diff to the job summary |
-| `restart` | `unit` ∈ {hours-api, admin-api, haproxy} (`caddy` before step 7) | `systemctl restart`, then `verify` |
-| `logs` | `unit`, `lines` ≤ 500 | `journalctl -u <unit> -n <lines>` into the job log. **App logs don't contain credentials (`ServerHooks` enforces it), but the job log is visible to anyone with repo read access. Keep the repo private, or drop this workflow.** |
+| `restart` | `unit` ∈ {hours-api, admin-api, haproxy, alloy} (`caddy` before step 8) | `systemctl restart`, then `verify` |
+| `logs` | `unit`, `lines` ≤ 500 | `journalctl -u <unit> -n <lines>` into the job log. **App logs don't contain credentials (`ServerHooks` enforces it), but the job log is visible to anyone with repo read access. Keep the repo private, or drop this workflow.** It's only a stopgap until log shipping lands (§10 step 7), and it's deleted in step 9: Grafana replaces it without putting log lines into job output. |
 | `seed-secret` | `name` from a fixed list | One-time seeding from the old env file (§7). Deleted after §10 step 6. |
 
 ### 9.3 Nightly drift check
@@ -464,8 +765,13 @@ mode before it is applied.
 | 4 | First real apply: `otj-converge <live sha>` | Actions button | `verify` passes; public and tailnet checks from `deploy/prod/README.md` "Verifying" |
 | 5 | `deploy.yml` replaces `ci-cd.yml` (§9.1) | Merge | Two ordinary merges deploy through Ansible |
 | 6 | Secrets: IAM (§7), seed the parameters, switch the Quadlets to `render-env`, then after two good deploys remove the old env files | Three PRs | `ls ~otjapp/*.env` is empty; the app restarts cleanly |
-| 7 | Caddy → HAProxy (D3): `edge_proxy: haproxy`, origin pair from Parameter Store | PR, check first, applied off-peak | `verify` passes; the runbook's edge rate-limit test through Cloudflare (11th `POST /auth/session` → 429 with `Retry-After`); `/health` from outside |
-| 8 | Nightly drift check on; Session Manager logging on; apt Caddy, the Cloudsmith repo, `/etc/caddy/`, `push-file.sh` and `deploy/prod/` deleted | PR | A deliberate manual change on the box is reported the next morning |
+| 7 | Logs to Grafana Cloud (D5, §4.5). **Manual first, in Grafana Cloud:** create the stack in an EU or UK region, confirm the five single-user rules in §4.5, create the write-only `otj-alloy-prod` token, and `put-parameter` it from your laptop. **Then the PR:** the `observability` role, `LogDriver=journald` in the Quadlets, and the journald drop-in. The edge trail is still Caddy's file here. | Manual setup, then PR, check first | Lines from all three `service` values in Grafana, and edge lines carry truncated IPs; `verify` sees Alloy ready; opening the stack's URL in a private window asks for a login and shows nothing |
+| 8 | Caddy → HAProxy (D3): `edge_proxy: haproxy`, origin pair from Parameter Store | PR, check first, applied off-peak | `verify` passes; the runbook's edge rate-limit test through Cloudflare (11th `POST /auth/session` → 429 with `Retry-After`); `/health` from outside; in Grafana, the edge panel switches from `proxy="caddy"` to `proxy="haproxy"` with no gap longer than the cutover, and the test's 429s appear in it |
+| 9 | Nightly drift check on; Session Manager logging on; apt Caddy, the Cloudsmith repo, `/etc/caddy/`, `push-file.sh`, the `logs` workflow and `deploy/prod/` deleted | PR | A deliberate manual change on the box is reported the next morning |
+
+Step 7 comes after step 6 because it reuses step 6's Parameter Store path for its token. It comes
+before the proxy cutover so that step 8 can be **watched** in Grafana rather than checked
+afterwards from an SSM session.
 
 **Rollback at any step:** the old files stay where they are until the step that removes them. For
 steps 1–5, rolling back means going back to `ci-cd.yml` and `deploy.sh`, which are untouched until
@@ -486,6 +792,9 @@ Once §10 is done, the box's whole configuration is in the image, so a new box n
   new one gets the same MagicDNS name instead of `hours-api-1`.
 - The Elastic IP moves to the new instance, so **the Atlas allowlist and the Cloudflare record
   don't change**.
+- Nothing changes for logs either. The Grafana Cloud token is already in Parameter Store, the
+  labels don't depend on the instance, and the new box's lines appear in the same panels. The old
+  box's local journal is lost with it, but its lines from the last ~14 days are in Grafana.
 
 Rehearse it once: launch a throwaway instance from the same definition with the `tailnet` tag
 skipped and no EIP, confirm `verify` passes, and terminate it (about $0.05). After a successful
@@ -501,6 +810,8 @@ longer protecting anything irreplaceable and can finally be corrected.
 | Parameter Store `SecureString`, standard tier, AWS-managed key | $0 |
 | CloudWatch Logs for SSM command output and Session Manager logs (well under 1 GB/month) | < $0.50 |
 | GitHub Actions minutes for the rehearsal (~5 min per PR, plus nightly) | $0 within the free allowance for private repos, at this volume |
+| Grafana Cloud free tier (D5): logs from three services are far below its monthly log allowance *(verify current limits)* | $0 |
+| Alloy on the box: expected to take on the order of 100 MB of RAM, which the t3.small should have spare *(verify with `podman stats` after step 7)*. If it doesn't fit, that's an instance-size decision, not a cost this plan hides. | $0 |
 | **Total** | **~$0.50/month on top of today's ~$23** |
 
 ---
@@ -514,11 +825,26 @@ Each of these becomes a role or a small PR once this plan is done:
   clash. HAProxy would stay, listening on loopback for `cloudflared`, so the rate limits stay at
   the origin.
 - **The Cloudflare 100-second timeout** (R8), if the logs confirm it is biting.
-- **Observability** (your tailnet dashboard requirement): a `fluent_bit` role (journald →
-  CloudWatch Logs) and a `grafana` role (a Quadlet on `127.0.0.1:3000`, `tailscale serve
-  --https=8445`, auth proxy on `Tailscale-User-Login`, users from `admin-allowed-logins`).
-- **Terraform for Cloudflare and Tailscale:** DNS, SSL mode, the WAF rule, Tailscale ACLs and tags.
-  These are the last settings still changed through dashboards.
+- **Metrics**, on the same Alloy and the same Grafana Cloud stack as the logs (D5):
+  - A `prometheus.scrape` block and a `prometheus.remote_write` to the stack, with `metrics:write`
+    added to the existing token.
+  - HAProxy's built-in Prometheus exporter on a loopback-only frontend (`127.0.0.1:8405`)
+    *(verify that Ubuntu's 2.8 build includes it)*.
+  - Micrometer in the app, served on **separate loopback management ports** (for example 9945 and
+    9946), never on 8945 or 8946. On 8945 it would be public through HAProxy, and on 8946 anyone
+    on the tailnet could reach it past the allowlist.
+  - Keep latency histograms coarse. The free tier caps active series *(verify)*, and per-endpoint
+    histograms are what exceed it.
+- **Log correlation and structure** (app changes, not box changes): `unique-id-format` and
+  `unique-id-header X-Request-Id` in `haproxy.cfg`, with the app putting that ID into logback's
+  MDC. One click then goes from an edge 5xx or 429 to the app lines for the same request. Also,
+  switch logback to JSON, so level, logger and `userId` become fields rather than text to regex.
+  admin-api should log the `Tailscale-User-Login` behind each mint or revoke, as an audit trail.
+- **Alerts** in Grafana Cloud (free): at least "no `hours-api` lines for 30 minutes", which
+  catches a dead app and dead log shipping alike, and a spike in edge 5xx.
+- **Terraform for Cloudflare, Tailscale and Grafana Cloud:** DNS, SSL mode, the WAF rule, Tailscale
+  ACLs and tags, the Grafana access policy, and the dashboards as JSON. These are the last settings
+  still changed through dashboards.
 - **The `tailscale` branch:** self-hosters could use the same roles with a `selfhost` inventory
   instead of `deploy/bootstrap.sh`. Optional.
 
@@ -530,12 +856,15 @@ Each of these becomes a role or a small PR once this plan is done:
 |---|---|---|
 | R1 | **The first apply does something unexpected to the live box** | §10 step 3: check mode until the diff is understood. Step 1 deliberately matches the current state, so the first apply should change almost nothing. |
 | R2 | **Adding user data to the existing instance.** A `UserData` change on `AWS::EC2::Instance` is an update that needs a **stop/start**, meaning a reboot of production, and cloud-init wouldn't run it anyway since it only runs on first boot. | Don't. User data goes only on a *new* instance (§11). The CDK guard (§9.1) catches this if it happens by accident. |
-| R3 | **Secrets leak into GitHub logs through SSM output** | Ansible never handles secret values (§7); `no_log` on the Tailscale key task; `ansible-lint` flags obvious cases; the `logs` workflow note in §9.2 |
+| R3 | **Secrets leak into GitHub logs through SSM output** | Ansible never handles secret values (§7); `no_log` on the Tailscale key task; `ansible-lint` flags obvious cases; the `logs` workflow note in §9.2, and deleting that workflow in step 9 |
 | R4 | **`otj-converge` breaks itself.** A bad version is installed by the playbook, and the next deploy can't run. | The playbook installs the new script **last** (after `verify`), so a bad script only affects the *next* run. Recovery is the `rollback` workflow, whose first step runs a known-good inline copy through `SendCommand`. |
 | R5 | **Ansible is new to you** | §2; roles kept small and plain (builtin modules only, no third-party collections); every non-obvious task carries the runbook's reasoning as a comment |
 | R6 | **Rehearsal and box differ** (runner image drift, AWS-only tasks skipped) | The nightly drift check on the real box covers what the rehearsal can't |
 | R7 | **Unattended-upgrades or `apt upgrade` replaces something the playbook owns** | HAProxy updates come from Ubuntu's security pocket and stay config-compatible within 2.8. The package restarts HAProxy on upgrade, which costs a few seconds of 5xx. The next converge (every deploy, and nightly in check mode) catches any other drift. |
-| R8 | **Cloudflare's 100-second origin timeout.** On every plan below Enterprise, Cloudflare returns a 524 if the origin hasn't sent response headers within 100 s. `GET /azure-id/complete` can hold for about 2 minutes (the Caddyfile's own comment), so slow MFA approvals may already fail at the edge, and `timeout server 300s` can't help. | Not caused or fixed by this plan. Look for 524s on that path first *(verify)*. The fix is in the app: return early and have the client poll, or bring `AzureIdDriver`'s budget under 100 s. |
+| R8 | **Cloudflare's 100-second origin timeout.** On every plan below Enterprise, Cloudflare returns a 524 if the origin hasn't sent response headers within 100 s. `GET /azure-id/complete` can hold for about 2 minutes (the Caddyfile's own comment), so slow MFA approvals may already fail at the edge, and `timeout server 300s` can't help. | Not caused or fixed by this plan. Look for it first *(verify)*. A 524 is generated by Cloudflare, so the origin never logs one. What step 7's edge logs **will** show is `/azure-id/complete` requests lasting about 100 s and ending with a client-side abort in the termination state. The fix is in the app: return early and have the client poll, or bring `AzureIdDriver`'s budget under 100 s. |
+| R9 | **Personal data leaves the box.** Edge access logs carry client IPs, and app logs carry `userId`s. Both now go to a third party. | Alloy truncates IPs before sending (§4.5), and the rehearsal checks it (§8.3). The app's no-credentials rule and `ServerHooks` stay as they are. The stack is in an EU or UK region. Retention is short on the free tier anyway. |
+| R10 | **The Grafana Cloud login becomes the only lock on the logs**, since the dashboard isn't behind the tailnet (D5) | The five single-user rules in §4.5, checked in §10 step 7. The token on the box can only write. The logs hold no credentials, so the worst case is exposed IP prefixes, user IDs and request paths. |
+| R11 | **Log shipping stops silently.** Alloy is broken or can't reach Grafana Cloud, or the free tier's limits change or the stack is paused for inactivity *(verify that policy)*. | journald on the box stays the full local copy (500 MB, persistent), so no line is lost while the journal still holds it, and Alloy resumes from its saved position. `verify` checks Alloy is ready on every deploy. The "no lines for 30 minutes" alert (§13) catches it in between. |
 
 ---
 
@@ -544,12 +873,13 @@ Each of these becomes a role or a small PR once this plan is done:
 **Deleted by the end:** `deploy/prod/` (`deploy.sh`, both templates, `push-file.sh`, and the
 Caddyfile, which `deploy/haproxy/haproxy.cfg` replaces), `.github/workflows/ci-cd.yml`, the env
 files and hand-installed origin pair on the box, the apt Caddy, the Cloudsmith repo and
-`/etc/caddy/`.
+`/etc/caddy/` (including `access.log`, which Alloy stops reading at step 8), and the `logs` ops
+workflow, which Grafana replaces.
 
 | Doc | Change |
 |---|---|
-| `AGENTS.md` | Directory structure (`deploy/ansible/`, `deploy/haproxy/`); "Build, run, test" (`mvn verify`, `ansible-lint`, the rehearsal); Caddy → HAProxy wherever it is named (the "Two processes" table, the signup rate-limit note, the inbound-ports note); Conventions: *"don't change the box by hand; change the playbook"* |
-| `deploy/prod/README.md` → `deploy/ansible/README.md` | Rewritten around roles and workflows. The edge/rate-limit reasoning moves across in HAProxy terms. "The two rate limits, and why there are two" and the shared-IP section stand as written. |
-| `deployment-checklist.md` | §6 becomes "run the bootstrap workflow"; delete the manual steps |
+| `AGENTS.md` | Directory structure (`deploy/ansible/`, `deploy/haproxy/`); "Build, run, test" (`mvn verify`, `ansible-lint`, the rehearsal); Caddy → HAProxy wherever it is named (the "Two processes" table, the signup rate-limit note, the inbound-ports note); Conventions: *"don't change the box by hand; change the playbook"*. The no-credentials-in-logs convention gains a line: logs are copied to Grafana Cloud, so a leak reaches a third party, not just the box. Add where logs are read (Grafana, and `journalctl` over SSM as the fallback). |
+| `deploy/prod/README.md` → `deploy/ansible/README.md` | Rewritten around roles and workflows. The edge/rate-limit reasoning moves across in HAProxy terms. "The two rate limits, and why there are two" and the shared-IP section stand as written. A "Reading the logs" section: the dashboard, the three `service` labels, useful LogQL (429s by path, a user's requests by `userId`), and the local `journalctl` fallback for full IPs. |
+| `deployment-checklist.md` | §6 becomes "run the bootstrap workflow"; delete the manual steps. Add the one-time Grafana Cloud setup (§10 step 7), including the five single-user rules. |
 | `aws/README.md` | Parameter Store IAM, `/otj/prod/image-tag`, Session Manager logging |
 | `staging-to-master-cutover.md` | Unaffected. Still waiting on its own steps 7 and 8. |
