@@ -3,6 +3,10 @@ import { Construct } from "constructs";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as ecr from "aws-cdk-lib/aws-ecr";
+import * as logs from "aws-cdk-lib/aws-logs";
+
+// Keep in sync with github-oidc-stack.ts, which grants CI read access to it by name.
+const CONVERGE_LOG_GROUP = "/otj/converge";
 
 export class OtjServicesStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
@@ -180,6 +184,58 @@ export class OtjServicesStack extends cdk.Stack {
       removalPolicy: cdk.RemovalPolicy.RETAIN,
     });
     repository.grantPull(instanceRole);
+
+    // Secrets reach the containers at unit start, straight from Parameter Store into tmpfs, by
+    // `otj-render-env` running as the instance role (ansible-migration-plan.md §7). Ansible never
+    // reads them, which is why this grant sits on the instance and nowhere else. Read-only, and only
+    // under /otj/prod/. GetParameter as well as GetParameters because the one-off origin-key
+    // install after Session Manager logging is on (§7) fetches a single value.
+    instanceRole.addToPolicy(
+      new iam.PolicyStatement({
+        sid: "ReadOtjProdParameters",
+        actions: ["ssm:GetParameters", "ssm:GetParameter"],
+        resources: [`arn:aws:ssm:${this.region}:${this.account}:parameter/otj/prod/*`],
+      }),
+    );
+    // SecureStrings use the AWS-managed aws/ssm key. Its ARN isn't known up front, so this is
+    // scoped by kms:ViaService instead: the key can only be used for decryption through Parameter
+    // Store in this region, never called directly.
+    instanceRole.addToPolicy(
+      new iam.PolicyStatement({
+        sid: "DecryptViaParameterStoreOnly",
+        actions: ["kms:Decrypt"],
+        resources: ["*"],
+        conditions: { StringEquals: { "kms:ViaService": `ssm.${this.region}.amazonaws.com` } },
+      }),
+    );
+
+    // Where a deploy's Ansible output goes. `get-command-invocation` truncates at 24 KB, and a full
+    // converge is longer, so `ssm send-command --cloud-watch-output-config` sends it here instead.
+    // The SSM agent writes it with the instance's credentials, and AmazonSSMManagedInstanceCore
+    // doesn't include CloudWatch Logs. The name is fixed because github-oidc-stack.ts grants read on
+    // it by ARN (keep CONVERGE_LOG_GROUP in sync). It never holds secrets: Ansible doesn't handle
+    // them (§7).
+    const convergeLogGroup = new logs.LogGroup(this, "ConvergeLogGroup", {
+      logGroupName: CONVERGE_LOG_GROUP,
+      retention: logs.RetentionDays.THREE_MONTHS,
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+    });
+    instanceRole.addToPolicy(
+      new iam.PolicyStatement({
+        sid: "WriteConvergeOutput",
+        actions: ["logs:CreateLogStream", "logs:PutLogEvents", "logs:DescribeLogStreams"],
+        resources: [convergeLogGroup.logGroupArn],
+      }),
+    );
+    // The agent checks the group exists before writing, and DescribeLogGroups has no resource-level
+    // scoping.
+    instanceRole.addToPolicy(
+      new iam.PolicyStatement({
+        sid: "FindConvergeLogGroup",
+        actions: ["logs:DescribeLogGroups"],
+        resources: ["*"],
+      }),
+    );
 
     new cdk.CfnOutput(this, "InstanceId", { value: instance.instanceId });
     new cdk.CfnOutput(this, "ElasticIp", { value: elasticIp.ref });
