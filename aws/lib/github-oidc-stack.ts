@@ -8,6 +8,8 @@ const DEPLOY_REGION = "eu-west-2";
 const ECR_REPOSITORY_NAME = "otj-hours-api"; // keep in sync with otj-services-stack.ts
 const EC2_TAG_KEY = "otj:role";
 const EC2_TAG_VALUE = "app-host"; // keep in sync with otj-services-stack.ts
+const CONVERGE_LOG_GROUP = "/otj/converge"; // keep in sync with otj-services-stack.ts
+const STACK_NAME = "OtjServicesStack"; // keep in sync with bin/aws.ts
 
 /**
  * One-time, deployed by hand (not by CI — CI needs this role to already exist
@@ -37,10 +39,20 @@ export class GithubOidcStack extends cdk.Stack {
           StringEquals: {
             "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
           },
-          // Restrict to the workflow run on pushes to master — no other branch,
-          // PR, or repo can assume this role.
+          // Two subjects, and nothing else. A job that names no environment
+          // presents `ref:refs/heads/master`: pushes to master, and the ops
+          // workflows dispatched from master. A job that names an environment
+          // presents `environment:<name>` INSTEAD of the ref. That's GitHub's
+          // behaviour, not a choice here, so without the second entry deploy.yml
+          // (`environment: production`) fails at AssumeRole. The `production`
+          // environment only accepts deployments from master (repo settings),
+          // so the second subject is no wider than the first. PRs, including
+          // ones from forks, present `pull_request` and match neither.
           StringLike: {
-            "token.actions.githubusercontent.com:sub": `repo:${GITHUB_REPO}:ref:refs/heads/master`,
+            "token.actions.githubusercontent.com:sub": [
+              `repo:${GITHUB_REPO}:ref:refs/heads/master`,
+              `repo:${GITHUB_REPO}:environment:production`,
+            ],
           },
         },
         "sts:AssumeRoleWithWebIdentity",
@@ -99,7 +111,7 @@ export class GithubOidcStack extends cdk.Stack {
       }),
     );
 
-    // Lets CI trigger the box's deploy.sh (via AWS-RunShellScript) after a
+    // Lets CI run `otj-converge <sha>` on the box (via AWS-RunShellScript) after a
     // successful image push, and poll for its result. Scoped by instance tag
     // rather than instance ID since the instance doesn't exist yet at this
     // stack's first deploy either, and tag-scoping survives the instance being
@@ -135,6 +147,40 @@ export class GithubOidcStack extends cdk.Stack {
         sid: "SsmPollDeployResult",
         actions: ["ssm:GetCommandInvocation"], // this action has no resource-level scoping, Resource: "*" is expected here
         resources: ["*"],
+      }),
+    );
+
+    // Reads the converge output the box writes to CloudWatch (otj-services-stack.ts), so the
+    // deploy job can print the PLAY RECAP and any failed task. Read-only, one log group.
+    deployRole.addToPolicy(
+      new iam.PolicyStatement({
+        sid: "ReadConvergeOutput",
+        actions: ["logs:GetLogEvents", "logs:FilterLogEvents"],
+        resources: [
+          `arn:aws:logs:${DEPLOY_REGION}:${account}:log-group:${CONVERGE_LOG_GROUP}`,
+          `arn:aws:logs:${DEPLOY_REGION}:${account}:log-group:${CONVERGE_LOG_GROUP}:log-stream:*`,
+        ],
+      }),
+    );
+
+    // Records which SHA is live after a good deploy, and reads it back for converge-check and
+    // rollback. This one parameter only. It's a plain String and never a secret; the secrets under
+    // /otj/prod/ stay unreadable to CI.
+    deployRole.addToPolicy(
+      new iam.PolicyStatement({
+        sid: "LiveImageTag",
+        actions: ["ssm:PutParameter", "ssm:GetParameter"],
+        resources: [`arn:aws:ssm:${DEPLOY_REGION}:${account}:parameter/otj/prod/image-tag`],
+      }),
+    );
+
+    // The ops workflows don't run `cdk deploy`, so they read the instance ID from the stack's
+    // outputs instead of the outputs file cdk writes.
+    deployRole.addToPolicy(
+      new iam.PolicyStatement({
+        sid: "FindInstanceId",
+        actions: ["cloudformation:DescribeStacks"],
+        resources: [`arn:aws:cloudformation:${DEPLOY_REGION}:${account}:stack/${STACK_NAME}/*`],
       }),
     );
 

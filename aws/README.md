@@ -136,6 +136,22 @@ roles:
 - `ssm:SendCommand` on `AWS-RunShellScript` and any EC2 instance, restricted
   via condition to instances tagged `otj:role=app-host`; `ssm:GetCommandInvocation`
   (`Resource: "*"` — this action has no resource-level scoping).
+- `logs:GetLogEvents` / `FilterLogEvents` on `/otj/converge` only, where the box
+  writes each converge's Ansible output.
+- `ssm:PutParameter` / `GetParameter` on `/otj/prod/image-tag` only (the live
+  SHA). The secrets under `/otj/prod/` are not readable by CI.
+- `cloudformation:DescribeStacks` on `OtjServicesStack`, so the ops workflows can
+  find the instance ID.
+
+It trusts two OIDC subjects: `ref:refs/heads/master` (pushes, and workflows
+dispatched from master) and `environment:production`. GitHub sends the second
+**instead of** the first for any job that names an environment, so `deploy.yml`
+needs it. The `production` environment only accepts deployments from `master`.
+
+The **instance role** (in `OtjServicesStack`, deployed by CI) can read
+`/otj/prod/*` from Parameter Store, and decrypt only through Parameter Store
+(`kms:ViaService`), so `otj-render-env` can fetch secrets at unit start. It can
+also write the `/otj/converge` log group.
 
 ### Rollback
 
