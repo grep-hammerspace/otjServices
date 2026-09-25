@@ -1,230 +1,212 @@
 # Ansible deploy checklist
 
-The work, in order, that takes the AWS box from hand-configured to deployed by Ansible. The *why*
-is in `ansible-migration-plan.md`. This file covers *what to do and when*. Section numbers (§) point
-at the plan. Each phase names the plan's §10 step it carries out.
+The work, in order, that builds the new AWS box with Ansible and brings the public API back. The
+*why* is in `ansible-migration-plan.md`. This file covers *what to do and when*. The step numbers
+match the plan's §10.
 
-**Who does what.** Items marked 🧑 are yours: settings, a laptop command, a button, or a check that
-needs your judgement or your devices. The rest is repo work that comes to you as a PR.
+**Where things stand (2026-09-25).** The hand-provisioned box was destroyed when a merge replaced
+the instance (plan, top). The instance now running, `i-0d937e3a7abb82ebb`, is blank Ubuntu. The
+public API returns 521 and stays down, by choice, until step 5. User data in Atlas, the images in
+ECR and the Elastic IP are all intact.
 
-**Three choices made after the plan's first draft** (the plan has been updated to match):
+**Who does what.** Items marked 🧑 are yours: settings, a laptop command, a dashboard, a button, or
+a check that needs your judgement or your devices. The rest is repo work that comes to you as a PR.
 
-- **`ansible-core` is installed from an SSM session** (phase 3), not from a bootstrap workflow. It's
-  a one-time step and a workflow to do it isn't worth writing.
-- **Secrets are entered from your laptop** (phase 5), with fresh values from Atlas and Anthropic,
-  not extracted from the box through a `seed-secret` workflow. That doubles as a rotation, so the
-  values that have sat in `~otjapp/*.env` since August are retired.
-- **The Cloudflare origin cert stays on disk.** It is never in Parameter Store and there's no
-  `otj-origin-cert.service`. HAProxy reads a root-only file that you assemble once at the cutover
-  (phase 7). Ansible checks it with `stat` and `openssl x509 -checkend`, and never copies it or reads
-  its contents, because `--diff` on a file holding the key would print the key into the deploy
-  output. A rebuilt box (§11) gets a newly issued cert from the dashboard, which is free and takes a
-  minute, so there's nothing to back up.
-
-**Rollback** through phase 4 is doing nothing. `ci-cd.yml` and `deploy.sh` stay as they are until
-phase 4 swaps them.
+**Laptop commands** run from the repo root in `nix-shell`, which provides `aws`, `cdk` and the
+Session Manager plugin. Check first that `aws sts get-caller-identity` works.
 
 ---
 
-## Phase 0 — Settle the plan
+## Step 1 — Stop it happening again
 
-- [x] 🧑 Close **D4**: Cloudflare Tunnel is *later*, as its own plan (§13).
-- [x] Update `ansible-migration-plan.md` for the three choices above, plus the IAM gaps (§9.1).
-      Its status is now *agreed*.
-- [ ] Merge `plan/deployment-uplift` into `master`.
+- [ ] 🧑 Merge **#45**. It pins the AMI and adds `aws/stack-policy.json`. `cdk diff` against the live
+      stack shows no resource changes, so the instance is untouched.
+- [ ] 🧑 Set the stack policy. `cdk deploy` can't, so this is by hand, once:
 
-## Phase 1 — Inventory the live box (read-only) 🧑
+  ```bash
+  cd aws
+  aws cloudformation set-stack-policy --stack-name OtjServicesStack --region eu-west-2 \
+    --stack-policy-body file://stack-policy.json
+  aws cloudformation get-stack-policy --stack-name OtjServicesStack --region eu-west-2
+  ```
 
-Phase 2's roles must describe **today's** box exactly, or the first `converge-check` diff is noise.
-These commands change nothing, and they print names, modes and versions but **no secret values**.
-Env files are listed by key name only.
+**Nothing else merges to `master` before #45.** Any deploy without it can replace the instance again.
+
+## Step 2 — Repo work (PRs)
+
+- [ ] **Runner spike:** a throwaway workflow proving rootless Podman, linger and `systemctl --user`
+      work on GitHub's `ubuntu-24.04` runner. The rehearsal depends on it, and the fallback (a systemd
+      container) is much more work, so find out first.
+- [ ] **Playbook PR:** `deploy/ansible/` (roles `base`, `otjapp`, `tailscale`, `edge`, `app`,
+      `verify`), `deploy/bin/otj-converge`, `deploy/haproxy/haproxy.cfg` ported from the Caddyfile,
+      `COPY deploy/ /deploy/` in the Dockerfile, and `pr.yml` (lint, syntax check, shellcheck,
+      `haproxy -c`, the Quadlet dry-run, and the **rehearsal applied twice**). Also deletes
+      `deploy/prod/` and `staging-to-master-cutover.md`, after moving their reasoning into
+      `deploy/ansible/README.md` and `haproxy.cfg`'s comments.
+  - [ ] The rehearsal is green, and the **second apply changes nothing**.
+- [ ] **Ops-workflows PR:** `converge-check`, `converge`, `rollback` and `restart` (plan §9.2).
+      They have to be on `master` before their buttons appear. None of them runs on push, and no
+      workflow prints app or edge logs.
+- [ ] **IAM PR** (`aws/lib/`):
+  - `otj-services-stack.ts`, for the instance role: `ssm:GetParameters` on `/otj/prod/*`,
+    `kms:Decrypt` on `aws/ssm` through `ssm.eu-west-2.amazonaws.com`, and write access to the
+    converge-output log group.
+  - `github-oidc-stack.ts`, for the deploy role: trust `repo:…:environment:production`, read the
+    converge-output log group, and `ssm:PutParameter` on `/otj/prod/image-tag`.
+
+## Step 3 — Manual prep, off the box 🧑
+
+GitHub:
+
+- [ ] Settings → Environments → **New environment `production`**, with deployment branches limited
+      to `master`.
+- [ ] Review the IAM PR's `github-oidc-stack.ts` diff, then run
+      `cd aws && npx cdk diff GithubOidcStack && npx cdk deploy GithubOidcStack`. CI can't update
+      the role it signs in with.
+- [ ] Merge the IAM PR. CI deploys the `OtjServicesStack` half.
+- [ ] Settings → Branches → `master`: add the `pr.yml` checks, rehearsal included, as **required
+      status checks**.
+
+Secrets, into Parameter Store with **fresh** values. `read -s` keeps them off the screen and out of
+your shell history:
 
 ```bash
-aws ssm start-session --target <instance-id> --region eu-west-2
+put() { read -rsp "$1: " v; echo; printf %s "$v" | aws ssm put-parameter --region eu-west-2 \
+          --name "$1" --type "$2" --value file:///dev/stdin --overwrite >/dev/null && echo ok; }
+```
+
+- [ ] Atlas: create a new password for the `otjdb` database user, or a new user, and check the
+      Elastic IP is still on the IP access list (it hasn't changed). Then
+      `put /otj/prod/mongo-uri SecureString`.
+- [ ] Anthropic console: create a new key, then `put /otj/prod/anthropic-api-key SecureString`.
+- [ ] `put /otj/prod/admin-allowed-logins String`, with the comma-separated tailnet logins allowed
+      to mint invite codes.
+- [ ] Revoke the old Atlas password and the old Anthropic key, once you've checked nothing else
+      uses them (your local `.env`, for instance).
+- [ ] `/otj/prod/credential-identity-seed` is only needed once **PR #43** lands. When it does, mint a
+      pair with `IdentityKeyTool generate` and put the public half in `otj-mobile/.env` at the same
+      time.
+
+Tailscale:
+
+- [ ] Admin console → Machines: **remove the offline `hours-api` node**, so the new box gets the same
+      name instead of `hours-api-1`.
+- [ ] Create an **OAuth client** with the `auth_keys` write scope and tag `tag:otj` (add `tag:otj` to
+      `tagOwners` in the ACL first). OAuth client secrets don't expire, unlike auth keys (90 days
+      at most). Then `put /otj/prod/tailscale-authkey SecureString`.
+
+Cloudflare:
+
+- [ ] SSL/TLS → Origin Server → **Create Certificate**: RSA, `otj-services.com` and
+      `*.otj-services.com`, 15 years. **The key is shown once.** Keep the cert and the key somewhere
+      private until step 4, then delete that copy.
+- [ ] On the same page, **revoke the old origin certificate**. Its key was on the lost disk.
+
+Check (lists names only; nothing is decrypted):
+
+- [ ] `aws ssm get-parameters-by-path --path /otj/prod --region eu-west-2 --query 'Parameters[].Name'`
+      lists `mongo-uri`, `anthropic-api-key`, `admin-allowed-logins` and `tailscale-authkey`.
+
+## Step 4 — Bootstrap the box (SSM session) 🧑
+
+The last hand change the box gets. `<sha>` is the playbook PR's merge commit, whose image
+`ci-cd.yml` pushes to ECR. `<registry>` is the host part of the `EcrRepositoryUri` stack output.
+
+```bash
+aws ssm start-session --target i-0d937e3a7abb82ebb --region eu-west-2
 sudo -i
 ```
 
 ```bash
-U=otjapp; UID_=$(id -u $U); ASU="sudo -u $U XDG_RUNTIME_DIR=/run/user/$UID_"
-set -x
-# OS, packages, tools
-lsb_release -ds; uname -r; df -h /; free -m
-podman --version; aws --version; tailscale version; python3 --version
-apt-cache policy caddy ansible-core haproxy | grep -E '^[a-z]|Installed|Candidate'
-apt-mark showhold
-ls /etc/apt/sources.list.d/
-cat /etc/apt/apt.conf.d/20auto-upgrades; grep -E '^\s*Unattended-Upgrade::Automatic-Reboot' /etc/apt/apt.conf.d/50unattended-upgrades
-# otjapp
-id $U; loginctl show-user $U -p Linger
-ls -la /home/$U /home/$U/otj-deploy /home/$U/.config/containers/systemd
-stat -c '%n %U:%G %a' /home/$U/*.env
-for f in /home/$U/*.env; do echo "$f:"; cut -d= -f1 "$f"; done   # key NAMES only
-cat /home/$U/.config/containers/systemd/*.container
-sha256sum /home/$U/otj-deploy/*
-$ASU systemctl --user list-units --all 'hours-api*' 'admin-api*' --no-pager
-$ASU podman ps --format '{{.Names}} {{.Image}} {{.Status}}'
-# Tailscale
-tailscale status --json | jq '{BackendState, Self: .Self.DNSName, Version}'
-tailscale serve status --json
-# Edge
-systemctl is-enabled caddy; systemctl is-active caddy
-readlink -f /proc/$(pidof caddy)/exe; $(readlink -f /proc/$(pidof caddy)/exe) list-modules | grep rate_limit
-stat -c '%n %U:%G %a' /etc/caddy /etc/caddy/* /var/log/caddy /var/log/caddy/*
-openssl x509 -in /etc/caddy/origin-cert.pem -noout -subject -enddate
-sha256sum /etc/caddy/Caddyfile
-# Listeners, sshd, journald, cron
-ss -Hltnp
-systemctl is-enabled ssh.socket ssh.service; systemctl is-active ssh.socket ssh.service
-cat /etc/systemd/journald.conf.d/*.conf 2>/dev/null; journalctl --disk-usage
-crontab -l; crontab -u $U -l
-set +x
-```
+# Packages otj-converge needs before Ansible exists
+apt-get update && apt-get install -y ansible-core podman unzip curl
 
-- [ ] Skim the output before sharing it. You shouldn't find a secret, but you're the last check.
-- [ ] Paste it into the session writing phase 2.
+# AWS CLI v2, for the ECR login. The base role takes over and pins the version.
+curl -fsSLo /tmp/awscliv2.zip https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip
+unzip -q /tmp/awscliv2.zip -d /tmp && /tmp/aws/install && rm -rf /tmp/aws /tmp/awscliv2.zip
+aws --version
 
-## Phase 2 — Repo work: the playbook, matching today (plan §10 step 1)
-
-PRs to review and merge:
-
-- [ ] **Step-1 PR:** `deploy/ansible/` (roles `base`, `otjapp`, `tailscale`, `edge` in Caddy
-      verify-only mode, `app`, `verify`), `deploy/bin/otj-converge`, `COPY deploy/ /deploy/` in the
-      Dockerfile, and `pr.yml` (lint, syntax check, shellcheck, the Quadlet dry-run and the
-      **rehearsal applied twice**). The Quadlets still point at `~otjapp/otj-*.env`.
-      - [ ] First, a spike that proves rootless Podman and linger work on the hosted runner. If
-            they don't, the rehearsal needs the systemd-container fallback, so find out early.
-      - [ ] The rehearsal is green on the second apply with **zero changes**.
-- [ ] **Ops-workflows PR:** `converge-check`, `converge` (apply a SHA) and `rollback`. They need to
-      be on `master` before their buttons appear. Merging them is safe because none of them run on
-      push. No workflow prints app or edge logs (§9.2).
-- [ ] **IAM PR** (`aws/lib/`):
-  - `github-oidc-stack.ts`: trust `repo:…:environment:production` next to `ref:refs/heads/master`.
-    Otherwise any job that names the environment fails at AssumeRole. Also add read access to the
-    converge output log group, and `ssm:PutParameter` on `/otj/prod/image-tag`.
-  - `otj-services-stack.ts`: let the instance role write to that log group, so
-    `--cloud-watch-output-config` works. This is an in-place policy change; check the change set
-    anyway (`deploy/prod/README.md`).
-
-🧑 Once these are ready:
-
-- [ ] Create the **`production` environment**: Settings → Environments → New, with deployment
-      branches limited to `master`.
-- [ ] Review the IAM PR's `github-oidc-stack.ts` diff, then from your laptop:
-      `cd aws && npx cdk diff GithubOidcStack && npx cdk deploy GithubOidcStack`. CI can't update
-      the role it signs in with.
-- [ ] Merge the IAM PR. CI deploys the `OtjServicesStack` half.
-- [ ] Add the `pr.yml` checks, rehearsal included, as **required status checks** on `master`.
-- [ ] Note the step-1 merge commit's SHA. `ci-cd.yml` builds and deploys that image as usual. It's
-      the first image that contains `/deploy`.
-
-## Phase 3 — Install Ansible on the box (§10 step 2) 🧑
-
-From an SSM session, as root. `<sha>` is the step-1 merge commit's SHA, and `<registry>` is the ECR
-registry host from the `EcrRepositoryUri` output.
-
-```bash
-apt-get update && apt-get install -y ansible-core
-ansible --version | head -1
-
+# otj-converge, from the image. From then on the playbook manages it.
 IMG=<registry>/otj-hours-api:<sha>
-sudo -u otjapp -i bash -c "
-  aws ecr get-login-password --region eu-west-2 | podman login -u AWS --password-stdin ${IMG%%/*}
-  podman pull $IMG && cid=\$(podman create $IMG) &&
-  podman cp \$cid:/deploy/bin/otj-converge /tmp/otj-converge && podman rm \$cid"
-install -m 0755 -o root -g root /tmp/otj-converge /usr/local/sbin/otj-converge && rm /tmp/otj-converge
+aws ecr get-login-password --region eu-west-2 | podman login -u AWS --password-stdin "${IMG%%/*}"
+podman pull "$IMG" && cid=$(podman create "$IMG")
+podman cp "$cid:/deploy/bin/otj-converge" /usr/local/sbin/otj-converge
+podman rm "$cid" && podman rmi "$IMG"
+chown root:root /usr/local/sbin/otj-converge && chmod 0755 /usr/local/sbin/otj-converge
 otj-converge --version
 ```
 
-- [ ] `otj-converge --version` prints. From here on the playbook manages the script.
+The origin certificate. Paste the cert, then the key, into one file:
 
-## Phase 4 — Adopt the box (§10 steps 3–5)
+```bash
+install -d -m 0700 -o root -g root /etc/haproxy/certs
+install -m 0600 -o root -g root /dev/stdin /etc/haproxy/certs/origin.pem <<'EOF'
+-----BEGIN CERTIFICATE-----
+...
+-----END CERTIFICATE-----
+-----BEGIN PRIVATE KEY-----
+...
+-----END PRIVATE KEY-----
+EOF
+openssl x509 -in /etc/haproxy/certs/origin.pem -noout -subject -enddate
+```
 
-- [ ] 🧑 **Actions → `converge-check`**, which runs `otj-converge <live sha> --check`. Read the diff
-      in the job summary. Each line is either an intended change or a playbook bug. Report the bugs.
-      A PR fixes them. **Repeat until the diff is empty or every line is intended.**
-- [ ] 🧑 **Actions → `converge`** with the live SHA. This is the first real apply.
+Paste the key now, **before step 8** turns on Session Manager logging. After that, a pasted key
+would be recorded in CloudWatch (plan §7 has the method to use then).
+
+- [ ] `otj-converge --version` prints.
+- [ ] The certificate shows `otj-services.com` and an end date 15 years out.
+- [ ] Delete your local copy of the key.
+
+## Step 5 — First converge: the API comes back
+
+- [ ] 🧑 **Actions → `converge-check`** with the playbook PR's SHA. Read what it will do: on a blank
+      box, that's everything. Look for anything **unexpected**, such as a port or path you don't
+      recognise.
+- [ ] 🧑 **Actions → `converge`** with the same SHA.
 - [ ] 🧑 Verify:
-  - [ ] The job's PLAY RECAP shows `failed=0`, and the `verify` role ran.
-  - [ ] Public path: `curl -sI https://otj-services.com/health` returns 200 with a `cf-ray` header.
-  - [ ] Tailnet, from your phone or laptop: `https://hours-api.<tailnet>.ts.net:8444/health` is 200,
-        and `GET :8443/admin/invites` works as an allowed login.
-  - [ ] The origin is still unreachable directly: the three timeouts in `deploy/prod/README.md`,
-        "Verifying".
-  - [ ] Log in from the mobile app and load pending activities.
-- [ ] Merge the **`deploy.yml` PR**, which replaces `ci-cd.yml` (§9.1).
-- [ ] 🧑 Watch the next **two ordinary merges** deploy through Ansible: green, with the PLAY RECAP in
-      the job and `/health` 200 afterwards.
-- [ ] 🧑 Try **`rollback`** once, to the previous SHA and forward again, while nothing depends on it.
+  - [ ] The PLAY RECAP shows `failed=0`, and `verify` ran.
+  - [ ] `curl -sI https://otj-services.com/health` returns 200 with a `cf-ray` header.
+  - [ ] Tailnet, from your phone or laptop: `https://hours-api.<tailnet>.ts.net:8444/health` returns
+        200, and `GET :8443/admin/invites` works as an allowed login.
+  - [ ] The origin is only reachable through Cloudflare. From outside, all three of these **time out**:
+        `https://<ElasticIp>/health`, `http://<ElasticIp>:8945/health` and
+        `http://<ElasticIp>:8946/admin/invites`.
+  - [ ] The rate limits, with the Cloudflare WAF rule paused. Eleven `POST /auth/session` requests
+        4 s apart: the 11th is a **429 with `Retry-After`**. The first request from a different
+        network (a phone off wifi) is a 401, not a 429. **Re-enable the WAF rule.**
+  - [ ] The mobile app logs in and loads pending activities.
 
-**From here on, merges deploy through Ansible.**
+**The public API is back.**
 
-## Phase 5 — Secrets into Parameter Store (§10 step 6)
+## Step 6 — Merges deploy through Ansible
 
-- [ ] **IAM PR:** the instance role gets `ssm:GetParameters` on `/otj/prod/*` and `kms:Decrypt` on
-      `aws/ssm` through `ssm.eu-west-2.amazonaws.com` (§7). CI deploys it.
-- [ ] 🧑 Create **fresh** values: a new Atlas database user or password for `otjdb`, and a new
-      Anthropic key. Keep the old ones working until the last checkbox in this phase.
-- [ ] 🧑 From your laptop. `read -s` keeps the values out of your shell history and off the screen:
+- [ ] Merge the **`deploy.yml` PR**, which replaces `ci-cd.yml` (plan §9.1).
+- [ ] 🧑 Watch the next **two ordinary merges** deploy: green, the PLAY RECAP in the job, and
+      `/health` 200 afterwards.
+- [ ] 🧑 Try **`rollback`** once, to the previous SHA and forward again.
 
-  ```bash
-  put() { read -rsp "$1: " v; echo; printf %s "$v" | aws ssm put-parameter --region eu-west-2 \
-            --name "$1" --type "$2" --value file:///dev/stdin --overwrite >/dev/null && echo ok; }
-  put /otj/prod/mongo-uri            SecureString
-  put /otj/prod/anthropic-api-key    SecureString
-  put /otj/prod/admin-allowed-logins String
-  ```
-
-  `/otj/prod/credential-identity-seed` is only needed once PR #43 lands (it's open). When it does,
-  copy it **byte for byte** from the box, because the mobile app pins the identity key.
-- [ ] Merge the **render-env PR**: the Quadlets switch to `otj-render-env` and `%t/otj/<svc>.env`,
-      and the old files stay in place for now.
-- [ ] 🧑 Two good deploys on the new path, with the mobile app still working.
-- [ ] Merge the **cleanup PR**, which removes `~otjapp/otj-*.env` (`state: absent`).
-- [ ] 🧑 Confirm in the deploy output that the files are gone, then **revoke the old Atlas password
-      and the old Anthropic key**.
-
-## Phase 6 — Logs to Grafana Cloud (§10 step 7)
+## Step 7 — Logs to Grafana Cloud
 
 - [ ] 🧑 Create a Grafana Cloud stack in an **EU or UK region**.
-- [ ] 🧑 The five single-user rules (§4.5): you're the only member; you sign in with a passkey or
-      hardware key; the `otj-alloy-prod` policy has **`logs:write` only**, for this stack; there are no
-      public dashboards or snapshots; there are no other tokens.
-- [ ] 🧑 `put /otj/prod/grafana-cloud-logs-token SecureString` (the helper from phase 5).
+- [ ] 🧑 The five single-user rules (plan §4.5): you're the only member; you sign in with a passkey or
+      hardware key; the `otj-alloy-prod` access policy has **`logs:write` only**, for this stack;
+      there are no public dashboards or snapshots; there are no other tokens.
+- [ ] 🧑 `put /otj/prod/grafana-cloud-logs-token SecureString` (the helper from step 3).
 - [ ] Merge the **observability PR** (the `observability` role, `LogDriver=journald`, the journald
-      drop-in). Check mode first.
+      drop-in). Run `converge-check` first.
 - [ ] 🧑 Lines appear for `service="edge"`, `service="hours-api"` and `service="admin-api"`. Edge
       lines show **truncated** IPs. A private browser window on the stack URL asks for a login.
-- [ ] 🧑 Build the dashboard (§4.5), and check `podman stats` shows room for Alloy.
+- [ ] 🧑 Build the dashboard (plan §4.5), and check `podman stats` shows room for Alloy.
 
-## Phase 7 — Caddy → HAProxy (§10 step 8), off-peak
+## Step 8 — Drift check and session logging
 
-- [ ] 🧑 Assemble the origin pair for HAProxy, once, as root over SSM. It stays on disk (see the top
-      of this file):
+- [ ] Merge the PR that turns on the nightly `converge-check` and Session Manager logging (CDK).
+- [ ] 🧑 Make a deliberate, harmless manual change on the box. Confirm the nightly check reports it
+      the next morning, then converge to put it back.
 
-  ```bash
-  install -d -m 0700 -o root -g root /etc/haproxy/certs
-  cat /etc/caddy/origin-cert.pem /etc/caddy/origin-key.pem \
-    | install -m 0600 -o root -g root /dev/stdin /etc/haproxy/certs/origin.pem
-  openssl x509 -in /etc/haproxy/certs/origin.pem -noout -subject -enddate
-  ```
+## Afterwards (optional)
 
-- [ ] Merge the **HAProxy PR** (`edge_proxy: haproxy`). `converge-check` first, then apply it
-      off-peak. Cloudflare returns 5xx for a few seconds during the swap.
-- [ ] 🧑 Verify: `verify` passes; `/health` returns 200 from outside; with the WAF rule paused, the
-      11th paced `POST /auth/session` returns **429 with `Retry-After`**, and from a different network
-      the first request returns 401, not 429 (`deploy/prod/README.md`, "Verifying"). **Re-enable the
-      WAF rule.** In Grafana, the edge panel goes from `proxy="caddy"` to `proxy="haproxy"`.
-
-## Phase 8 — Cleanup (§10 step 9)
-
-- [ ] Merge the **cleanup PR**: nightly `converge-check` on, Session Manager logging on, apt Caddy
-      and the Cloudsmith repo removed, `/etc/caddy/` deleted (the origin pair now lives in
-      `/etc/haproxy/certs/`), `deploy/prod/` deleted, and the docs updated (§15).
-- [ ] 🧑 Make a deliberate, harmless manual change on the box, such as touching a managed file.
-      Confirm the nightly check reports it the next morning, then let the next converge put it back.
-
-## Phase 9 — Afterwards (optional, §11 and §13)
-
-- [ ] Rehearse a rebuild on a throwaway instance (§11). Issue a new origin cert for it, rather than
-      copying the live one.
+- [ ] Rehearse a rebuild on a throwaway instance (plan §11).
+- [ ] CDK user data for new instances, so a rebuild needs no step 4 by hand.
 - [ ] Authenticated Origin Pulls. The origin currently accepts any Cloudflare zone, not only yours.

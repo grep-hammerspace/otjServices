@@ -1,10 +1,10 @@
 # Box configuration as code (Ansible) — plan
 
-**Status:** agreed · 2026-09-24, D1–D5 decided 2026-09-25 · branch `plan/deployment-uplift` ·
-the working checklist is `ansible-deploy-checklist.md`
+**Status:** agreed · 2026-09-24, D1–D5 decided 2026-09-25 · **revised 2026-09-25 to build a new
+box rather than adopt the old one** (below) · the working checklist is `ansible-deploy-checklist.md`
 
 **Goal:** nobody opens an SSM session on the EC2 box to change it again. Everything the box has
-(packages, users, the edge proxy, Tailscale, Quadlets, env files, the deploy script, log shipping)
+(packages, users, the edge proxy, Tailscale, Quadlets, how secrets reach the app, log shipping)
 is declared in this repo, checked on every PR, and applied by CI on every merge to `master`. The
 box stays the deployment target. Nothing moves to Fargate, and the monthly cost stays about the
 same (§12). Nobody needs a shell to *read* the box either: the edge proxy's, the API's and the
@@ -14,8 +14,23 @@ admin API's logs are all in one Grafana Cloud dashboard (§4.5).
 Cloud account settings stay manual for now (§13 lists them as follow-ups). Metrics are not part of
 this plan, but the log shipper is chosen so that adding them later needs no new agent (§13).
 
+> **2026-09-25: the box was lost, and this plan now builds its replacement.** The merge of #44
+> replaced the EC2 instance. The stack resolved Canonical's `stable/current` Ubuntu AMI on every
+> deploy, Canonical had published a new one, and a new `ImageId` forces a replacement.
+> CloudFormation moved the Elastic IP to a blank instance and terminated the hand-provisioned box,
+> root volume and all, with no snapshot. User data (Atlas), images (ECR) and the Elastic IP
+> survived. The env files, the Origin CA key and the Tailscale node did not.
+>
+> The public API stays down, **by choice**, until this plan has built the new box. There's no
+> round of hand provisioning first. #45 pins the AMI and adds a stack policy that refuses to
+> replace the instance or the EIP (`aws/README.md`).
+>
+> This removes all of the plan's "adopt a live box without disturbing it" machinery: no
+> inventory, no Caddy-verify-only mode, no env-file stage before Parameter Store, and no proxy
+> cutover. The first apply builds the end state directly (§10).
+
 > Sections are numbered so review comments can point at them. Decisions are **D1–D5** in §1.
-> Claims not yet checked against the live box or a real run are marked *(verify)*.
+> Claims not yet checked against a real run are marked *(verify)*.
 
 ---
 
@@ -23,15 +38,15 @@ this plan, but the log shipper is chosen so that adding them later needs no new 
 
 1. [Decisions needed](#1-decisions-needed)
 2. [Ansible in five minutes, for this repo](#2-ansible-in-five-minutes-for-this-repo)
-3. [What is manual today](#3-what-is-manual-today)
+3. [What the old box had](#3-what-the-old-box-had)
 4. [Design](#4-design)
 5. [Repository layout](#5-repository-layout)
 6. [Roles](#6-roles)
 7. [Secrets](#7-secrets)
 8. [CI: checks on every PR](#8-ci-checks-on-every-pr)
 9. [CD: deploy on merge, and ops without a shell](#9-cd-deploy-on-merge-and-ops-without-a-shell)
-10. [Migrating the live box](#10-migrating-the-live-box)
-11. [Rebuilding from nothing](#11-rebuilding-from-nothing)
+10. [Building the new box](#10-building-the-new-box)
+11. [Rebuilding it again](#11-rebuilding-it-again)
 12. [Cost](#12-cost)
 13. [Out of scope, and follow-ups](#13-out-of-scope-and-follow-ups)
 14. [Risks](#14-risks)
@@ -62,22 +77,21 @@ unit starts, never written by Ansible (§7).
 
 ### D3 — The public reverse proxy
 
-Today it is Caddy from the Cloudsmith apt repo, with `caddy add-package` swapping in a binary
+The old box ran Caddy from the Cloudsmith apt repo, with `caddy add-package` swapping in a binary
 that has the third-party `caddy-ratelimit` plugin, then `apt-mark hold`. `deploy/prod/README.md`
-spends two pages on how that goes wrong. Keeping Caddy means either building it in CI with
+spent two pages on how that goes wrong. Keeping Caddy would have meant either building it in CI with
 `xcaddy` or keeping `add-package`.
 
 | Option | Verdict |
 |---|---|
 | **A. HAProxy 2.8 from Ubuntu 24.04 `main`** | Everything the Caddyfile does is built in (the mapping is in §6). No plugin, no build step, no third-party repo. Ubuntu ships its security fixes. CI validates the config with the same package. |
 | B. Caddy built in CI with `xcaddy` | Rejected: adds a build artifact to CI and ~45 MB to the image |
-| C. Caddy apt + `add-package` (today) | Rejected: `add-package` downloads from Caddy's build service at run time, so it isn't reproducible and fails if that service is down |
+| C. Caddy apt + `add-package` (the old box) | Rejected: `add-package` downloads from Caddy's build service at run time, so it isn't reproducible and fails if that service is down |
 | D. nginx (apt) | Rejected: `limit_req` rates are per second or per minute only, so the 250/day cap can't be expressed |
 | E. Envoy | Rejected: per-client-IP limits need Envoy's separate rate-limit service plus Redis, and the config is far longer |
 
-**Decided: A** (2026-09-25). It is still its own step (§10, step 8), after the playbook has
-taken over the box with Caddy untouched, so "Ansible took over" and "the proxy changed" can't be
-confused with each other.
+**Decided: A** (2026-09-25). With no live box to adopt, HAProxy goes in on the first apply, and
+Caddy never comes back.
 
 ### D4 — Cloudflare Tunnel now or later
 
@@ -85,14 +99,14 @@ A Tunnel would remove the Origin CA certificate, the Cloudflare IP list in the s
 and the port 443 clash with `tailscale serve`. With Ansible in place, it is one new role plus a
 DNS change.
 
-**Decided: later** (2026-09-25), as a separate plan (§13). Adopting Ansible should change *how* the box
-is configured, not *what* it runs. Mixing the two makes the first `--check --diff` impossible to
-read.
+**Decided: later** (2026-09-25), as a separate plan (§13). The first apply already builds a whole
+box at once. Keeping the network path as it was means a problem in the first few days is either
+the playbook's or the box's, and never "or the tunnel's".
 
 ### D5 — Where the logs go
 
-Three log trails matter: the edge proxy (Caddy, then HAProxy), `hours-api` and `admin-api`. Today
-they are only readable from an SSM session, with `journalctl` and `/var/log/caddy/access.log`.
+Three log trails matter: the edge proxy (HAProxy), `hours-api` and `admin-api`. On the old box
+they were only readable from an SSM session.
 
 | Option | Cost | For | Against |
 |---|---|---|---|
@@ -118,7 +132,7 @@ Only the parts this plan uses.
 | **Task** | One desired state, e.g. "this package is installed" or "this file has this content" | `ansible.builtin.apt`, `copy`, `template`, `systemd_service`, `uri` |
 | **Idempotence** | Running a task twice changes nothing the second time. Tasks describe *state*, not *steps*. | Every CI run applies the playbook **twice** and fails if the second run changed anything (§8) |
 | **Handler** | A task that runs only when something **changed**, e.g. "reload HAProxy if `haproxy.cfg` changed" | Restarts happen only when that unit's config or image actually changed |
-| **Check mode** (`--check --diff`) | A dry run that prints what *would* change, with file diffs | How we adopt the live box safely (§10), and the nightly drift check (§9.3) |
+| **Check mode** (`--check --diff`) | A dry run that prints what *would* change, with file diffs | How the first apply is reviewed before it runs (§10), and the nightly drift check (§9.3) |
 | **Variables** | Values in `group_vars/`, overridable with `-e` | `image_tag`, ports, the Tailscale hostname. **Never secrets** (§7). |
 | **`become`** | Run a task as a different user | Root by default; `become_user: otjapp` for the rootless Podman parts |
 | **`no_log: true`** | Hides a task's arguments and results from output | On any task that could touch a secret. SSM output ends up in GitHub Actions logs. |
@@ -137,28 +151,28 @@ In normal use you won't run these by hand at all. CI runs them on the box for yo
 
 ---
 
-## 3. What is manual today
+## 3. What the old box had
 
-Everything in this table was done through an SSM session, from `deployment-checklist.md` §6 and
-`deploy/prod/README.md`. Each row becomes code. The right-hand column is the hard-won lesson that
-row's task has to encode. The runbook's warnings turn into comments next to the task that
-prevents the problem.
+The destroyed box was provisioned by hand through SSM sessions, following `deployment-checklist.md`
+§6 and `deploy/prod/README.md`. This table is the list of what the new box needs, and every row is
+now code. The right-hand column is the lesson learned the hard way that each row's task has to
+encode. The runbook's warnings become comments next to the task that prevents the problem.
 
-| Manual step | Becomes | Gotcha the task must encode |
+| Old box, by hand | New box | Gotcha the task must encode |
 |---|---|---|
-| Install Tailscale, `tailscale up --hostname=hours-api` | `tailscale` role | Only run `up` when `BackendState != Running`, so re-runs never re-authenticate the live node |
-| `tailscale set --operator=…` | Removed | Ansible runs `serve` as root, so no operator is needed |
-| `tailscale serve` 8444 → 8945, 8443 → 8946; **443 turned off** | `tailscale` role | **8444 before the edge proxy binds 443.** Role order in `site.yml` enforces it, and a task asserts nothing but the edge proxy holds `:443` |
+| Install Tailscale, `tailscale up --hostname=hours-api` | `tailscale` role, auth key from Parameter Store (§7) | Only run `up` when `BackendState != Running`, so re-runs never re-authenticate the node. Remove the old, offline `hours-api` node first, or the new one becomes `hours-api-1`. |
+| `tailscale set --operator=…` | Dropped | Ansible runs `serve` as root, so no operator is needed |
+| `tailscale serve` 8444 → 8945, 8443 → 8946; **443 turned off** | `tailscale` role | **Never serve on 443.** HAProxy binds it. Role order in `site.yml` puts `tailscale` first, and `verify` asserts nothing but HAProxy holds `:443`. |
 | Install Podman | `base` role | — |
 | AWS CLI v2 from the zip | `base` role | Ubuntu's apt copy is v1 and too old for `ecr get-login-password` |
 | `useradd otjapp`, `enable-linger` | `otjapp` role | Linger must exist before any `systemctl --user` task, or they fail with no user bus |
 | Paste `deploy.sh` and the two templates into `~/otj-deploy/` | `app` role, sourced from the image | Trailing whitespace from pasting (issue #40) can't happen, because files are copied byte for byte |
-| Write `~/otj-hours-api.env` and `~/otj-admin-api.env` | `app` role + `render-env` (§7) | Secrets never pass through Ansible |
-| Cloudsmith repo, `apt install caddy`, `add-package`, `apt-mark hold`, restart | `edge` role: verified only until step 8, then replaced by apt `haproxy` (D3) | Until step 8, verify the *running* binary has `http.handlers.rate_limit`, not just the file on disk |
-| Install the Origin CA pair, `640 root:caddy` | Stays manual: assembled once into `/etc/haproxy/certs/origin.pem` at step 8. The `edge` role only checks it (§7). | HAProxy reads its certificate as root before dropping privileges, so the `caddy`-group permissions go away. Ansible never copies or reads the file, because `--diff` would print the key. |
-| Install the Caddyfile, validate **as `caddy`**, reload | `edge` role: `haproxy.cfg`, `haproxy -c` before every reload | The Caddy trap (validating as root creates `/var/log/caddy/access.log` as `root:root` and the reload dies) doesn't carry over, because HAProxy logs to journald rather than a file it owns (§4.5). Until step 8 the role still asserts that log's owner. |
+| Write `~/otj-hours-api.env` and `~/otj-admin-api.env` | `render-env` from Parameter Store (§7). No env file is ever written to disk. | Secrets never pass through Ansible |
+| Cloudsmith repo, `apt install caddy`, `add-package`, `apt-mark hold` | `edge` role: apt `haproxy` from Ubuntu `main` (D3) | No plugin, no hold, no third-party repo |
+| Install the Origin CA pair, `640 root:caddy` | Still manual: a **newly issued** pair, installed once as `/etc/haproxy/certs/origin.pem` (§10 step 4). The `edge` role only checks it (§7). | Ansible never copies or reads the file, because `--diff` would print the key |
+| Install the Caddyfile, validate **as `caddy`**, reload | `edge` role: `haproxy.cfg`, `haproxy -c` before every reload | The Caddy trap (validating as root created `access.log` as `root:root`, and the next reload died) doesn't carry over, because HAProxy logs to journald rather than to a file it owns (§4.5) |
 | Hand-push files with `push-file.sh` | Deleted | — |
-| Read logs with `journalctl` and `tail /var/log/caddy/access.log` in an SSM session | `observability` role (§4.5, D5) | The Alloy token can only **write** logs. A token with read access, sitting on the box, would be a second way into the dashboard. |
+| Read logs with `journalctl` and `tail` in an SSM session | `observability` role (§4.5, D5) | The Alloy token can only **write** logs. A token with read access, sitting on the box, would be a second way into the dashboard. |
 
 ---
 
@@ -166,7 +180,7 @@ prevents the problem.
 
 ### The end state
 
-This is the box once §10 is finished (step 9): HAProxy at the edge, logs in Grafana Cloud, secrets
+This is the box once §10 is finished: HAProxy at the edge, logs in Grafana Cloud, secrets
 from Parameter Store. There are two diagrams, because all of it in one Mermaid chart doesn't lay out
 legibly. The first shows traffic and logs, the second shows deploys and secrets.
 
@@ -326,21 +340,28 @@ and playbook together. The HAProxy *binary* comes from apt, so a rollback doesn'
 
 ### 4.2 `otj-converge`, the one script on the box
 
-A small bash script at `/usr/local/sbin/otj-converge`. It is installed once by hand (§10, step 2),
+A small bash script at `/usr/local/sbin/otj-converge`. It is installed once by hand (§10, step 4),
 or by cloud-init on a rebuilt box, and **after that the playbook manages it**, so it updates
 itself.
 
 ```
 otj-converge <sha> [--check]
-  1. ensure ansible-core is installed (apt; noop after first run)
-  2. ECR login + pull <repo>:<sha> as otjapp            (rootless storage, as today)
-  3. extract /deploy from the image → /opt/otj/releases/<sha>/  (keeps the last 5)
+  1. ensure ansible-core and podman are installed (apt; noop after first run)
+  2. ECR login + pull <repo>:<sha> as ROOT, into root's image storage
+  3. extract /deploy from the image → /opt/otj/releases/<sha>/  (keeps the last 5),
+     then remove the image from root's storage
   4. ansible-playbook -c local -i localhost, site.yml -e image_tag=<sha> [--check --diff]
   5. exit with ansible's status
 ```
 
+Steps 2–3 run as root, not as `otjapp`, so the script works on a blank box, where `otjapp` doesn't
+exist until the playbook creates it. The `app` role then pulls the same image into `otjapp`'s
+rootless storage, where the containers run. That's a second pull per release, which is fine at
+this size. The script needs the AWS CLI for the ECR login, so the §10 step 4 bootstrap installs
+it, and `base` manages it from then on.
+
 It is written as plain, top-to-bottom bash so it is easy to read in an emergency.
-`--check` is how the nightly drift job and the adoption step (§10) run it.
+`--check` is how the nightly drift job and the pre-apply review (§10 step 5) run it.
 
 ### 4.3 Why restarts only happen when something changed
 
@@ -354,16 +375,13 @@ command, and each only touches what actually differs.
 The `verify` role runs last on every apply:
 
 - `GET 127.0.0.1:8945/health` and `:8946/health`, with retries (replaces `deploy.sh`'s loop).
-- The edge proxy named by `edge_proxy` is the one running. For Caddy, `caddy list-modules` from
-  the **running** service includes `http.handlers.rate_limit`. For HAProxy, `haproxy -c` passes
-  on the live config.
+- `haproxy.service` is active, and `haproxy -c` passes on the live config.
 - The origin certificate has more than 90 days left (`openssl x509 -checkend`). It is a 15-year
   certificate, so this should only fire once, as a reminder, long before it matters.
 - **No wildcard listeners except the expected ones.** `ss -Hltn` must show `0.0.0.0:443` and
-  `[::]:443` (the edge proxy) and nothing else on `0.0.0.0` or `[::]`. Ubuntu's AMI ships with `sshd` on
-  `0.0.0.0:22`: the security group blocks it and nothing uses it, but it still listens. `base`
-  disables it (see §6), and until that step lands, the check allows `:22`. This is AGENTS.md's loopback rule
-  for 8945 and 8946 turned into a check that fails the deploy.
+  `[::]:443` (HAProxy) and nothing else on `0.0.0.0` or `[::]`. Ubuntu's AMI ships with `sshd` on
+  `0.0.0.0:22`, and `base` masks it (§6), so the check makes no exception for `:22`. This is
+  AGENTS.md's loopback rule for 8945 and 8946 turned into a check that fails the deploy.
 - `tailscale serve status --json` shows exactly the 8443 and 8444 mappings and nothing on 443.
 - Alloy answers `GET 127.0.0.1:12345/-/ready` (§4.5). The wildcard check above already covers its
   port, so if it ever listens on `0.0.0.0`, the deploy fails.
@@ -376,7 +394,6 @@ The `verify` role runs last on every apply:
    ├─ haproxy.service ................ service="edge"   ─┐
    ├─ CONTAINER_NAME=hours-api ....... service="hours-api" ├─► Alloy ──HTTPS push──► Loki ──► Grafana
    └─ CONTAINER_NAME=admin-api ....... service="admin-api" ─┘   (write-only token)
-  /var/log/caddy/access.log (until step 8) ... service="edge" ─┘
 ```
 
 **One source: journald.** Everything goes through the journal, so Alloy needs one reader and the
@@ -384,8 +401,7 @@ box keeps a full local copy that doesn't depend on Grafana Cloud.
 
 | Trail | How it reaches the journal | Labels in Loki |
 |---|---|---|
-| Edge, HAProxy (from step 8) | `log stdout format raw local0` in `haproxy.cfg`'s `global`. Under systemd, stdout **is** the journal, so there's no rsyslog socket inside the chroot and no `/var/log/haproxy.log` *(verify with 2.8 in `-Ws` master-worker mode)*. | `service="edge"`, `proxy="haproxy"` |
-| Edge, Caddy (from step 7 until step 8) | Not in the journal. Alloy tails `/var/log/caddy/access.log` directly, until the cutover removes it. | `service="edge"`, `proxy="caddy"` |
+| Edge (HAProxy) | `log stdout format raw local0` in `haproxy.cfg`'s `global`. Under systemd, stdout **is** the journal, so there's no rsyslog socket inside the chroot and no `/var/log/haproxy.log` *(verify with 2.8 in `-Ws` master-worker mode)*. | `service="edge"`, `proxy="haproxy"` |
 | `hours-api` | logback to stdout, then Podman's journald log driver into `otjapp`'s user journal. `LogDriver=journald` is written into the Quadlet: it's already Podman's default, but writing it down means nobody changes it by accident. | `service="hours-api"` |
 | `admin-api` | Same | `service="admin-api"` |
 
@@ -393,8 +409,8 @@ Every stream also gets `env="prod"` and `host="hours-api"`. **Labels stay low-ca
 user ID, path or IP as a label. Those stay in the log line and are filtered with LogQL. Loki
 indexes labels, and the free tier's limits are easiest to break with a high-cardinality label.
 
-`service="edge"` is the same label before and after the proxy cutover. The dashboard panel doesn't
-change at step 8, and you can compare Caddy's and HAProxy's traffic across it.
+`proxy="haproxy"` is there so a later change of edge (a Cloudflare Tunnel, §13) can be compared
+across the switch on one `service="edge"` panel.
 
 Two journald settings matter here:
 - **`Storage=persistent`** in `base`'s journald drop-in, next to `SystemMaxUse=500M`. The local copy
@@ -406,14 +422,9 @@ Two journald settings matter here:
 **Alloy** runs as a **rootful** system Quadlet, `/etc/containers/systemd/alloy.container`. Rootful
 because it has to read both the system journal (HAProxy) and `otjapp`'s user journal, and a
 rootless container can read neither. It's locked down to make up for that:
-- The journal directories and `/etc/machine-id` are mounted **read-only**. So is `/var/log/caddy`,
-  until step 8.
+- The journal directories and `/etc/machine-id` are mounted **read-only**.
 - `ReadOnly=true`, `DropCapability=all`, `NoNewPrivileges=true`. Root still reads the journal files
-  as their owner, so it needs no capabilities *(verify)*. Caddy's access log is the exception: it
-  is owned by `caddy`, and Caddy may create it `0600` *(verify on the box)*. Root with no
-  capabilities can't read that, so while `edge_proxy: caddy`, the Quadlet adds
-  `AddCapability=DAC_READ_SEARCH`, and step 8 takes it away again. Don't loosen the file's mode
-  instead: the runbook's 2026-08-22 failure was about exactly that file's ownership.
+  as their owner, so it needs no capabilities *(verify)*.
 - `Network=host` with its UI on `127.0.0.1:12345`, Alloy's default. It needs no inbound port at all,
   since it only pushes out, and the security group already allows all outbound traffic.
 - Its image is **pinned by digest** in `group_vars/all.yml`, like everything else the box runs. An
@@ -425,7 +436,6 @@ Its config is `roles/observability/templates/config.alloy.j2`, roughly:
 
 ```
 loki.source.journal "box"   { path = "/var/log/journal", relabel_rules = …, forward_to = [loki.process.scrub.receiver] }
-loki.source.file "caddy"    { /var/log/caddy/access.log, labels service="edge", proxy="caddy" }   {# only while edge_proxy == caddy #}
 loki.relabel "box"          { __journal__systemd_unit / __journal_container_name → service, proxy }
 loki.process "scrub"        { edge lines only: client IP truncated (below); forward_to = [loki.write.grafana_cloud.receiver] }
 loki.write "grafana_cloud"  { endpoint { url = "{{ loki_push_url }}", basic_auth { username = "{{ loki_user }}", password = sys.env("GRAFANA_CLOUD_LOGS_TOKEN") } } }
@@ -492,28 +502,31 @@ deploy/
 docker/otjService.Dockerfile # gains COPY deploy/ /deploy/
 ```
 
-`deploy/prod/` is deleted once its contents have moved (§15).
+`deploy/prod/` is deleted in §10 step 2, once its contents have moved (§15).
 
 ---
 
 ## 6. Roles
 
-In `site.yml` order. The order is significant: `tailscale` has to move off 443 before `edge`
-binds it. `observability` comes after `edge` and `app`, because it reads what they log.
+In `site.yml` order. The order is significant: `tailscale` comes before `edge`, so a `serve`
+mapping that wrongly claimed 443 would be caught before HAProxy fails to bind it. `observability`
+comes after `edge` and `app`, because it reads what they log.
 
 ### `base`
 - apt: `podman`, `uidmap`, `jq`, `unzip`, `curl`, `ansible-core`, `unattended-upgrades`
   (security updates only, **automatic reboot off**, since a reboot is an API outage).
 - AWS CLI v2: download a **pinned** version's zip, check it against a checksum in `group_vars`,
-  unarchive, install (`creates:` guards re-runs).
+  unarchive, install. Re-runs are guarded by comparing `aws --version` with the pin, not by
+  `creates:`, because the bootstrap (§10 step 4) installs whatever version is current, and a
+  `creates:` guard would keep that version forever.
 - `/usr/local/sbin/otj-converge` from `deploy/bin/`, so the script updates itself.
 - journald drop-in: size cap (`SystemMaxUse=500M`), since there is nothing else stopping logs
   filling the 20 GB disk, and `Storage=persistent`, so the local copy of the logs and Alloy's read
   positions survive a reboot (§4.5).
 - Disable and mask `ssh.socket` and `ssh.service` (Ubuntu 24.04 starts sshd through a socket).
   Access is SSM only, and there is no key and no open port. For break-glass, EC2 Serial Console
-  still works if SSM ever fails. This is its own PR, after §10 step 4, so the wildcard check can
-  drop its `:22` exception.
+  still works if SSM ever fails. Nothing on the new box has ever used sshd, so it's masked from
+  the first apply and the wildcard check (§4.4) makes no exception for `:22`.
 
 ### `otjapp`
 - User `otjapp` (shell `/bin/bash`, home `/home/otjapp`), `loginctl enable-linger`.
@@ -524,40 +537,32 @@ binds it. `observability` comes after `edge` and `app`, because it reads what th
 ### `tailscale` (tag `tailnet`)
 - Tailscale apt repo (`deb822_repository` with the signed-by key) and package.
 - `tailscale up` **only if** `tailscale status --json` reports anything other than `Running`.
-  On the live box this never fires. On a rebuilt box it uses an auth key from Parameter Store
-  (§11), with `no_log: true`.
-- `serve`: turn off `--https=443`, apply `--https=8444 → 127.0.0.1:8945` and
-  `--https=8443 → 127.0.0.1:8946`. Idempotence comes from comparing `tailscale serve status
+  It fires once, on the new box's first run, with the auth key from Parameter Store (§7) and
+  `no_log: true`. After that the node is `Running` and it never fires again.
+- `serve`: `--https=8444 → 127.0.0.1:8945` and
+  `--https=8443 → 127.0.0.1:8946`, and nothing on 443. Idempotence comes from comparing `tailscale serve status
   --json` with the desired mappings and only applying the difference *(verify the JSON shape
-  against the box's Tailscale version; newer versions also have `serve get-config`/`set-config`,
+  against the installed Tailscale version; newer versions also have `serve get-config`/`set-config`,
   which would make this fully declarative)*.
 
 ### `edge`
-The public listener on 443. `edge_proxy` in `group_vars/all.yml` picks the mode.
+The public listener on 443: HAProxy (D3).
 
-- **`edge_proxy: caddy` (steps 1–7):** nothing is installed, only verified, which is how the
-  playbook takes over the live box without touching the working Caddy. It asserts that the apt
-  package is from Cloudsmith and held, that the running binary has `rate_limit`, that
-  `/var/log/caddy/access.log` is `caddy:caddy` (the runbook's 2026-08-22 failure), and that
-  `caddy.service` is enabled and running. It also stops and disables `haproxy.service` **if that
-  unit exists**. That does nothing until step 8, but it means rolling back to a pre-step-8 SHA
-  brings Caddy back instead of leaving two proxies fighting over 443.
-- **`edge_proxy: haproxy` (from step 8):**
-  - apt `haproxy` from Ubuntu `main`. Not held: Ubuntu's security updates within 2.8 keep the
-    config compatible, and the rehearsal and nightly check catch anything that breaks.
-  - `/etc/haproxy/haproxy.cfg` and `cloudflare-ips.lst` from `deploy/haproxy/`, checked with
-    `haproxy -c -f` (the `template` module's `validate:`) before they replace the live files.
-    The handler **reloads**, and HAProxy's master-worker reload doesn't drop connections.
-  - The Origin CA pair at `/etc/haproxy/certs/origin.pem` (cert then key, `0600 root`) is put
-    there **by hand** at step 8 and is never managed by Ansible (§7). The role asserts it exists
-    with that owner and mode, using `stat` (never `slurp`), before touching `haproxy.cfg`, and
-    fails with a message pointing at §7 if it doesn't. So a missing cert stops the run early
-    instead of leaving HAProxy unable to start.
-  - A second `haproxy.service` drop-in sets `LogRateLimitIntervalSec=0`, so journald never
-    drops access-log lines during a burst (§4.5).
-  - The cutover stops and disables Caddy, then starts HAProxy. Cloudflare returns 5xx for the
-    few seconds in between, so run it off-peak. Caddy stays installed but disabled until step 9,
-    so rolling back means re-running the previous SHA.
+- apt `haproxy` from Ubuntu `main`. Not held: Ubuntu's security updates within 2.8 keep the
+  config compatible, and the rehearsal and nightly check catch anything that breaks.
+- `/etc/haproxy/haproxy.cfg` and `cloudflare-ips.lst` from `deploy/haproxy/`, checked with
+  `haproxy -c -f` (the `template` module's `validate:`) before they replace the live files.
+  The handler **reloads**, and HAProxy's master-worker reload doesn't drop connections.
+- The Origin CA pair at `/etc/haproxy/certs/origin.pem` (cert then key, `0600 root`) is put
+  there **by hand** (§10 step 4) and is never managed by Ansible (§7). The role asserts it exists
+  with that owner and mode, using `stat` (never `slurp`), before touching `haproxy.cfg`, and
+  fails with a message pointing at §7 if it doesn't. So a missing cert stops the run early
+  instead of leaving HAProxy unable to start.
+- A `haproxy.service` drop-in sets `LogRateLimitIntervalSec=0`, so journald never drops
+  access-log lines during a burst (§4.5).
+
+The old box's Caddyfile is the specification: every limit, header and timeout in it was earned
+(`deploy/prod/README.md`), and `haproxy.cfg` has to reproduce each one.
 
 **How the Caddyfile maps to `haproxy.cfg`** *(verify each line against 2.8 in the rehearsal)*:
 
@@ -587,9 +592,6 @@ All `become_user: otjapp` with `XDG_RUNTIME_DIR` set.
   `ExecStartPre=%h/.local/bin/otj-render-env <svc>` (§7), and `LogDriver=journald` (§4.5).
 - `/home/otjapp/.local/bin/otj-render-env` from the role's files.
 - Handlers: `daemon-reload` (user scope), then restart the unit whose Quadlet changed.
-- **Migration only (§10, step 6):** `~/otj-hours-api.env` and `~/otj-admin-api.env` set to
-  `state: absent`, gated by a variable that is only turned on once the Parameter Store path has
-  been proven.
 
 ### `observability`
 Log shipping to Grafana Cloud (§4.5, D5). Root, because Alloy is a system unit.
@@ -597,9 +599,7 @@ Log shipping to Grafana Cloud (§4.5, D5). Root, because Alloy is a system unit.
   units. It writes `/run/otj/alloy.env` (0600 `root`) from `/otj/prod/grafana-cloud-logs-token`.
 - `/etc/alloy/config.alloy` from the template, checked with `alloy fmt` (as the `template`
   module's `validate:`) before it replaces the live file *(verify that `fmt` fails on an invalid
-  config, not just a badly formatted one; newer Alloy also has `alloy validate`)*. Which edge
-  source it reads depends on `edge_proxy`: the Caddy file until step 8, the `haproxy.service`
-  journal after.
+  config, not just a badly formatted one; newer Alloy also has `alloy validate`)*.
 - `/etc/containers/systemd/alloy.container`: the pinned image, the read-only mounts,
   `/var/lib/alloy` for state, `EnvironmentFile=/run/otj/alloy.env`,
   `ExecStartPre=/usr/local/lib/otj/otj-render-env alloy`.
@@ -625,8 +625,8 @@ the secret never appears in a file Ansible manages.
 | `/otj/prod/mongo-uri` | hours-api, admin-api | `/run/user/<uid>/otj/<svc>.env` |
 | `/otj/prod/anthropic-api-key` | hours-api | same |
 | `/otj/prod/admin-allowed-logins` (`String`) | admin-api | same |
-| `/otj/prod/credential-identity-seed` | hours-api, **only once PR #43 lands**. Carry it over **byte for byte**, because the identity key is pinned in the app bundle. | same as hours-api |
-| `/otj/prod/tailscale-authkey` | `tailscale` role, only on a rebuild (§11) | not written; passed to `tailscale up` with `no_log` |
+| `/otj/prod/credential-identity-seed` | hours-api, **only once PR #43 lands**. Minted with `IdentityKeyTool generate` together with the public half the mobile app pins. If a pair was minted before 2026-09-25 and the seed lived only on the old box, it's gone: mint a new pair. | same as hours-api |
+| `/otj/prod/tailscale-authkey` | `tailscale` role, only on a new box's first run | not written; passed to `tailscale up` with `no_log` |
 | `/otj/prod/grafana-cloud-logs-token` | Alloy, from step 7. **Write-only** (`logs:write`, this stack only; §4.5). | `/run/otj/alloy.env` (0600 `root`) |
 
 `otj-render-env <svc>` is about 20 lines of bash: `aws ssm get-parameters --with-decryption`
@@ -640,23 +640,30 @@ the instance; the change-set check in `deploy/prod/README.md` still applies):
 with an `kms:ViaService = ssm.eu-west-2.amazonaws.com` condition.
 
 **Seeding** (once, and the only time values are handled) is done **from your laptop, with fresh
-values**: a new Atlas password and a new Anthropic key, entered with `read -s` and piped into
-`aws ssm put-parameter --value file:///dev/stdin`. Nothing is extracted from the box, and the old
-values are revoked once the env files are gone, so seeding doubles as a rotation. The exception is
-`credential-identity-seed` (PR #43), which must be copied from the box byte for byte. The Grafana
-Cloud token goes in the same way in §10 step 7. `ansible-deploy-checklist.md` has the commands.
+values**, before the first converge (§10 step 3): a new Atlas password and a new Anthropic key,
+entered with `read -s` and piped into `aws ssm put-parameter --value file:///dev/stdin`. The old
+values went down with the old box's disk, but revoke them anyway: they were in plaintext on a
+volume nobody can now vouch for. The Grafana Cloud token goes in the same way in §10 step 7. `ansible-deploy-checklist.md` has the commands.
 
 **Rotation:** `aws ssm put-parameter --overwrite …`, then the *restart unit* ops workflow (§9.2).
 A restart re-renders the file, and nothing else is needed.
 
 **The origin certificate stays on disk, outside Parameter Store and outside Ansible.** Issuing and
-installing it are manual, and the current one is already on the box in `/etc/caddy/`. At step 8
-it is combined, once and by hand, into `/etc/haproxy/certs/origin.pem`. Ansible only checks it
+installing it are manual. The old key was lost with the old box, so a new pair is issued and
+installed once, by hand, as `/etc/haproxy/certs/origin.pem` (§10 step 4). Revoke the old one in the
+Cloudflare dashboard at the same time. Ansible only checks it
 (owner, mode, `openssl x509 -checkend`), because any task that copied or templated it would print
 the private key under `--diff`, and that output reaches CloudWatch and the Actions job. It is
 valid for 15 years, so there's no ACME and no renewal job. To replace it, issue a new one in the
 dashboard, install it over SSM, then use the *restart* ops workflow for `haproxy`. `verify` (§4.4)
-warns 90 days ahead. Nothing needs backing up: a rebuilt box gets a newly issued certificate (§11).
+warns 90 days ahead.
+
+**Mind Session Manager logging when installing it.** Once it's on (§10 step 8), everything typed
+or printed in an SSM session is recorded in CloudWatch, including a key pasted into a heredoc.
+The first install (§10 step 4) comes before that. After step 8, put the key in a temporary
+`SecureString` parameter from your laptop, fetch it on the box with
+`aws ssm get-parameter --with-decryption --query Parameter.Value --output text > file` (which
+prints nothing), then delete the parameter. Nothing needs backing up: a rebuilt box gets a newly issued certificate (§11).
 
 ---
 
@@ -686,12 +693,10 @@ GitHub's `ubuntu-24.04` runner is a VM with systemd and the same OS as the box. 
 1. Build the image from the PR and load it into a local `otjapp` user's Podman storage.
 2. `ansible-playbook site.yml -e @group_vars/ci.yml --skip-tags tailnet,aws`. `ci.yml` points
    `otj-render-env` at a fixture file of dummy values instead of Parameter Store, uses a local
-   Mongo container for `MONGO_URI`, a self-signed certificate, and `edge_proxy: haproxy` from
-   the start. Installing Caddy with its plugin on a runner is exactly the fragile step D3
-   removes. It also points Alloy at a throwaway Loki container on `127.0.0.1:3100`, with no auth,
+   Mongo container for `MONGO_URI`, and a self-signed certificate at the origin cert's path. It
+   also points Alloy at a throwaway Loki container on `127.0.0.1:3100`, with no auth,
    instead of Grafana Cloud. The rehearsal never sends anything to the real stack and needs no
-   token. Before step 8, this means the rehearsal tests the proxy the box is *about to get*,
-   and the live `converge-check` covers the Caddy assertions.
+   token.
 3. **Apply it a second time and fail if anything changed.** This is the idempotence check, the
    single most useful test for a playbook.
 4. Check behaviour through HAProxy on `https://localhost` with `--resolve`: `/health` is 200;
@@ -702,9 +707,31 @@ GitHub's `ubuntu-24.04` runner is a VM with systemd and the same OS as the box. 
    carry a **truncated** client IP (§4.5), not the full one.
 5. `verify` has already run inside step 2, so the wildcard-listener check is covered.
 
-This would have caught the missing-`curl` healthcheck and a wrong-order 443 bind. It costs only runner minutes. *(Verify: linger and rootless Podman work on
-the hosted runner; Podman is preinstalled there, and the fallback is a `ubuntu:24.04` container
-with systemd, which is fiddlier.)*
+This would have caught the missing-`curl` healthcheck and a wrong-order 443 bind. It costs only
+runner minutes.
+
+**Verified on the hosted runner (2026-09-25, spike run 36152214141).** `ubuntu-24.04` has the box's
+Ubuntu 24.04, Podman 4.9.3 and systemd 255, and apt gives ansible-core 2.16.3 and HAProxy 2.8.16.
+Rootless Podman under a lingering `otjapp` works. A user Quadlet with `LogDriver=journald` and
+`PublishPort=127.0.0.1:…` listens on loopback only, and isn't reachable on the runner's own address.
+Ansible running as root drives `otjapp`'s user units through `environment: {XDG_RUNTIME_DIR: …}`,
+idempotently. A draft of the rate-limit config (stick tables, `set-src`, a 429 with `Retry-After`)
+passes `haproxy -c`. So no systemd-container fallback is needed.
+
+The runner differs from the box in four ways, and the rehearsal job has to correct each one before
+it applies anything. **None of these corrections belong in the roles**, because the box has none of
+these problems:
+1. **The runner image writes its own environment into `/etc/environment`** (`XDG_CONFIG_HOME=/home/runner/.config`,
+   its `PATH`, and dozens more). `pam_env` hands that to every user's systemd manager, so `otjapp`'s
+   Quadlet generator looks in `/home/runner` and finds nothing. The job resets `/etc/environment` to
+   Ubuntu's default (`PATH` only) **before** creating `otjapp`.
+2. **The runner's `sudo` passes the caller's environment through**, `XDG_RUNTIME_DIR=/run/user/1001`
+   included. The job runs `ansible-playbook` as `sudo env -i HOME=/root PATH=…`, a clean root
+   environment like the one an SSM command gets.
+3. **`otjapp` can't enter the checkout directory** (`/home/runner/work/…`), so the job's steps run
+   from `/tmp`.
+4. **A newer Ansible (2.21, from pipx) comes before apt's in the runner's `PATH`.** The job calls
+   `/usr/bin/ansible-playbook` explicitly, so it tests the 2.16 the box runs. Write the roles for 2.16.
 
 ---
 
@@ -715,9 +742,10 @@ with systemd, which is fiddlier.)*
 `concurrency: deploy-production` (no overlapping deploys), `environment: production`.
 
 1. Checks (the same jobs as §8, reused).
-2. Build and push `otj-hours-api:<sha>`, skipped if it already exists (as today).
-3. `cdk deploy OtjServicesStack`, with the change-set guard: fail if the instance or EIP would be
-   replaced.
+2. Build and push `otj-hours-api:<sha>`, skipped if it already exists (as `ci-cd.yml` does).
+3. `cdk deploy OtjServicesStack`. The stack policy from #45 makes CloudFormation refuse any
+   update that would replace the instance or the EIP, so a surprise like 2026-09-25's fails the
+   deploy instead of destroying the box.
 4. `ssm send-command … otj-converge <sha>`, sending full output to a CloudWatch log group
    (`--cloud-watch-output-config`), because `get-command-invocation` cuts output off at 24 KB
    and an Ansible run is longer than that. The job prints the **PLAY RECAP** plus any failed
@@ -744,11 +772,11 @@ Each one sends a **fixed** command through SSM, so there are no free-text shell 
 |---|---|---|
 | `rollback` | `sha` | `otj-converge <sha>` + smoke. The SHA must exist in ECR. Rolls back the app **and** its box config together. |
 | `converge-check` | — | `otj-converge <live sha> --check`, and posts the diff to the job summary |
-| `restart` | `unit` ∈ {hours-api, admin-api, haproxy, alloy} (`caddy` before step 8) | `systemctl restart`, then `verify` |
+| `restart` | `unit` ∈ {hours-api, admin-api, haproxy, alloy} | `systemctl restart`, then `verify` |
 
 There is deliberately **no workflow that prints app or edge logs**. Job logs are readable by any
 signed-in GitHub user, and the journal holds full client IPs and `userId`s. Until log shipping
-lands (§10 step 7), logs are read from an SSM session as they are today; after it, in Grafana.
+lands (§10 step 7), logs are read with `journalctl` from an SSM session; after it, in Grafana.
 
 ### 9.3 Nightly drift check
 
@@ -761,49 +789,54 @@ SSM sessions stay available for emergencies. Turn on **Session Manager logging t
 
 ---
 
-## 10. Migrating the live box
+## 10. Building the new box
 
-The box is adopted, not rebuilt. Each step is its own PR, and each is checked in `--check`
-mode before it is applied.
+There is nothing to adopt. The instance running now (`i-0d937e3a7abb82ebb`) is a blank Ubuntu
+24.04 box with the Elastic IP, the instance role and the SSM agent, and nothing else. So the first
+apply builds the end state directly: HAProxy, secrets from Parameter Store, Tailscale on
+8443/8444. Logs come a step later. The public API is down until step 5 finishes, which is
+accepted.
 
-| # | Step | How it is applied | Exit check |
+| # | Step | How | Exit check |
 |---|---|---|---|
-| 1 | Repo work: roles written to match **today's** box exactly (tailnet hostname `hours-api`, serve on 8443/8444, `edge_proxy: caddy` so Caddy is **verified only, not managed**, env files still in `~`, Quadlets matching the current templates) | PR, with §8 green | Rehearsal passes twice with no changes |
-| 2 | **The last manual config change:** `apt install ansible-core` and install `otj-converge` from the step-1 image, in one SSM session | SSM session, as root (`ansible-deploy-checklist.md`, phase 3) | `otj-converge --version` in the job output |
-| 3 | `converge-check` against the live box | Actions button | Read the diff. Every line is either an intended change or a playbook bug. Fix the playbook and repeat **until the diff is empty or intended**. |
-| 4 | First real apply: `otj-converge <live sha>` | Actions button | `verify` passes; public and tailnet checks from `deploy/prod/README.md` "Verifying" |
-| 5 | `deploy.yml` replaces `ci-cd.yml` (§9.1) | Merge | Two ordinary merges deploy through Ansible |
-| 6 | Secrets: IAM (§7), seed the parameters from your laptop with fresh values, switch the Quadlets to `render-env`, then after two good deploys remove the old env files and revoke the old values | Three PRs, plus laptop | `ls ~otjapp/*.env` is empty; the app restarts cleanly |
-| 7 | Logs to Grafana Cloud (D5, §4.5). **Manual first, in Grafana Cloud:** create the stack in an EU or UK region, confirm the five single-user rules in §4.5, create the write-only `otj-alloy-prod` token, and `put-parameter` it from your laptop. **Then the PR:** the `observability` role, `LogDriver=journald` in the Quadlets, and the journald drop-in. The edge trail is still Caddy's file here. | Manual setup, then PR, check first | Lines from all three `service` values in Grafana, and edge lines carry truncated IPs; `verify` sees Alloy ready; opening the stack's URL in a private window asks for a login and shows nothing |
-| 8 | Caddy → HAProxy (D3): assemble `/etc/haproxy/certs/origin.pem` by hand (§7), then `edge_proxy: haproxy` | PR, check first, applied off-peak | `verify` passes; the runbook's edge rate-limit test through Cloudflare (11th `POST /auth/session` → 429 with `Retry-After`); `/health` from outside; in Grafana, the edge panel switches from `proxy="caddy"` to `proxy="haproxy"` with no gap longer than the cutover, and the test's 429s appear in it |
-| 9 | Nightly drift check on; Session Manager logging on; apt Caddy, the Cloudsmith repo, `/etc/caddy/`, `push-file.sh` and `deploy/prod/` deleted | PR | A deliberate manual change on the box is reported the next morning |
+| 1 | **Stop it happening again:** #45 pins the AMI and adds the stack policy; set the policy by hand | Merge #45, then `set-stack-policy` from your laptop | `get-stack-policy` shows the deny; the next merge leaves the instance alone |
+| 2 | **Repo work:** the playbook for the end state (roles `base`, `otjapp`, `tailscale`, `edge`, `app`, `verify`), `otj-converge`, `deploy/haproxy/haproxy.cfg` ported from the Caddyfile, `COPY deploy/` in the Dockerfile, `pr.yml` with the rehearsal, the ops workflows (§9.2), and the IAM for both stacks (§7, §9.1). `deploy/prod/` is deleted, its reasoning moved into `deploy/ansible/README.md` and `haproxy.cfg`'s comments. | Several PRs, starting with a spike proving rootless Podman works on the hosted runner | Rehearsal green, and the second apply changes nothing |
+| 3 | **Manual prep, off the box:** the `production` environment; `cdk deploy GithubOidcStack` from your laptop; the rehearsal as a required check; secrets into Parameter Store with fresh values (§7); remove the offline `hours-api` Tailscale node and put an auth key in Parameter Store; issue a new origin cert and revoke the old one | Repo settings, laptop, the Tailscale and Cloudflare dashboards | `aws ssm get-parameters-by-path --path /otj/prod` lists every name in §7 |
+| 4 | **Bootstrap the box**, the last hand change it gets: `apt install ansible-core podman`, the AWS CLI v2, `otj-converge` from a step-2 image, and the origin cert at `/etc/haproxy/certs/origin.pem` | SSM session, as root | `otj-converge --version`; `openssl x509 -in /etc/haproxy/certs/origin.pem -noout -enddate` |
+| 5 | **First converge:** `converge-check` to read what it will do, then `converge <sha>` | Actions buttons | `verify` passes. `/health` returns 200 through Cloudflare. The admin API works from the tailnet. The origin can't be reached directly. The 11th paced `POST /auth/session` gets a 429 with `Retry-After`, and a fresh IP isn't limited. The mobile app logs in. **The public API is back.** |
+| 6 | `deploy.yml` replaces `ci-cd.yml` (§9.1) | Merge | Two ordinary merges deploy through Ansible; `rollback` tried once |
+| 7 | Logs to Grafana Cloud (D5, §4.5). **Manual first, in Grafana Cloud:** create the stack in an EU or UK region, confirm the five single-user rules in §4.5, create the write-only `otj-alloy-prod` token, and `put-parameter` it from your laptop. **Then the PR:** the `observability` role, `LogDriver=journald` in the Quadlets, and the journald drop-in. | Manual setup, then PR, check first | Lines from all three `service` values in Grafana, and edge lines carry truncated IPs; `verify` sees Alloy ready; opening the stack's URL in a private window asks for a login and shows nothing |
+| 8 | Nightly drift check on; Session Manager logging on | PR | A deliberate manual change on the box is reported the next morning |
 
-Step 7 comes after step 6 because it reuses step 6's Parameter Store path for its token. It comes
-before the proxy cutover so that step 8 can be **watched** in Grafana rather than checked
-afterwards from an SSM session.
+Step 5 is where the first-apply risk sits (R1). It's the first time the roles run on the real box,
+but the box has nothing on it to damage, and the rehearsal has already applied the same playbook
+to the same OS twice.
 
-**Rollback at any step:** the old files stay where they are until the step that removes them. For
-steps 1–5, rolling back means going back to `ci-cd.yml` and `deploy.sh`, which are untouched until
-step 5 merges.
+**Rollback:** before step 5 there's nothing to roll back. After it, `rollback <sha>` re-applies an
+older release's config and image together.
 
 ---
 
-## 11. Rebuilding from nothing
+## 11. Rebuilding it again
 
-Once §10 is done, the box's whole configuration is in the image, so a new box needs only:
+Once §10 is done, the box's whole configuration is in the image. A deliberate rebuild (a newer AMI,
+a bigger disk) follows `aws/README.md`, "The instance must never be replaced by accident": relax the
+stack policy for the instance only, deploy, and restore it. The new box needs:
 
-- **CDK user data** (on a *new* instance only; see R2): install `ansible-core`, `awscli` v2 and
-  `podman`, fetch `otj-converge` from the image recorded in `/otj/prod/image-tag`, run it.
-- **A Tailscale auth key** in `/otj/prod/tailscale-authkey`. Use an **OAuth client secret**
-  scoped to `auth_keys` with tag `tag:otj`, which doesn't expire, rather than an ordinary auth key
-  (those expire after at most 90 days, so a rebuild months later would fail at the worst moment).
+- **CDK user data** (on a *new* instance only; see R2): install `ansible-core`, `podman` and
+  the AWS CLI v2, fetch `otj-converge` from the image recorded in `/otj/prod/image-tag`, run it. Until
+  that exists, repeat §10 step 4 by hand.
+- **The Tailscale key** already in `/otj/prod/tailscale-authkey`. Make it an **OAuth client
+  secret** scoped to `auth_keys` with tag `tag:otj` in §10 step 3, which doesn't expire, rather than
+  an ordinary auth key (those expire after at most 90 days, so a rebuild months later would fail
+  at the worst moment).
 - **Before** the rebuild, remove the old `hours-api` node in the Tailscale admin console, so the
   new one gets the same MagicDNS name instead of `hours-api-1`.
 - **A newly issued origin certificate**, from the Cloudflare dashboard, installed at
   `/etc/haproxy/certs/origin.pem` over SSM before the first converge. It isn't in Parameter Store
   (§7), and the `edge` role stops with a message if it's missing. Issuing one is free and quick.
-- The Elastic IP moves to the new instance, so **the Atlas allowlist and the Cloudflare record
-  don't change**.
+- The Elastic IP stays (the stack policy still denies replacing it) and moves to the new instance,
+  so **the Atlas allowlist and the Cloudflare record don't change**.
 - Nothing changes for logs either. The Grafana Cloud token is already in Parameter Store, the
   labels don't depend on the instance, and the new box's lines appear in the same panels. The old
   box's local journal is lost with it, but its lines from the last ~14 days are in Grafana.
@@ -824,7 +857,7 @@ longer protecting anything irreplaceable and can finally be corrected.
 | GitHub Actions minutes for the rehearsal (~5 min per PR, plus nightly) | $0 within the free allowance for private repos, at this volume |
 | Grafana Cloud free tier (D5): logs from three services are far below its monthly log allowance *(verify current limits)* | $0 |
 | Alloy on the box: expected to take on the order of 100 MB of RAM, which the t3.small should have spare *(verify with `podman stats` after step 7)*. If it doesn't fit, that's an instance-size decision, not a cost this plan hides. | $0 |
-| **Total** | **~$0.50/month on top of today's ~$23** |
+| **Total** | **~$0.50/month on top of the ~$23 the box already cost** |
 
 ---
 
@@ -866,14 +899,15 @@ Each of these becomes a role or a small PR once this plan is done:
 
 | # | Risk | Mitigation |
 |---|---|---|
-| R1 | **The first apply does something unexpected to the live box** | §10 step 3: check mode until the diff is understood. Step 1 deliberately matches the current state, so the first apply should change almost nothing. |
-| R2 | **Adding user data to the existing instance.** A `UserData` change on `AWS::EC2::Instance` is an update that needs a **stop/start**, meaning a reboot of production, and cloud-init wouldn't run it anyway since it only runs on first boot. | Don't. User data goes only on a *new* instance (§11). The CDK guard (§9.1) catches this if it happens by accident. |
+| R1 | **The first apply fails partway on the real box.** Every role runs there for the first time at once. | The box is blank and the API is already down, so a failure costs time, not data. The rehearsal applies the same playbook to the same OS twice first (§8.3), and `converge-check` shows the plan before it runs. Fix forward and converge again, since converging is idempotent. |
+| R2 | **Adding user data to the existing instance.** A `UserData` change on `AWS::EC2::Instance` is an update that needs a **stop/start**, meaning a reboot of production, and cloud-init wouldn't run it anyway since it only runs on first boot. | Don't. User data goes only on a *new* instance (§11). |
+| R12 | **The stack replaces the instance again.** That's what happened on 2026-09-25: a re-resolved AMI. A block device change, a subnet move or a security group swap would do the same. | #45: the AMI is pinned, and the stack policy refuses Replace or Delete on the instance and the EIP, whatever the cause. A deliberate rebuild relaxes it for one deploy (§11). Once §10 is done, a replaced box is rebuilt by converging, not by hand. |
 | R3 | **Secrets leak into GitHub logs through SSM output** | Ansible never handles secret values (§7); `no_log` on the Tailscale key task; `ansible-lint` flags obvious cases; no ops workflow prints app or edge logs (§9.2) |
 | R4 | **`otj-converge` breaks itself.** A bad version is installed by the playbook, and the next deploy can't run. | The playbook installs the new script **last** (after `verify`), so a bad script only affects the *next* run. Recovery is the `rollback` workflow, whose first step runs a known-good inline copy through `SendCommand`. |
 | R5 | **Ansible is new to you** | §2; roles kept small and plain (builtin modules only, no third-party collections); every non-obvious task carries the runbook's reasoning as a comment |
 | R6 | **Rehearsal and box differ** (runner image drift, AWS-only tasks skipped) | The nightly drift check on the real box covers what the rehearsal can't |
 | R7 | **Unattended-upgrades or `apt upgrade` replaces something the playbook owns** | HAProxy updates come from Ubuntu's security pocket and stay config-compatible within 2.8. The package restarts HAProxy on upgrade, which costs a few seconds of 5xx. The next converge (every deploy, and nightly in check mode) catches any other drift. |
-| R8 | **Cloudflare's 100-second origin timeout.** On every plan below Enterprise, Cloudflare returns a 524 if the origin hasn't sent response headers within 100 s. `GET /azure-id/complete` can hold for about 2 minutes (the Caddyfile's own comment), so slow MFA approvals may already fail at the edge, and `timeout server 300s` can't help. | Not caused or fixed by this plan. Look for it first *(verify)*. A 524 is generated by Cloudflare, so the origin never logs one. What step 7's edge logs **will** show is `/azure-id/complete` requests lasting about 100 s and ending with a client-side abort in the termination state. The fix is in the app: return early and have the client poll, or bring `AzureIdDriver`'s budget under 100 s. |
+| R8 | **Cloudflare's 100-second origin timeout.** On every plan below Enterprise, Cloudflare returns a 524 if the origin hasn't sent response headers within 100 s. `GET /azure-id/complete` can hold for about 2 minutes (the old Caddyfile's own comment), so slow MFA approvals may already fail at the edge, and `timeout server 300s` can't help. | Not caused or fixed by this plan. Look for it first *(verify)*. A 524 is generated by Cloudflare, so the origin never logs one. What step 7's edge logs **will** show is `/azure-id/complete` requests lasting about 100 s and ending with a client-side abort in the termination state. The fix is in the app: return early and have the client poll, or bring `AzureIdDriver`'s budget under 100 s. |
 | R9 | **Personal data leaves the box.** Edge access logs carry client IPs, and app logs carry `userId`s. Both now go to a third party. | Alloy truncates IPs before sending (§4.5), and the rehearsal checks it (§8.3). The app's no-credentials rule and `ServerHooks` stay as they are. The stack is in an EU or UK region. Retention is short on the free tier anyway. |
 | R10 | **The Grafana Cloud login becomes the only lock on the logs**, since the dashboard isn't behind the tailnet (D5) | The five single-user rules in §4.5, checked in §10 step 7. The token on the box can only write. The logs hold no credentials, so the worst case is exposed IP prefixes, user IDs and request paths. |
 | R11 | **Log shipping stops silently.** Alloy is broken or can't reach Grafana Cloud, or the free tier's limits change or the stack is paused for inactivity *(verify that policy)*. | journald on the box stays the full local copy (500 MB, persistent), so no line is lost while the journal still holds it, and Alloy resumes from its saved position. `verify` checks Alloy is ready on every deploy. The "no lines for 30 minutes" alert (§13) catches it in between. |
@@ -882,15 +916,15 @@ Each of these becomes a role or a small PR once this plan is done:
 
 ## 15. What gets deleted, and docs to update
 
-**Deleted by the end:** `deploy/prod/` (`deploy.sh`, both templates, `push-file.sh`, and the
-Caddyfile, which `deploy/haproxy/haproxy.cfg` replaces), `.github/workflows/ci-cd.yml`, the env
-files on the box, the apt Caddy, the Cloudsmith repo and
-`/etc/caddy/` (including `access.log`, which Alloy stops reading at step 8).
+**Deleted:** `deploy/prod/` in §10 step 2 (`deploy.sh`, both templates, `push-file.sh`, and the
+Caddyfile, which `deploy/haproxy/haproxy.cfg` replaces), and `.github/workflows/ci-cd.yml` in step 6.
+There's nothing to remove from the box: the old one is gone, and the new one only ever gets what the
+playbook puts there.
 
 | Doc | Change |
 |---|---|
 | `AGENTS.md` | Directory structure (`deploy/ansible/`, `deploy/haproxy/`); "Build, run, test" (`mvn verify`, `ansible-lint`, the rehearsal); Caddy → HAProxy wherever it is named (the "Two processes" table, the signup rate-limit note, the inbound-ports note); Conventions: *"don't change the box by hand; change the playbook"*. The no-credentials-in-logs convention gains a line: logs are copied to Grafana Cloud, so a leak reaches a third party, not just the box. Add where logs are read (Grafana, and `journalctl` over SSM as the fallback). |
 | `deploy/prod/README.md` → `deploy/ansible/README.md` | Rewritten around roles and workflows. The edge/rate-limit reasoning moves across in HAProxy terms. "The two rate limits, and why there are two" and the shared-IP section stand as written. A "Reading the logs" section: the dashboard, the three `service` labels, useful LogQL (429s by path, a user's requests by `userId`), and the local `journalctl` fallback for full IPs. |
-| `deployment-checklist.md` | §6 becomes "follow `ansible-deploy-checklist.md`"; delete the manual steps. Add the one-time Grafana Cloud setup (§10 step 7), including the five single-user rules. |
-| `aws/README.md` | Parameter Store IAM, `/otj/prod/image-tag`, Session Manager logging |
-| `staging-to-master-cutover.md` | Unaffected. Still waiting on its own steps 7 and 8. |
+| `deployment-checklist.md` | §6 becomes "follow `ansible-deploy-checklist.md`"; delete the manual steps. |
+| `aws/README.md` | Parameter Store IAM, `/otj/prod/image-tag`, Session Manager logging. (#45 already adds the stack policy and the rebuild procedure.) |
+| `staging-to-master-cutover.md` | Describes the old box's edge bring-up. Delete it with `deploy/prod/` in step 2; git history keeps it. |

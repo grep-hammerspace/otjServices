@@ -89,15 +89,17 @@ aws/                      CDK (TypeScript): OtjServicesStack (VPC + EC2 + ECR),
 docker/                   otjService.Dockerfile, start.sh
 deploy/                   self-host path: podman-compose.yaml, bootstrap.sh, shell.nix,
                           README.md (Tailscale trust model)
-  prod/                   what is installed by hand on the AWS box: deploy.sh, the two Quadlet
-                          templates, Caddyfile (public edge), README.md (provisioning runbook,
-                          rate-limit rationale, the shared-IP problem)
+  prod/                   what was installed by hand on the OLD AWS box (destroyed 2026-09-25):
+                          deploy.sh, the two Quadlet templates, Caddyfile (public edge), README.md
+                          (provisioning runbook, rate-limit rationale, the shared-IP problem).
+                          The spec the Ansible roles reproduce; deleted when they land
 scripts/                  (tailscale branch only) `otj` CLI for hand-testing the API
 ```
 
 Docs worth knowing about (root): `deployment-checklist.md` (AWS bring-up),
 `steps-04-08-implementation-plan.md` (the multi-user rollout plan; step 08 still open),
-`ansible-migration-plan.md` (moving box config into Ansible), `notes.md` (idea backlog). Finished plans and API specs are deleted once they land; git
+`ansible-migration-plan.md` (building the box with Ansible) and `ansible-deploy-checklist.md`
+(its order of operations), `notes.md` (idea backlog). Finished plans and API specs are deleted once they land; git
 history has them.
 
 ## Two processes, one image
@@ -213,8 +215,14 @@ Notes:
 Two **protected** branches, both deployment targets:
 
 - **`master`** — the AWS deployment. Pushes here run CI and then deploy: CDK
-  (`OtjServicesStack`), image build → ECR, rollout on the EC2 box via SSM. This is
-  the hosted instance backing the mobile app.
+  (`OtjServicesStack`) and image build → ECR. This is the hosted instance backing the
+  mobile app.
+  **It is down, by choice, since 2026-09-25.** A merge replaced the EC2 instance
+  (the AMI was re-resolved on every deploy) and terminated the hand-provisioned box.
+  The instance running now is blank, and CI no longer rolls out to it. The box comes
+  back through `ansible-migration-plan.md`. The AMI is now pinned and a stack policy
+  refuses instance replacement (`aws/README.md`). Don't unpin it or loosen the policy
+  as a side effect of other work.
 - **`tailscale`** — reserved for **self-hosters**. Tracks `master` closely (today it is
   `master` plus `scripts/otj`, the hand-testing CLI). The intent recorded in
   `notes.md` is that this branch stays runnable purely via `deploy/bootstrap.sh` +
