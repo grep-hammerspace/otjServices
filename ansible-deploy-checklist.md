@@ -4,10 +4,11 @@ The work, in order, that builds the new AWS box with Ansible and brings the publ
 *why* is in `ansible-migration-plan.md`. This file covers *what to do and when*. The step numbers
 match the plan's §10.
 
-**Where things stand (2026-09-25).** The hand-provisioned box was destroyed when a merge replaced
+**Where things stand (2026-09-26).** The hand-provisioned box was destroyed when a merge replaced
 the instance (plan, top). The instance now running, `i-0d937e3a7abb82ebb`, is blank Ubuntu. The
 public API returns 521 and stays down, by choice, until step 5. User data in Atlas, the images in
-ECR and the Elastic IP are all intact.
+ECR and the Elastic IP are all intact. The stack policy is set, so a merge can no longer replace
+the instance. Next: the manual prep in step 3, then #48, then #49.
 
 **Who does what.** Items marked 🧑 are yours: settings, a laptop command, a dashboard, a button, or
 a check that needs your judgement or your devices. The rest is repo work that comes to you as a PR.
@@ -21,7 +22,7 @@ Session Manager plugin. Check first that `aws sts get-caller-identity` works.
 
 - [x] 🧑 Merge **#45**. It pins the AMI and adds `aws/stack-policy.json`. `cdk diff` against the live
       stack shows no resource changes, so the instance is untouched.
-- [ ] 🧑 Set the stack policy. `cdk deploy` can't, so this is by hand, once:
+- [x] 🧑 Set the stack policy. `cdk deploy` can't, so this is by hand, once:
 
   ```bash
   cd aws
@@ -39,14 +40,15 @@ Session Manager plugin. Check first that `aws sts get-caller-identity` works.
       container) is much more work, so find out first.
 - [ ] **Playbook PR (#48):** `deploy/ansible/` (roles `base`, `otjapp`, `tailscale`, `edge`, `app`,
       `verify`), `deploy/bin/otj-converge`, `deploy/haproxy/haproxy.cfg` ported from the Caddyfile,
-      `COPY deploy/ /deploy/` in the Dockerfile, and `pr.yml` (lint, syntax check, shellcheck,
-      `haproxy -c`, the Quadlet dry-run, and the **rehearsal applied twice**). Also deletes
+      `COPY deploy/{ansible,bin,haproxy}/` into `/deploy/` in the Dockerfile, and
+      `.github/workflows/box.yml`: `box-static` (lint, syntax check, shellcheck, `haproxy -c`) and
+      `box-rehearsal` (the **rehearsal applied twice**). Also deletes
       `deploy/prod/` and `staging-to-master-cutover.md`, after moving their reasoning into
       `deploy/ansible/README.md` and `haproxy.cfg`'s comments.
-  - [ ] The rehearsal is green, and the **second apply changes nothing**.
-- [ ] **Ops-workflows PR:** `converge-check`, `converge`, `rollback` and `restart` (plan §9.2).
-      They have to be on `master` before their buttons appear. None of them runs on push, and no
-      workflow prints app or edge logs.
+  - [x] The rehearsal is green, and the **second apply changes nothing** (the job fails otherwise).
+- [ ] **Ops-workflows PR (#49, stacked on #48):** `converge-check`, `converge`, `rollback` and
+      `restart` (plan §9.2). They have to be on `master` before their buttons appear. None of them
+      runs on push, and no workflow prints app or edge logs.
 - [x] **IAM PR** (`aws/lib/`, #47):
   - `otj-services-stack.ts`, for the instance role: `ssm:GetParameters` on `/otj/prod/*`,
     `kms:Decrypt` on `aws/ssm` through `ssm.eu-west-2.amazonaws.com`, and write access to the
@@ -60,12 +62,14 @@ GitHub:
 
 - [x] Settings → Environments → **New environment `production`**, with deployment branches limited
       to `master`.
-- [ ] Review the IAM PR's `github-oidc-stack.ts` diff, then run
+- [x] Review the IAM PR's `github-oidc-stack.ts` diff, then run
       `cd aws && npx cdk diff GithubOidcStack && npx cdk deploy GithubOidcStack`. CI can't update
       the role it signs in with.
 - [x] Merge the IAM PR. CI deploys the `OtjServicesStack` half.
-- [ ] Settings → Branches → `master`: add the `pr.yml` checks, rehearsal included, as **required
-      status checks**.
+- [ ] Right after #48 merges: Settings → Rules → Rulesets → `protect-master` → **Require status
+      checks to pass**, with `box-static`, `box-rehearsal` and `build-and-test`. `master` is protected
+      by this ruleset, not by classic branch protection. Both workflows run on every PR to `master`,
+      with no path filter, so requiring them can't leave an unrelated PR waiting forever.
 
 Secrets, into Parameter Store with **fresh** values. `read -s` keeps them off the screen and out of
 your shell history:
