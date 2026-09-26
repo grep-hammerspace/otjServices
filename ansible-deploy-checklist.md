@@ -4,11 +4,12 @@ The work, in order, that builds the new AWS box with Ansible and brings the publ
 *why* is in `ansible-migration-plan.md`. This file covers *what to do and when*. The step numbers
 match the plan's §10.
 
-**Where things stand (2026-09-26).** The hand-provisioned box was destroyed when a merge replaced
+**Where things stand (2026-09-27).** The hand-provisioned box was destroyed when a merge replaced
 the instance (plan, top). The instance now running, `i-0d937e3a7abb82ebb`, is blank Ubuntu. The
 public API returns 521 and stays down, by choice, until step 5. User data in Atlas, the images in
 ECR and the Elastic IP are all intact. The stack policy is set, so a merge can no longer replace
-the instance. Next: the manual prep in step 3, then #48, then #49.
+the instance. Step 3's manual prep is done: all four parameters are in Parameter Store, and the
+new origin certificate is waiting for step 4. Next: merge #48, then #49.
 
 **Who does what.** Items marked 🧑 are yours: settings, a laptop command, a dashboard, a button, or
 a check that needs your judgement or your devices. The rest is repo work that comes to you as a PR.
@@ -79,11 +80,11 @@ put() { read -rsp "$1: " v; echo; printf %s "$v" | aws ssm put-parameter --regio
           --name "$1" --type "$2" --value file:///dev/stdin --overwrite >/dev/null && echo ok; }
 ```
 
-- [ ] Atlas: create a new password for the `otjdb` database user, or a new user, and check the
+- [x] Atlas: create a new password for the `otjdb` database user, or a new user, and check the
       Elastic IP is still on the IP access list (it hasn't changed). Then
       `put /otj/prod/mongo-uri SecureString`.
-- [ ] Anthropic console: create a new key, then `put /otj/prod/anthropic-api-key SecureString`.
-- [ ] `put /otj/prod/admin-allowed-logins String`, with the comma-separated tailnet logins allowed
+- [x] Anthropic console: create a new key, then `put /otj/prod/anthropic-api-key SecureString`.
+- [x] `put /otj/prod/admin-allowed-logins String`, with the comma-separated tailnet logins allowed
       to mint invite codes.
 - [ ] Revoke the old Atlas password and the old Anthropic key, once you've checked nothing else
       uses them (your local `.env`, for instance).
@@ -93,22 +94,22 @@ put() { read -rsp "$1: " v; echo; printf %s "$v" | aws ssm put-parameter --regio
 
 Tailscale:
 
-- [ ] Admin console → Machines: **remove the offline `hours-api` node**, so the new box gets the same
+- [x] Admin console → Machines: **remove the offline `hours-api` node**, so the new box gets the same
       name instead of `hours-api-1`.
-- [ ] Create an **OAuth client** with the `auth_keys` write scope and tag `tag:otj` (add `tag:otj` to
+- [x] Create an **OAuth client** with the `auth_keys` write scope and tag `tag:otj` (add `tag:otj` to
       `tagOwners` in the ACL first). OAuth client secrets don't expire, unlike auth keys (90 days
       at most). Then `put /otj/prod/tailscale-authkey SecureString`.
 
 Cloudflare:
 
-- [ ] SSL/TLS → Origin Server → **Create Certificate**: RSA, `otj-services.com` and
+- [x] SSL/TLS → Origin Server → **Create Certificate**: RSA, `otj-services.com` and
       `*.otj-services.com`, 15 years. **The key is shown once.** Keep the cert and the key somewhere
       private until step 4, then delete that copy.
-- [ ] On the same page, **revoke the old origin certificate**. Its key was on the lost disk.
+- [x] On the same page, **revoke the old origin certificate**. Its key was on the lost disk.
 
 Check (lists names only; nothing is decrypted):
 
-- [ ] `aws ssm get-parameters-by-path --path /otj/prod --region eu-west-2 --query 'Parameters[].Name'`
+- [x] `aws ssm get-parameters-by-path --path /otj/prod --region eu-west-2 --query 'Parameters[].Name'`
       lists `mongo-uri`, `anthropic-api-key`, `admin-allowed-logins` and `tailscale-authkey`.
 
 ## Step 4 — Bootstrap the box (SSM session) 🧑
