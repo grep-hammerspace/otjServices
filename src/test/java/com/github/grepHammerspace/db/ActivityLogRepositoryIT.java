@@ -73,46 +73,6 @@ class ActivityLogRepositoryIT {
     }
 
     @Test
-    void deleteLastActivityLog_withOnePending_returnsTrueAndRemoves() {
-        repository.saveActivityLog(logFor("user-3"));
-
-        boolean deleted = repository.deleteLastActivityLog("user-3");
-
-        assertTrue(deleted);
-        assertTrue(repository.getUnpostedActivityLogsFor("user-3").isEmpty());
-    }
-
-    @Test
-    void deleteLastActivityLog_withNoPending_returnsFalse() {
-        boolean deleted = repository.deleteLastActivityLog("user-no-logs");
-
-        assertFalse(deleted);
-    }
-
-    @Test
-    void deleteLastActivityLog_deletesOnlyMostRecent_notOlder() {
-        repository.saveActivityLog(logFor("user-4"));
-        repository.saveActivityLog(logFor("user-4"));
-
-        repository.deleteLastActivityLog("user-4");
-
-        List<ActivityLog> remaining = repository.getUnpostedActivityLogsFor("user-4");
-        assertEquals(1, remaining.size(), "only the most recent log should have been deleted");
-    }
-
-    @Test
-    void deleteLastActivityLog_doesNotTouchPostedLogs() {
-        repository.saveActivityLog(logFor("user-5"));
-        ActivityLog unposted = repository.getUnpostedActivityLogsFor("user-5").get(0);
-        repository.markAsPosted(unposted);
-
-        boolean deleted = repository.deleteLastActivityLog("user-5");
-
-        assertFalse(deleted, "no unposted logs to delete");
-        // posted log still exists — markAsPosted already removed it from unposted query, so just verify the delete returned false
-    }
-
-    @Test
     void findUnpostedNewestFirst_returnsNewestFirst() {
         repository.saveActivityLog(logFor("user-6", "first"));
         repository.saveActivityLog(logFor("user-6", "second"));

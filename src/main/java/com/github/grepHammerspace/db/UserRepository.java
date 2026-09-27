@@ -38,17 +38,6 @@ public class UserRepository {
         collection.createIndex(Indexes.ascending("appUsername"), new IndexOptions().unique(true));
     }
 
-    /** Upserts the user record keyed by {@code userId}. */
-    public void save(User user) {
-        collection.replaceOne(
-                Filters.eq("userId", user.userId()),
-                toDocument(user),
-                new ReplaceOptions().upsert(true)
-        );
-
-        log.info("Saved user {}", user.userId());
-    }
-
     /**
      * Inserts a new user, failing closed on a duplicate {@code appUsername}.
      *

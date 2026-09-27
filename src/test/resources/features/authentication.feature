@@ -5,7 +5,7 @@ Feature: Bearer token authentication
   stay anonymous — a meaningful assertion that the filter does not over-apply.
 
   Scenario: Request without a token is rejected with 401
-    When I DELETE "/otj-services/delete-last-row" without a token
+    When I GET "/otj-services/pending" without a token
     Then the response status is 401
     And the response body contains "bearer token"
 

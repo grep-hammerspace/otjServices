@@ -155,11 +155,9 @@ Authenticated (`Authorization: Bearer …`, all under `/otj-services`):
 | POST | `/submit-with-mfa` | `{mfaCode}` → 200/207/502 `{status, posted, failed}` |
 | GET | `/azure-id/complete` | → 200/207/408/502 `{status, posted, failed}` |
 | POST | `/log-activities` | `{content}` → 200 `ActivityLogResponse`, or 429 + `Retry-After` |
-| POST | `/register` | `{username, password, learnerId}` → 201 |
 | GET | `/pending` | → 200 `PendingResponse` |
 | PUT | `/pending/{id}` | `UpdateActivityRequest` → 200 `PendingActivity`, or 404 |
 | DELETE | `/pending/{id}` | → 204 |
-| DELETE | `/delete-last-row` | → 200 |
 
 The `username`/`password` on the two prepare endpoints are the user's **OneAdvanced**
 credentials. They are **not stored** — the multi-user rollout deleted the encrypted-at-rest copy,

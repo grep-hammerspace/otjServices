@@ -119,20 +119,6 @@ public class ActivityLogRepository {
         return fromDoc(updated);
     }
 
-    /** Deletes the most recently inserted unposted activity log for the user. Returns {@code true} if one was found and deleted. */
-    public boolean deleteLastActivityLog(String userId) {
-        Document deleted = collection.findOneAndDelete(
-                Filters.and(Filters.eq("tailscaleUserId", userId), Filters.eq("posted", false)),
-                new com.mongodb.client.model.FindOneAndDeleteOptions().sort(Sorts.descending("_id"))
-        );
-        if (deleted != null) {
-            log.info("Deleted last activity log for user {}", userId);
-            return true;
-        }
-        log.info("No unposted activity log found to delete for user {}", userId);
-        return false;
-    }
-
     /** Inserts the log and returns it with the generated {@code _id} populated, so a caller can
      *  hand the client a row it can immediately address with {@code DELETE /pending/{id}}. */
     public ActivityLog saveActivityLog(ActivityLog activityLog){

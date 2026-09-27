@@ -27,7 +27,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
  * {@code test-user-id} has no account behind it.
  *
  * <p>Shared assertions are not redefined here — status and {@code contains} come from
- * {@link RegistrationSteps}, {@code does not contain} from {@link PendingSteps}, and the
+ * {@link SharedSteps}, {@code does not contain} from {@link PendingSteps}, and the
  * stored-row check from {@link AccountSteps}.
  */
 public class PrepareSteps {
