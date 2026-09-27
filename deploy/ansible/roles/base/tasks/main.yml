@@ -1,0 +1,68 @@
+- name: Packages the box needs
+  ansible.builtin.apt:
+    name:
+      - podman
+      - uidmap # rootless Podman's subordinate ID mapping
+      - slirp4netns # rootless container networking on Podman 4.9
+      - dbus-user-session # otjapp's `systemctl --user` needs a user bus
+      - acl # lets Ansible `become_user: otjapp` from root without world-readable temp files
+      - jq # otj-render-env parses Parameter Store's JSON with it
+      - unzip
+      - curl
+      - ansible-core
+      - unattended-upgrades
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+# Security updates only, which is Ubuntu's default origin list, and never an automatic reboot: a
+# reboot is an API outage. A kernel update waits for a deliberate restart.
+- name: Unattended upgrades on
+  ansible.builtin.copy:
+    dest: /etc/apt/apt.conf.d/20auto-upgrades
+    mode: "0644"
+    content: |
+      APT::Periodic::Update-Package-Lists "1";
+      APT::Periodic::Unattended-Upgrade "1";
+
+- name: Unattended upgrades never reboot
+  ansible.builtin.copy:
+    dest: /etc/apt/apt.conf.d/52otj-unattended-upgrades
+    mode: "0644"
+    content: |
+      Unattended-Upgrade::Automatic-Reboot "false";
+
+- name: AWS CLI v2
+  ansible.builtin.import_tasks: awscli.yml
+
+# Two settings, both for the logs (plan §4.5). The cap, because nothing else stops the journal
+# filling the 20 GB disk. Persistent storage, so the local copy of the logs (the fallback when
+# Grafana isn't enough, and the only place full client IPs are kept) survives a reboot.
+- name: journald drop-in directory
+  ansible.builtin.file:
+    path: /etc/systemd/journald.conf.d
+    state: directory
+    mode: "0755"
+
+- name: journald keeps a persistent, capped journal
+  ansible.builtin.copy:
+    dest: /etc/systemd/journald.conf.d/otj.conf
+    mode: "0644"
+    content: |
+      [Journal]
+      Storage=persistent
+      SystemMaxUse=500M
+  notify: Restart journald
+
+# Access is SSM only: no key, no open port, and the security group drops 22 anyway. Ubuntu 24.04
+# starts sshd through a socket, so both units are masked. Break-glass is the EC2 Serial Console.
+# verify's wildcard-listener check makes no exception for :22 because of this.
+- name: sshd off
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    enabled: false
+    masked: true
+    state: stopped
+  loop:
+    - ssh.socket
+    - ssh.service

@@ -1,0 +1,174 @@
+# Checks for the box's configuration (deploy/ansible, deploy/haproxy, deploy/bin) on every PR:
+# static checks, then the box rehearsal, which applies the real playbook to a GitHub runner, twice
+# (ansible-migration-plan.md §8). Java's tests stay in ci-cd.yml.
+name: Box
+
+on:
+  pull_request:
+    branches: [master]
+  push:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  static:
+    name: box-static
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      # The same apt packages the box gets, so the checks use the box's versions.
+      - run: sudo apt-get update -q && sudo apt-get install -y -q ansible-core ansible-lint shellcheck haproxy
+
+      # With apt's Ansible, not the runner's newer pipx one that comes first in its PATH.
+      - name: ansible-lint (production profile)
+        working-directory: deploy/ansible
+        run: env PATH=/usr/sbin:/usr/bin:/sbin:/bin /usr/bin/ansible-lint
+
+      - name: Playbook syntax
+        working-directory: deploy/ansible
+        run: /usr/bin/ansible-playbook site.yml --syntax-check -e image_tag=ci
+
+      - name: shellcheck
+        run: shellcheck deploy/bin/otj-converge deploy/ansible/roles/app/files/otj-render-env
+
+      # haproxy.cfg names absolute paths, so the check puts a throwaway cert and the range list
+      # where the box has them.
+      - name: haproxy -c, with the box's HAProxy
+        run: |
+          sudo install -d -m 0700 /etc/haproxy/certs
+          openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=otj-services.com \
+            -keyout /tmp/k.pem -out /tmp/c.pem 2>/dev/null
+          cat /tmp/c.pem /tmp/k.pem | sudo install -m 0600 /dev/stdin /etc/haproxy/certs/origin.pem
+          sudo install -m 0644 deploy/haproxy/cloudflare-ips.lst /etc/haproxy/cloudflare-ips.lst
+          haproxy -v | head -1
+          sudo haproxy -c -f deploy/haproxy/haproxy.cfg
+
+  rehearsal:
+    name: box-rehearsal
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      # The runner differs from the box in four ways (plan §8.3, found by the runner spike). Each
+      # is corrected here, in the job, and never in the roles, because the box has none of them.
+      #
+      # 1. The runner image writes its own environment into /etc/environment, and pam_env hands it
+      #    to every user's systemd manager, so otjapp's Quadlet generator would look in
+      #    /home/runner. Put back Ubuntu's default before otjapp exists.
+      - name: A stock /etc/environment
+        run: |
+          echo 'PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin"' \
+            | sudo tee /etc/environment >/dev/null
+
+      - run: sudo apt-get update -q && sudo apt-get install -y -q ansible-core
+
+      - name: Build the image, as CI would for the box
+        run: |
+          docker build -f docker/otjService.Dockerfile -t localhost/otj-hours-api:ci .
+          docker save localhost/otj-hours-api:ci -o /tmp/otj-image.tar
+          chmod 0644 /tmp/otj-image.tar
+
+      # On the runner's own address, not a wildcard and not loopback: rootless containers reach the
+      # host through slirp4netns, which can't see the host's 127.0.0.1.
+      - name: A throwaway Mongo
+        run: |
+          ip=$(hostname -I | awk '{print $1}')
+          echo "RUNNER_IP=$ip" >> "$GITHUB_ENV"
+          docker run -d --name mongo -p "$ip:27017:27017" docker.io/library/mongo:8
+
+      # The box's certificate is installed by hand, so the rehearsal does the same, with a
+      # self-signed one. Valid for more than verify's 90-day expiry check.
+      - name: A throwaway origin certificate
+        run: |
+          sudo install -d -m 0700 /etc/haproxy/certs
+          openssl req -x509 -newkey rsa:2048 -nodes -days 365 -subj /CN=otj-services.com \
+            -keyout /tmp/k.pem -out /tmp/c.pem 2>/dev/null
+          cat /tmp/c.pem /tmp/k.pem | sudo install -m 0600 /dev/stdin /etc/haproxy/certs/origin.pem
+
+      # 2. The runner's sudo passes the caller's environment through, so the playbook runs from a
+      #    clean root environment, like an SSM command gets on the box.
+      # 3. otjapp can't enter the checkout directory, which is fine here: only root reads it.
+      # 4. A newer pipx Ansible comes first in the runner's PATH, so apt's is called by full path.
+      - name: Apply the playbook
+        working-directory: deploy/ansible
+        run: |
+          sudo env -i HOME=/root PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+            /usr/bin/ansible-playbook site.yml -e @ci-vars.yml -e image_tag=ci \
+            -e ci_mongo_uri=mongodb://$RUNNER_IP:27017 --skip-tags tailnet,aws
+
+      - name: Apply it again, and fail if anything changed
+        working-directory: deploy/ansible
+        run: |
+          sudo env -i HOME=/root PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+            /usr/bin/ansible-playbook site.yml -e @ci-vars.yml -e image_tag=ci \
+            -e ci_mongo_uri=mongodb://$RUNNER_IP:27017 --skip-tags tailnet,aws | tee /tmp/second.log
+          grep -E '^localhost +: ok=[0-9]+ +changed=0 ' /tmp/second.log \
+            || { echo "::error::The second apply changed something; the playbook isn't idempotent"; exit 1; }
+
+      - name: Behaviour through HAProxy
+        run: |
+          set -euo pipefail
+          lo=(--resolve otj-services.com:443:127.0.0.1)
+          ext=(--resolve "otj-services.com:443:$RUNNER_IP")
+          url=https://otj-services.com
+
+          code=$(curl -sk -o /dev/null -w '%{http_code}' "${lo[@]}" $url/health)
+          [ "$code" = 200 ] || { echo "::error::/health through HAProxy: $code"; exit 1; }
+
+          # A login with a fresh username each time, so the app's own per-username limiter never
+          # answers instead of HAProxy's. Prints "<status> <Retry-After>".
+          login() {
+            curl -sk -o /dev/null -D - -X POST "$@" $url/auth/session \
+              -H 'Content-Type: application/json' \
+              -d "{\"username\":\"u$RANDOM$RANDOM\",\"password\":\"x\"}" \
+              | tr -d '\r' | awk '/^HTTP/{s=$2} tolower($1)=="retry-after:"{r=$2} END{print s, r}'
+          }
+          eleventh() { local r; for _ in $(seq 1 10); do login "$@" >/dev/null; done; login "$@"; }
+
+          # Trusted source (127.0.0.1 is in the CI range list): each CF-Connecting-IP is its own
+          # client. If this collapses, every user shares one bucket in production.
+          read -r s ra <<<"$(eleventh "${lo[@]}" -H 'CF-Connecting-IP: 198.51.100.1')"
+          [ "$s" = 429 ] && [[ "$ra" =~ ^[0-9]+$ ]] || { echo "::error::11th trusted login: '$s' Retry-After '$ra'"; exit 1; }
+          read -r s _ <<<"$(login "${lo[@]}" -H 'CF-Connecting-IP: 198.51.100.2')"
+          [ "$s" != 429 ] || { echo "::error::a second client shared the first one's bucket"; exit 1; }
+
+          # Untrusted source (the runner's own address): the header must be ignored, so changing it
+          # doesn't escape the limit.
+          read -r s _ <<<"$(eleventh "${ext[@]}" -H 'CF-Connecting-IP: 203.0.113.1')"
+          [ "$s" = 429 ] || { echo "::error::11th untrusted login: '$s'"; exit 1; }
+          read -r s _ <<<"$(login "${ext[@]}" -H 'CF-Connecting-IP: 203.0.113.2')"
+          [ "$s" = 429 ] || { echo "::error::a forged CF-Connecting-IP escaped the limit"; exit 1; }
+          echo "rate limits: ok"
+
+      - name: The apps are loopback only
+        run: |
+          for port in 8945 8946; do
+            if curl -s --max-time 3 "http://$RUNNER_IP:$port/health" >/dev/null; then
+              echo "::error::port $port answers on $RUNNER_IP"; exit 1
+            fi
+          done
+          echo "loopback only: ok"
+
+      - name: Logs reach the journal
+        run: |
+          for c in hours-api admin-api; do
+            [ -n "$(sudo journalctl CONTAINER_NAME=$c -n 1 -q --no-pager)" ] \
+              || { echo "::error::no journal lines for $c"; exit 1; }
+          done
+          sudo journalctl -u haproxy -n 20 -q --no-pager | grep -q 'public' \
+            || { echo "::error::no HAProxy access log in the journal"; exit 1; }
+          echo "journal: ok"
+
+      - name: Diagnostics
+        if: failure()
+        run: |
+          sudo ss -Hltnp || true
+          uid=$(id -u otjapp 2>/dev/null) || exit 0
+          sudo -u otjapp env -i HOME=/home/otjapp XDG_RUNTIME_DIR=/run/user/$uid \
+            DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$uid/bus \
+            systemctl --user --no-pager status hours-api admin-api || true
+          sudo journalctl _UID=$uid -n 80 --no-pager || true
+          sudo journalctl -u haproxy -n 30 --no-pager || true

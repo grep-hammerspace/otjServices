@@ -4,10 +4,12 @@ The work, in order, that builds the new AWS box with Ansible and brings the publ
 *why* is in `ansible-migration-plan.md`. This file covers *what to do and when*. The step numbers
 match the plan's §10.
 
-**Where things stand (2026-09-25).** The hand-provisioned box was destroyed when a merge replaced
+**Where things stand (2026-09-27).** The hand-provisioned box was destroyed when a merge replaced
 the instance (plan, top). The instance now running, `i-0d937e3a7abb82ebb`, is blank Ubuntu. The
 public API returns 521 and stays down, by choice, until step 5. User data in Atlas, the images in
-ECR and the Elastic IP are all intact.
+ECR and the Elastic IP are all intact. The stack policy is set, so a merge can no longer replace
+the instance. Step 3's manual prep is done: all four parameters are in Parameter Store, and the
+new origin certificate is waiting for step 4. Next: merge #48, then #49.
 
 **Who does what.** Items marked 🧑 are yours: settings, a laptop command, a dashboard, a button, or
 a check that needs your judgement or your devices. The rest is repo work that comes to you as a PR.
@@ -19,9 +21,9 @@ Session Manager plugin. Check first that `aws sts get-caller-identity` works.
 
 ## Step 1 — Stop it happening again
 
-- [ ] 🧑 Merge **#45**. It pins the AMI and adds `aws/stack-policy.json`. `cdk diff` against the live
+- [x] 🧑 Merge **#45**. It pins the AMI and adds `aws/stack-policy.json`. `cdk diff` against the live
       stack shows no resource changes, so the instance is untouched.
-- [ ] 🧑 Set the stack policy. `cdk deploy` can't, so this is by hand, once:
+- [x] 🧑 Set the stack policy. `cdk deploy` can't, so this is by hand, once:
 
   ```bash
   cd aws
@@ -34,20 +36,21 @@ Session Manager plugin. Check first that `aws sts get-caller-identity` works.
 
 ## Step 2 — Repo work (PRs)
 
-- [ ] **Runner spike:** a throwaway workflow proving rootless Podman, linger and `systemctl --user`
+- [x] **Runner spike:** a throwaway workflow proving rootless Podman, linger and `systemctl --user`
       work on GitHub's `ubuntu-24.04` runner. The rehearsal depends on it, and the fallback (a systemd
       container) is much more work, so find out first.
-- [ ] **Playbook PR:** `deploy/ansible/` (roles `base`, `otjapp`, `tailscale`, `edge`, `app`,
+- [ ] **Playbook PR (#48):** `deploy/ansible/` (roles `base`, `otjapp`, `tailscale`, `edge`, `app`,
       `verify`), `deploy/bin/otj-converge`, `deploy/haproxy/haproxy.cfg` ported from the Caddyfile,
-      `COPY deploy/ /deploy/` in the Dockerfile, and `pr.yml` (lint, syntax check, shellcheck,
-      `haproxy -c`, the Quadlet dry-run, and the **rehearsal applied twice**). Also deletes
+      `COPY deploy/{ansible,bin,haproxy}/` into `/deploy/` in the Dockerfile, and
+      `.github/workflows/box.yml`: `box-static` (lint, syntax check, shellcheck, `haproxy -c`) and
+      `box-rehearsal` (the **rehearsal applied twice**). Also deletes
       `deploy/prod/` and `staging-to-master-cutover.md`, after moving their reasoning into
       `deploy/ansible/README.md` and `haproxy.cfg`'s comments.
-  - [ ] The rehearsal is green, and the **second apply changes nothing**.
-- [ ] **Ops-workflows PR:** `converge-check`, `converge`, `rollback` and `restart` (plan §9.2).
-      They have to be on `master` before their buttons appear. None of them runs on push, and no
-      workflow prints app or edge logs.
-- [ ] **IAM PR** (`aws/lib/`):
+  - [x] The rehearsal is green, and the **second apply changes nothing** (the job fails otherwise).
+- [ ] **Ops-workflows PR (#49, stacked on #48):** `converge-check`, `converge`, `rollback` and
+      `restart` (plan §9.2). They have to be on `master` before their buttons appear. None of them
+      runs on push, and no workflow prints app or edge logs.
+- [x] **IAM PR** (`aws/lib/`, #47):
   - `otj-services-stack.ts`, for the instance role: `ssm:GetParameters` on `/otj/prod/*`,
     `kms:Decrypt` on `aws/ssm` through `ssm.eu-west-2.amazonaws.com`, and write access to the
     converge-output log group.
@@ -58,14 +61,16 @@ Session Manager plugin. Check first that `aws sts get-caller-identity` works.
 
 GitHub:
 
-- [ ] Settings → Environments → **New environment `production`**, with deployment branches limited
+- [x] Settings → Environments → **New environment `production`**, with deployment branches limited
       to `master`.
-- [ ] Review the IAM PR's `github-oidc-stack.ts` diff, then run
+- [x] Review the IAM PR's `github-oidc-stack.ts` diff, then run
       `cd aws && npx cdk diff GithubOidcStack && npx cdk deploy GithubOidcStack`. CI can't update
       the role it signs in with.
-- [ ] Merge the IAM PR. CI deploys the `OtjServicesStack` half.
-- [ ] Settings → Branches → `master`: add the `pr.yml` checks, rehearsal included, as **required
-      status checks**.
+- [x] Merge the IAM PR. CI deploys the `OtjServicesStack` half.
+- [ ] Right after #48 merges: Settings → Rules → Rulesets → `protect-master` → **Require status
+      checks to pass**, with `box-static`, `box-rehearsal` and `build-and-test`. `master` is protected
+      by this ruleset, not by classic branch protection. Both workflows run on every PR to `master`,
+      with no path filter, so requiring them can't leave an unrelated PR waiting forever.
 
 Secrets, into Parameter Store with **fresh** values. `read -s` keeps them off the screen and out of
 your shell history:
@@ -75,11 +80,11 @@ put() { read -rsp "$1: " v; echo; printf %s "$v" | aws ssm put-parameter --regio
           --name "$1" --type "$2" --value file:///dev/stdin --overwrite >/dev/null && echo ok; }
 ```
 
-- [ ] Atlas: create a new password for the `otjdb` database user, or a new user, and check the
+- [x] Atlas: create a new password for the `otjdb` database user, or a new user, and check the
       Elastic IP is still on the IP access list (it hasn't changed). Then
       `put /otj/prod/mongo-uri SecureString`.
-- [ ] Anthropic console: create a new key, then `put /otj/prod/anthropic-api-key SecureString`.
-- [ ] `put /otj/prod/admin-allowed-logins String`, with the comma-separated tailnet logins allowed
+- [x] Anthropic console: create a new key, then `put /otj/prod/anthropic-api-key SecureString`.
+- [x] `put /otj/prod/admin-allowed-logins String`, with the comma-separated tailnet logins allowed
       to mint invite codes.
 - [ ] Revoke the old Atlas password and the old Anthropic key, once you've checked nothing else
       uses them (your local `.env`, for instance).
@@ -89,22 +94,22 @@ put() { read -rsp "$1: " v; echo; printf %s "$v" | aws ssm put-parameter --regio
 
 Tailscale:
 
-- [ ] Admin console → Machines: **remove the offline `hours-api` node**, so the new box gets the same
+- [x] Admin console → Machines: **remove the offline `hours-api` node**, so the new box gets the same
       name instead of `hours-api-1`.
-- [ ] Create an **OAuth client** with the `auth_keys` write scope and tag `tag:otj` (add `tag:otj` to
+- [x] Create an **OAuth client** with the `auth_keys` write scope and tag `tag:otj` (add `tag:otj` to
       `tagOwners` in the ACL first). OAuth client secrets don't expire, unlike auth keys (90 days
       at most). Then `put /otj/prod/tailscale-authkey SecureString`.
 
 Cloudflare:
 
-- [ ] SSL/TLS → Origin Server → **Create Certificate**: RSA, `otj-services.com` and
+- [x] SSL/TLS → Origin Server → **Create Certificate**: RSA, `otj-services.com` and
       `*.otj-services.com`, 15 years. **The key is shown once.** Keep the cert and the key somewhere
       private until step 4, then delete that copy.
-- [ ] On the same page, **revoke the old origin certificate**. Its key was on the lost disk.
+- [x] On the same page, **revoke the old origin certificate**. Its key was on the lost disk.
 
 Check (lists names only; nothing is decrypted):
 
-- [ ] `aws ssm get-parameters-by-path --path /otj/prod --region eu-west-2 --query 'Parameters[].Name'`
+- [x] `aws ssm get-parameters-by-path --path /otj/prod --region eu-west-2 --query 'Parameters[].Name'`
       lists `mongo-uri`, `anthropic-api-key`, `admin-allowed-logins` and `tailscale-authkey`.
 
 ## Step 4 — Bootstrap the box (SSM session) 🧑

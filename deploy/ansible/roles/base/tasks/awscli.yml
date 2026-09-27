@@ -1,0 +1,39 @@
+# Guarded by the installed VERSION, not by `creates:`. The bootstrap (ansible-deploy-checklist.md
+# step 4) installs whatever version is current, and a `creates:` guard would keep that forever.
+- name: Installed AWS CLI version
+  ansible.builtin.command: /usr/local/bin/aws --version
+  register: base_awscli_installed
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Install the pinned AWS CLI
+  when: ("aws-cli/" ~ awscli_version ~ " ") not in base_awscli_installed.stdout | default('')
+  block:
+    - name: Download the pinned AWS CLI, checked against its sha256
+      ansible.builtin.get_url:
+        url: "https://awscli.amazonaws.com/awscli-exe-linux-x86_64-{{ awscli_version }}.zip"
+        dest: "/tmp/awscli-{{ awscli_version }}.zip"
+        checksum: "sha256:{{ awscli_sha256 }}"
+        mode: "0644"
+
+    - name: Unpack it
+      ansible.builtin.unarchive:
+        src: "/tmp/awscli-{{ awscli_version }}.zip"
+        dest: /tmp
+        remote_src: true
+      when: not ansible_check_mode # --check doesn't download, so there is nothing to unpack
+
+    - name: Install it over whatever is there
+      ansible.builtin.command: /tmp/aws/install --update
+      changed_when: true
+      when: not ansible_check_mode
+
+  always:
+    - name: Remove the download
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "/tmp/awscli-{{ awscli_version }}.zip"
+        - /tmp/aws

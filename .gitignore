@@ -42,3 +42,6 @@ build/
 .mvn/
 .env
 .claude/*.tmp.*
+
+# ansible-lint and ansible-playbook caches
+deploy/ansible/.ansible/

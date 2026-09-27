@@ -1,0 +1,25 @@
+- name: Reload otjapp's systemd
+  become: true
+  become_user: "{{ otjapp_user }}"
+  environment: "{{ otjapp_env }}"
+  ansible.builtin.systemd_service:
+    scope: user
+    daemon_reload: true
+
+- name: Restart hours-api
+  become: true
+  become_user: "{{ otjapp_user }}"
+  environment: "{{ otjapp_env }}"
+  ansible.builtin.systemd_service:
+    name: hours-api.service
+    scope: user
+    state: restarted
+
+- name: Restart admin-api
+  become: true
+  become_user: "{{ otjapp_user }}"
+  environment: "{{ otjapp_env }}"
+  ansible.builtin.systemd_service:
+    name: admin-api.service
+    scope: user
+    state: restarted

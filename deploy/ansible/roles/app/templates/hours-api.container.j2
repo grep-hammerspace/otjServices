@@ -1,0 +1,31 @@
+# Written by the app role for release {{ image_tag }}. Don't edit on the box: the next converge
+# puts it back, and the nightly drift check reports the change.
+[Unit]
+Description=otjServices hours-api
+After=network-online.target
+Wants=network-online.target
+
+[Container]
+Image={{ app_image }}
+ContainerName=hours-api
+# Loopback only, and a literal rather than a variable so it can't be widened by accident. HAProxy
+# and `tailscale serve` reach it here, and nothing else can (AGENTS.md, "Two processes").
+PublishPort=127.0.0.1:8945:8945
+# Rendered from Parameter Store by ExecStartPre below, onto tmpfs, 0600.
+EnvironmentFile=%t/otj/hours-api.env
+# Podman's default already, but written down so nobody changes it: the journal is where the logs
+# live on the box and where Alloy will read them (plan §4.5).
+LogDriver=journald
+# curl is in the image for exactly this line (docker/otjService.Dockerfile).
+HealthCmd=curl -f http://localhost:8945/health || exit 1
+HealthInterval=15s
+HealthRetries=3
+
+[Service]
+ExecStartPre=%h/.local/bin/otj-render-env hours-api
+Restart=always
+RestartSec=5
+TimeoutStartSec=300
+
+[Install]
+WantedBy=default.target

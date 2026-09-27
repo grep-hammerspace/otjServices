@@ -26,14 +26,14 @@ export class OtjServicesStack extends cdk.Stack {
       ],
     });
 
-    // 443 from Cloudflare's edge ranges is the only inbound rule, and it reaches Caddy on the
-    // host — not the app. Caddy terminates TLS and rate limits, then proxies to 127.0.0.1:8945
-    // (see deploy/prod/Caddyfile). Admin access to the box is still SSM Session Manager, so
+    // 443 from Cloudflare's edge ranges is the only inbound rule, and it reaches HAProxy on the
+    // host — not the app. HAProxy terminates TLS and rate limits, then proxies to 127.0.0.1:8945
+    // (see deploy/haproxy/haproxy.cfg). Admin access to the box is still SSM Session Manager, so
     // there is still no SSH port, and the admin API is still tailnet-only via the host's
     // `tailscale serve` rather than anything opened here.
     //
     // Nothing else is opened, and that is what the rest of the design rests on: the Quadlets
-    // bind 8945/8946 to 127.0.0.1, so the only routes in are Caddy (public, main API) and
+    // bind 8945/8946 to 127.0.0.1, so the only routes in are HAProxy (public, main API) and
     // `tailscale serve` (tailnet). AdminIdentityFilter believes the Tailscale-User-Login header
     // precisely because no rule here can reach 8946 — see deploy/README.md before adding one.
     //
@@ -59,23 +59,23 @@ export class OtjServicesStack extends cdk.Stack {
       //
       // Once the box is reproducible from code (userdata, Ansible, an AMI — see issue #40's
       // direction of travel), this becomes safe to correct. Until then the accurate description
-      // of the access model lives in aws/README.md and deploy/prod/README.md, which cost nothing
+      // of the access model lives in aws/README.md and deploy/ansible/README.md, which cost nothing
       // to change.
       description: "otjServices EC2 host - no inbound; SSM for admin, tailscale serve for app access",
       allowAllOutbound: true,
     });
 
     // Cloudflare's published edge ranges (https://www.cloudflare.com/ips-v4 and /ips-v6), as of
-    // 2026-08-16. Duplicated in the `trusted_proxies` block of deploy/prod/Caddyfile, which must
-    // list the same set — refresh both together.
+    // 2026-08-16. Duplicated in deploy/haproxy/cloudflare-ips.lst, which must list the same set —
+    // refresh both together (deploy/ansible/README.md has the check).
     //
     // Narrowing to these is what makes the orange-cloud proxy mean anything. otj-services.com
     // resolves to Cloudflare, so the Elastic IP is not published — but "not published" is not
     // "not findable" (certificate transparency logs, old DNS history, scanning). With 0.0.0.0/0
     // here, anyone who turns it up connects straight to the origin, skipping Cloudflare's WAF
-    // and DDoS protection, and — because Caddy trusts the forwarded header from any Cloudflare
+    // and DDoS protection, and — because HAProxy trusts the forwarded header from any Cloudflare
     // range — could hand it a CF-Connecting-IP of their choosing and forge the rate-limit key.
-    // The allowlist and the Caddyfile's trusted_proxies only work as a pair.
+    // The allowlist and cloudflare-ips.lst only work as a pair.
     const CLOUDFLARE_IPV4 = [
       "173.245.48.0/20", "103.21.244.0/22", "103.22.200.0/22", "103.31.4.0/22",
       "141.101.64.0/18", "108.162.192.0/18", "190.93.240.0/20", "188.114.96.0/20",

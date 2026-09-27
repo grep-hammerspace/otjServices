@@ -1,0 +1,10 @@
+# Last task of every run (site.yml post_tasks), so a bad otj-converge only breaks the NEXT deploy,
+# never the one that installed it (plan R4). The rollback workflow recovers from that with a
+# known-good copy.
+- name: otj-converge, from this release
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../bin/otj-converge"
+    dest: /usr/local/sbin/otj-converge
+    owner: root
+    group: root
+    mode: "0755"

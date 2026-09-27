@@ -1,0 +1,14 @@
+- name: Reload systemd
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+
+# Master-worker reload: new workers take the config, old ones finish their connections.
+- name: Reload haproxy
+  ansible.builtin.systemd_service:
+    name: haproxy
+    state: reloaded
+
+- name: Restart haproxy
+  ansible.builtin.systemd_service:
+    name: haproxy
+    state: restarted

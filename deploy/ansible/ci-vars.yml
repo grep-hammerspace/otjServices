@@ -1,0 +1,25 @@
+# The PR rehearsal's overrides (ansible-migration-plan.md §8.3), passed with -e @ci-vars.yml. Not
+# under group_vars/, so nothing loads it on the box by accident. The job runs with
+# --skip-tags tailnet,aws: a runner can't join the tailnet or read the account's ECR and secrets.
+
+# The image the job built and saved, loaded instead of pulled.
+image_repo: localhost/otj-hours-api
+app_image_archive: /tmp/otj-image.tar
+
+# Secrets from fixture files instead of Parameter Store: dummy values, and a throwaway Mongo the
+# job starts on the runner's own address. Keyed by the parameter name's last segment.
+render_env_source: fixture
+render_env_fixture:
+  mongo-uri: "{{ ci_mongo_uri }}" # passed with -e by the job
+  anthropic-api-key: dummy-not-a-key # the app needs one to boot; the rehearsal never calls the LLM
+  admin-allowed-logins: ci@example.invalid
+
+# 127.0.0.1 joins Cloudflare's ranges so the job can send CF-Connecting-IP from loopback and prove
+# each client gets its own bucket. Requests from the runner's own address stay untrusted, which is
+# the other half of the test.
+edge_trusted_extra:
+  - 127.0.0.1/32
+
+# The runner's own wildcard listeners, which the box doesn't have. Filled in from the first
+# rehearsal run; each entry says what it is.
+verify_wildcard_allowed_extra: []

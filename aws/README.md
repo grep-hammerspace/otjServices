@@ -18,15 +18,15 @@ Two stacks:
 ## Access model
 
 - **Inbound is 443 only, and only from Cloudflare's published ranges**, reaching
-  **Caddy on the host**, never the app directly. Caddy terminates TLS and rate
+  **HAProxy on the host**, never the app directly. HAProxy terminates TLS and rate
   limits, then proxies to `127.0.0.1:8945`. Port 80 is not opened: Cloudflare
   terminates the visitor's HTTP at its own edge, and the origin's certificate is
   a Cloudflare Origin CA pair rather than ACME, so there is no HTTP-01 challenge
-  to serve. See `deploy/prod/README.md` for the provisioning steps and
-  `deploy/prod/Caddyfile` for the config.
-  The CIDR list here and the `trusted_proxies` list in the Caddyfile are the same
-  set and must be refreshed together — see "Keeping the Cloudflare ranges
-  current" in `deploy/prod/README.md`.
+  to serve. See `deploy/ansible/README.md` for the box and
+  `deploy/haproxy/haproxy.cfg` for the config.
+  The CIDR list here and `deploy/haproxy/cloudflare-ips.lst` are the same set and
+  must be refreshed together — see "Keeping the Cloudflare ranges current" in
+  `deploy/ansible/README.md`.
 - **Shell access** — SSM Session Manager, not SSH. IAM-gated, no open port:
   ```
   aws ssm start-session --target <instance-id> --region eu-west-2
