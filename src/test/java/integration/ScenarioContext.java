@@ -7,7 +7,7 @@ import java.util.Map;
  * Thread-local key/value store used to pass data between Cucumber hooks and step definitions
  * within a single scenario.
  *
- * <p>Cucumber instantiates {@link ServerHooks} and {@link RegistrationSteps} as separate objects,
+ * <p>Cucumber instantiates {@link ServerHooks} and {@link SharedSteps} as separate objects,
  * so they cannot share fields directly. This class bridges that gap: {@link ServerHooks} writes
  * the server base URL and {@link com.mongodb.client.MongoDatabase} handle at scenario start, and
  * step definition classes read them back when executing steps.

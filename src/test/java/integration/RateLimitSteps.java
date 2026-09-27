@@ -24,7 +24,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * assertion in the suite looks only at status and body.
  *
  * <p>Shared assertions are not redefined here; status and {@code contains} come from
- * {@link RegistrationSteps}. The header map itself is recorded by {@link SignupSteps} and
+ * {@link SharedSteps}. The header map itself is recorded by {@link SignupSteps} and
  * {@link HttpSteps}, so a scenario can mix their steps with these and still read the right
  * response.
  */

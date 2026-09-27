@@ -28,7 +28,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
  * accidentally starts requiring one. Tokens the endpoints hand back are stashed under
  * {@code "signupToken"} so later steps can use them.
  *
- * <p>Assertions on status and body live in {@link RegistrationSteps} — Cucumber glue is global,
+ * <p>Assertions on status and body live in {@link SharedSteps} — Cucumber glue is global,
  * so they are shared rather than duplicated here.
  */
 public class SignupSteps {

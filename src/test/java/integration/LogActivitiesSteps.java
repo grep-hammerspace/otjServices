@@ -14,15 +14,22 @@ public class LogActivitiesSteps {
     private static final MediaType JSON = MediaType.get("application/json");
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
+    /**
+     * Gives the test user's token an account behind it, as signup would. Written straight to Mongo
+     * and upserted, because the suite's database is not wiped between scenarios: a later scenario
+     * with a different learner ID has to replace this one's.
+     */
     @Given("a registered user with learnerId {string}")
-    public void registerUser(String learnerId) throws Exception {
-        String base = (String) ScenarioContext.get("baseUrl");
-        String body = "{\"username\":\"testuser\",\"password\":\"testpass\",\"learnerId\":\"" + learnerId + "\"}";
-        Request req = HttpSteps.authenticated(new Request.Builder()
-                .url(base + "/otj-services/register"))
-                .post(RequestBody.create(body, JSON))
-                .build();
-        HTTP.newCall(req).execute().close();
+    public void registerUser(String learnerId) {
+        MongoDatabase db = (MongoDatabase) ScenarioContext.get("db");
+        db.getCollection("users").replaceOne(
+                new org.bson.Document("userId", ServerHooks.TEST_USER_ID),
+                new org.bson.Document("userId", ServerHooks.TEST_USER_ID)
+                        .append("appUsername", "testuser")
+                        .append("appPasswordHash", "$2a$12$fakehashfortesting")
+                        .append("learnerId", learnerId)
+                        .append("createdAt", new java.util.Date()),
+                new com.mongodb.client.model.ReplaceOptions().upsert(true));
     }
 
     @Given("I have already logged {string}")

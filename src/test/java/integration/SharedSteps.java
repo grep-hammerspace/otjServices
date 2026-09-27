@@ -3,42 +3,15 @@ package integration;
 import com.mongodb.client.MongoDatabase;
 import io.cucumber.java.en.And;
 import io.cucumber.java.en.Then;
-import io.cucumber.java.en.When;
-import okhttp3.*;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * Cucumber step definitions for the user registration feature.
- *
- * <p>Cucumber creates a new instance of this class for each scenario, so {@link #lastResponse}
- * is naturally isolated — there is no risk of a response from one scenario leaking into another.
- * Infrastructure handles (base URL, database) are read from {@link ScenarioContext}, which is
- * populated by {@link ServerHooks} before each scenario runs.
+ * Assertion steps shared across features: the last response's status and body, and what is
+ * stored in a user's document. Infrastructure handles (the last response, the database) are read
+ * from {@link ScenarioContext}, which {@link ServerHooks} populates before each scenario runs.
  */
-public class RegistrationSteps {
-    private static final OkHttpClient HTTP = new OkHttpClient();
-    private static final MediaType JSON = MediaType.get("application/json");
-
-    private Response lastResponse;
-
-    /** Sends a JSON POST to {@code path} with the given registration fields and stores the response. */
-    @When("I POST {string} with username {string}, password {string}, learnerId {string}")
-    public void postRegister(String path, String username, String password, String learnerId)
-        throws Exception {
-        String base = (String) ScenarioContext.get("baseUrl");
-        String body = String.format(
-            "{\"username\":\"%s\",\"password\":\"%s\",\"learnerId\":\"%s\"}",
-            username, password, learnerId);
-        Request req = HttpSteps.authenticated(new Request.Builder()
-            .url(base + path))
-            .post(RequestBody.create(body, JSON))
-            .build();
-        lastResponse = HTTP.newCall(req).execute();
-        ScenarioContext.put("lastResponseCode", lastResponse.code());
-        String responseBody = lastResponse.body() != null ? lastResponse.body().string() : "";
-        ScenarioContext.put("lastResponseBody", responseBody);
-    }
+public class SharedSteps {
 
     /** Asserts that the HTTP status code of the most recent response matches {@code expectedStatus}. */
     @Then("the response status is {int}")

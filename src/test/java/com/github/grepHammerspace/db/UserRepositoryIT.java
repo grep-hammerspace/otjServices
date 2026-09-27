@@ -33,8 +33,8 @@ class UserRepositoryIT {
     }
 
     @Test
-    void save_then_findByUserId_returnsUser() {
-        repository.save(user("uid-1", "alice"));
+    void insert_then_findByUserId_returnsUser() {
+        repository.insert(user("uid-1", "alice"));
 
         User found = repository.findByUserId("uid-1");
         assertNotNull(found);
@@ -45,27 +45,13 @@ class UserRepositoryIT {
     }
 
     @Test
-    void save_twice_upsertsNotDuplicates() {
-        repository.save(new User("uid-2", "bob", "hash1", "L002", CREATED));
-        repository.save(new User("uid-2", "bob", "hash2", "L003", CREATED));
-
-        User found = repository.findByUserId("uid-2");
-        assertNotNull(found);
-        assertEquals("hash2", found.appPasswordHash());
-        assertEquals("L003", found.learnerId());
-
-        long count = database.getCollection("users").countDocuments(Filters.eq("userId", "uid-2"));
-        assertEquals(1, count, "upsert should not create a duplicate document");
-    }
-
-    @Test
     void findByUserId_unknownUser_returnsNull() {
         assertNull(repository.findByUserId("uid-does-not-exist"));
     }
 
     @Test
     void findByAppUsername_returnsUser() {
-        repository.save(user("uid-login", "login-name"));
+        repository.insert(user("uid-login", "login-name"));
 
         User found = repository.findByAppUsername("login-name");
         assertNotNull(found);
@@ -104,7 +90,7 @@ class UserRepositoryIT {
 
     /**
      * The point of the {@code $set}: everything the caller of {@code PATCH /auth/me} never sent
-     * has to survive. A {@code save(User)} built from a partial request would blank all of it.
+     * has to survive. Replacing the whole document from a partial request would blank all of it.
      */
     @Test
     void updateLearnerId_leavesEveryOtherFieldAlone() {
@@ -120,8 +106,8 @@ class UserRepositoryIT {
     }
 
     /**
-     * Null rather than an upsert. {@code save(User)} would insert here, resurrecting a deleted
-     * account with whatever the caller happened to be holding; the resource turns this into a 404.
+     * Null rather than an upsert, which would insert here, resurrecting a deleted account with
+     * whatever the caller happened to be holding; the resource turns this into a 404.
      */
     @Test
     void updateLearnerId_unknownUser_returnsNullAndInsertsNothing() {
@@ -133,7 +119,7 @@ class UserRepositoryIT {
 
     @Test
     void storedDocument_containsNoRecoverablePassword() {
-        repository.save(user("uid-6", "frank"));
+        repository.insert(user("uid-6", "frank"));
 
         org.bson.Document doc = database.getCollection("users").find(Filters.eq("userId", "uid-6")).first();
         assertNotNull(doc);

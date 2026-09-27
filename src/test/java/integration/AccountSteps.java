@@ -26,8 +26,8 @@ import static org.junit.jupiter.api.Assertions.*;
  * actually exists, which means the token the signup handed back.
  *
  * <p>Cucumber glue is global, so shared assertions are not redefined here: status and
- * {@code contains} come from {@link RegistrationSteps}, {@code does not contain} from
- * {@link PendingSteps}, and the users-collection field check from {@link RegistrationSteps}. Only
+ * {@code contains} come from {@link SharedSteps}, {@code does not contain} from
+ * {@link PendingSteps}, and the users-collection field check from {@link SharedSteps}. Only
  * the steps this feature is the first to need are below.
  */
 public class AccountSteps {

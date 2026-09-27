@@ -7,12 +7,10 @@ import com.github.grepHammerspace.api.dto.OneAdvancedCredentials;
 import com.github.grepHammerspace.api.dto.PendingActivity;
 import com.github.grepHammerspace.api.dto.PendingResponse;
 import com.github.grepHammerspace.api.dto.PrepareResponse;
-import com.github.grepHammerspace.api.dto.RegisterRequest;
 import com.github.grepHammerspace.api.dto.SubmitResponse;
 import com.github.grepHammerspace.api.dto.SubmitWithMfaRequest;
 import com.github.grepHammerspace.api.dto.UpdateActivityRequest;
 import com.github.grepHammerspace.auth.Authenticated;
-import com.github.grepHammerspace.auth.PasswordHasher;
 import com.github.grepHammerspace.db.ActivityLogRepository;
 import com.github.grepHammerspace.db.UserRepository;
 import com.github.grepHammerspace.db.model.ActivityLog;
@@ -103,7 +101,6 @@ public class OtjServicesResource {
     private final UserRepository userRepository;
     private final ActivityLogRepository activityLogRepository;
     private final LlmService llmService;
-    private final PasswordHasher passwordHasher;
     private final LlmQuotaService llmQuotaService;
     private final Provider<Driver> keycloakDriverProvider;
     private final Provider<Driver> azurePushDriverProvider;
@@ -112,7 +109,6 @@ public class OtjServicesResource {
     public OtjServicesResource(UserStateStore userStateStore, UserRepository userRepository,
                                ActivityLogRepository activityLogRepository,
                                LlmService llmService,
-                               PasswordHasher passwordHasher,
                                LlmQuotaService llmQuotaService,
                                @Keycloak Provider<Driver> keycloakDriverProvider,
                                @AzurePush Provider<Driver> azurePushDriverProvider) {
@@ -120,7 +116,6 @@ public class OtjServicesResource {
         this.userRepository = userRepository;
         this.activityLogRepository = activityLogRepository;
         this.llmService = llmService;
-        this.passwordHasher = passwordHasher;
         this.llmQuotaService = llmQuotaService;
         this.keycloakDriverProvider = keycloakDriverProvider;
         this.azurePushDriverProvider = azurePushDriverProvider;
@@ -146,19 +141,6 @@ public class OtjServicesResource {
     }
 
     @POST
-    @Path("/register")
-    public Response register(@Valid RegisterRequest body, @Context SecurityContext sc) {
-        String userId = resolveUserState(sc);
-        log.info("Received request from user {} to do {}", userId, "register");
-        // That a learner ID was set is worth recording; the value is not — see
-        // UserRepository.updateLearnerId, which follows the same rule.
-        log.info("Registering user {} with a learner ID", userId);
-        userRepository.save(new User(userId, body.username().strip(),
-                passwordHasher.hash(body.password()), body.learnerId().strip(), Instant.now()));
-        return Response.status(Response.Status.CREATED).build();
-    }
-
-    @POST
     @Path("/log-activities")
     public Response logActivtiesWithLlmHelp(@Valid ActivityLogRequest body, @Context SecurityContext sc) {
         String userId = resolveUserState(sc);
@@ -177,8 +159,8 @@ public class OtjServicesResource {
 
         User user = userRepository.findByUserId(userId);
         if (user == null) {
-            String msg = "No registered user found for this account. " +
-                    "Call POST /otj-services/register first.";
+            // Signup creates the account, so a valid token without one means it was deleted.
+            String msg = "No account found for this session. Sign up again.";
             log.warn("User {} not found in repository", userId);
             return Response.status(Response.Status.BAD_REQUEST)
                     .entity("{\"error\": \"" + msg + "\"}").build();
@@ -231,20 +213,6 @@ public class OtjServicesResource {
         );
 
         return Response.ok(responseBody).build();
-    }
-
-    @DELETE
-    @Path("/delete-last-row")
-    public Response deleteLastRow(@Context SecurityContext sc) {
-        String userId = resolveUserState(sc);
-        log.info("Received request from user {} to do {}", userId, "delete-last-row");
-
-        boolean deleted = activityLogRepository.deleteLastActivityLog(userId);
-        if (!deleted) {
-            return Response.status(Response.Status.NOT_FOUND)
-                    .entity("{\"error\": \"No unposted activity log found for this user.\"}").build();
-        }
-        return Response.ok("{\"status\": \"ok\"}").build();
     }
 
     @GET
