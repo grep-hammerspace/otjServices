@@ -84,6 +84,12 @@ jobs:
       - name: A throwaway Loki
         run: docker run -d --name loki -p 127.0.0.1:3100:3100 docker.io/grafana/loki:3.7.8
 
+      # And where Alloy remote-writes host metrics, in place of Grafana Cloud Prometheus.
+      - name: A throwaway Prometheus
+        run: |
+          docker run -d --name prometheus -p 127.0.0.1:9090:9090 docker.io/prom/prometheus:v3.15.0 \
+            --config.file=/etc/prometheus/prometheus.yml --web.enable-remote-write-receiver
+
       # The box's certificate is installed by hand, so the rehearsal does the same, with a
       # self-signed one. Valid for more than verify's 90-day expiry check.
       - name: A throwaway origin certificate
@@ -203,6 +209,32 @@ jobs:
             || { echo "::error::the local journal lost the full client address"; exit 1; }
           echo "loki: ok ($(wc -l <<<"$edge") edge, $(wc -l <<<"$api") hours-api, $(wc -l <<<"$admin") admin-api lines)"
 
+      # The metrics path: exporter → scrape → keep-list → remote write. The labels the dashboards
+      # rely on, the root filesystem measured correctly through /var/lib/alloy, and nothing outside
+      # the keep-list sent.
+      - name: Host metrics reach Prometheus
+        run: |
+          set -euo pipefail
+          q() { curl -sfG http://127.0.0.1:9090/api/v1/query --data-urlencode "query=$1" | jq -r "$2"; }
+          mem=""
+          for _ in $(seq 1 45); do
+            mem=$(q 'node_memory_MemAvailable_bytes{instance="hours-api", job="integrations/node_exporter", env="prod"}' \
+                    '.data.result[0].value[1] // empty' || true)
+            [ -n "$mem" ] && break
+            sleep 2
+          done
+          [ -n "$mem" ] || { echo "::error::no node_memory_MemAvailable_bytes in Prometheus"; exit 1; }
+          cpu=$(q 'count(node_cpu_seconds_total{env="prod"})' '.data.result[0].value[1] // 0')
+          [ "$cpu" -gt 0 ] || { echo "::error::no node_cpu_seconds_total in Prometheus"; exit 1; }
+          # The same bytes df reports for /, give or take what was written in between.
+          fs=$(q 'node_filesystem_size_bytes{mountpoint="/", env="prod"}' '.data.result[0].value[1] // 0')
+          df=$(df -B1 --output=size / | tail -1 | tr -d ' ')
+          [ "${fs%.*}" = "$df" ] || { echo "::error::root filesystem size $fs, but df says $df"; exit 1; }
+          stray=$(q 'count by (__name__)({env="prod", __name__!~"up|node_.+"})' '.data.result | length')
+          [ "$stray" = 0 ] || { echo "::error::metrics outside the keep-list reached Prometheus"; exit 1; }
+          series=$(q 'count({env="prod"})' '.data.result[0].value[1]')
+          echo "metrics: ok ($series series, MemAvailable $mem, / $fs bytes)"
+
       - name: Diagnostics
         if: failure()
         run: |
@@ -216,3 +248,4 @@ jobs:
           sudo journalctl -u alloy -n 60 --no-pager || true
           sudo dmesg | grep 'apparmor="DENIED"' | tail -20 || true
           docker logs --tail 30 loki || true
+          docker logs --tail 30 prometheus || true

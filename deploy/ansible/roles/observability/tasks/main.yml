@@ -1,13 +1,17 @@
-# Log shipping to Grafana Cloud (ansible-migration-plan.md §4.5): Grafana Alloy, a rootful system
-# Quadlet, reads the journal and pushes three trails to Loki. Root throughout, because Alloy is a
-# system unit.
+# Telemetry to Grafana Cloud (ansible-migration-plan.md §4.5): Grafana Alloy, a rootful system
+# Quadlet, reads the journal and pushes three trails to Loki, and pushes the host's CPU, memory,
+# disk and network to Prometheus. Root throughout, because Alloy is a system unit.
 
 - name: Where Grafana Cloud is
   ansible.builtin.assert:
     that:
       - loki_push_url is match('^https?://')
       - loki_user | string | length > 0
-    fail_msg: "Set loki_push_url and loki_user in group_vars/all.yml, from the stack's Loki details page."
+      - prom_remote_write_url is match('^https?://')
+      - prom_user | string | length > 0
+    fail_msg: >-
+      Set loki_push_url and loki_user, and prom_remote_write_url and prom_user, in group_vars/all.yml,
+      from the stack's Loki and Prometheus details pages.
     quiet: true
 
 - name: Alloy's directories
@@ -56,7 +60,7 @@
     mode: "0644"
     content: |
       # Written by the observability role. Not secret: the parameter NAME, and the variable it becomes.
-      GRAFANA_CLOUD_LOGS_TOKEN {{ alloy_token_param }}
+      GRAFANA_CLOUD_TOKEN {{ alloy_token_param }}
   notify: Restart alloy
 
 # PR rehearsal only (render_env_source: fixture, from ci-vars.yml). Never set on the box.

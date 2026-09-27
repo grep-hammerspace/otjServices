@@ -6,7 +6,7 @@
 # read-only mounts, a read-only root, no capabilities, Podman's AppArmor profile, and no inbound
 # port (plan §4.5).
 [Unit]
-Description=Grafana Alloy: the box's journal to Grafana Cloud
+Description=Grafana Alloy: the box's logs and host metrics to Grafana Cloud
 After=network-online.target
 Wants=network-online.target
 
@@ -24,6 +24,12 @@ Volume=/etc/alloy:/etc/alloy:ro
 Volume=/var/lib/alloy:/var/lib/alloy
 Volume=/var/log/journal:/var/log/journal:ro
 Volume=/etc/machine-id:/etc/machine-id:ro
+# Host metrics (config.alloy, prometheus.exporter.unix): the kernel's counters and device
+# metadata, read-only. Deliberately NOT the host's /, which would put root-readable files such as
+# the origin certificate's key within Alloy's reach; disk usage is read through /var/lib/alloy.
+Volume=/proc:/host/proc:ro
+Volume=/sys:/host/sys:ro
+Volume=/run/udev/data:/run/udev/data:ro
 # Rendered from Parameter Store by ExecStartPre below, onto tmpfs, 0600 root.
 EnvironmentFile=/run/otj/alloy.env
 ReadOnly=true

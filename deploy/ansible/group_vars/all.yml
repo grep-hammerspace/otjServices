@@ -52,6 +52,12 @@ loki_user: "1801918"
 loki_labels:
   env: prod
   host: hours-api
+# From the stack's Prometheus details page: a different user ID from Loki's. Not secret either.
+prom_remote_write_url: https://prometheus-prod-55-prod-gb-south-1.grafana.net/api/prom/push
+prom_user: "3612500"
+metrics_scrape_interval: 60s
+# One token for both, from an access policy with logs:write and metrics:write for this stack and
+# nothing else. The parameter keeps the name it was created with.
 alloy_token_param: /otj/prod/grafana-cloud-logs-token
 
 # ── AWS CLI v2 ───────────────────────────────────────────────────────────────────────────────
