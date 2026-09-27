@@ -1,7 +1,3 @@
-# Telemetry to Grafana Cloud: Grafana Alloy, a rootful system
-# Quadlet, reads the journal and pushes three trails to Loki, and pushes the host's CPU, memory,
-# disk and network to Prometheus. Root throughout, because Alloy is a system unit.
-
 - name: Where Grafana Cloud is
   ansible.builtin.assert:
     that:
@@ -30,7 +26,6 @@
   loop_control:
     label: "{{ item.path }}"
 
-# ── The token, by the same mechanism as the apps' secrets ───────────────────────────────────
 - name: otj-render-env, the app role's script, for system units
   ansible.builtin.copy:
     src: "{{ role_path }}/../app/files/otj-render-env"
@@ -47,7 +42,6 @@
     group: root
     mode: "0644"
     content: |
-      # Written by the observability role. Read by otj-render-env for system units.
       SOURCE={{ render_env_source }}
       REGION={{ aws_region }}
   notify: Restart alloy
@@ -59,11 +53,9 @@
     group: root
     mode: "0644"
     content: |
-      # Written by the observability role. Not secret: the parameter NAME, and the variable it becomes.
       GRAFANA_CLOUD_TOKEN {{ alloy_token_param }}
   notify: Restart alloy
 
-# PR rehearsal only (render_env_source: fixture, from ci-vars.yml). Never set on the box.
 - name: CI only, the fixture token otj-render-env reads instead of Parameter Store
   when: render_env_source == 'fixture'
   block:
@@ -83,7 +75,6 @@
         group: root
         mode: "0600"
 
-# ── The image, then the config checked with it ───────────────────────────────────────────────
 - name: The Alloy image is present
   ansible.builtin.command: podman image exists {{ alloy_image }}
   register: observability_image_present
@@ -98,8 +89,6 @@
   ansible.builtin.command: podman pull --quiet {{ alloy_image }}
   changed_when: true
 
-# `alloy validate` with the pinned Alloy, before the file replaces the live one, so a bad config
-# never reaches a running Alloy.
 - name: config.alloy
   ansible.builtin.template:
     src: config.alloy.j2
@@ -120,12 +109,10 @@
   register: observability_quadlet
   notify: [Regenerate Alloy's unit, Restart alloy]
 
-# The daemon-reload has to happen before the first start, or the unit doesn't exist yet.
 - name: Apply unit changes now
   ansible.builtin.meta: flush_handlers
 
-# A Quadlet unit is generated, so it can't be `enabled`; its [Install] section starts it at boot.
-# In --check before the first apply the unit doesn't exist yet, and there is nothing to ask about.
+# In --check before the first apply, the unit doesn't exist yet.
 - name: Alloy running
   ansible.builtin.systemd_service:
     name: alloy.service

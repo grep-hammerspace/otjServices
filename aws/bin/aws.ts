@@ -7,11 +7,10 @@ const app = new cdk.App();
 
 const env = {
   account: process.env.CDK_DEFAULT_ACCOUNT,
-  region: "eu-west-2", // London
+  region: "eu-west-2",
 };
 
 new OtjServicesStack(app, "OtjServicesStack", { env });
 
-// Deployed once, by hand — see aws/README.md. Not part of the CI/CD workflow,
-// since CI needs the role this stack creates to already exist to authenticate.
+// Deployed by hand: CI authenticates with the role this stack creates.
 new GithubOidcStack(app, "GithubOidcStack", { env });

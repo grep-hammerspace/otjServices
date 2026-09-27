@@ -1,5 +1,3 @@
-# Written by the app role for release {{ image_tag }}. Don't edit on the box: the next converge
-# puts it back, and the nightly drift check reports the change.
 [Unit]
 Description=otjServices admin API (invite codes)
 After=network-online.target
@@ -9,10 +7,8 @@ Wants=network-online.target
 Image={{ app_image }}
 ContainerName=admin-api
 Environment=APP_ROLE=admin
-# Loopback only. This is not a defence-in-depth nicety: AdminIdentityFilter trusts the
-# Tailscale-User-Login header precisely because `tailscale serve` is the only process that can
-# reach this port. Publishing it wider silently turns that header into a self-declared identity.
-# A literal, not a variable, so it can't be widened by accident.
+# Loopback only, and a literal. AdminIdentityFilter can trust Tailscale-User-Login only because
+# tailscale serve is the sole process that reaches this port.
 PublishPort=127.0.0.1:8946:8946
 EnvironmentFile=%t/otj/admin-api.env
 LogDriver=journald

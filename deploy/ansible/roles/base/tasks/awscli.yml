@@ -1,5 +1,4 @@
-# Guarded by the installed VERSION, not by `creates:`. The bootstrap (README.md, "Building a new
-# box") installs whatever version is current, and a `creates:` guard would keep that forever.
+# Guarded by version, not `creates:`, so the bootstrap's unpinned install gets replaced.
 - name: Installed AWS CLI version
   ansible.builtin.command: /usr/local/bin/aws --version
   register: base_awscli_installed

@@ -1,13 +1,5 @@
-# One play, run on the box against itself by otj-converge, and on
-# a GitHub runner by the PR rehearsal (§8.3).
-#
-# Role order matters:
-#   - tailscale before edge, so a `serve` mapping that wrongly claims 443 is caught before HAProxy
-#     fails to bind it.
-#   - app after edge only for readability; nothing in app depends on the proxy.
-#   - observability after edge and app, so the units whose logs it ships already exist.
-#   - verify last. It is skipped in --check mode, where nothing was restarted.
-#   - otj-converge is replaced after verify, so a broken script only ever affects the NEXT run
+# Role order: tailscale before edge, so a serve mapping on 443 is caught before HAProxy fails to
+# bind. otj-converge is replaced last, so a broken one only affects the next run.
 - name: otjServices box
   hosts: localhost
   gather_facts: true

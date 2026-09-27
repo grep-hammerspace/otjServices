@@ -2,8 +2,7 @@ services:
   mongo:
     image: docker.io/library/mongo:8
     restart: unless-stopped
-    # Loopback only. Nothing outside this host has any business reaching the database directly,
-    # and the box is on a tailnet where "outside this host" includes every other device on it.
+    # Loopback only: on a tailnet, "outside this host" includes every other device.
     ports:
       - "127.0.0.1:27017:27017"
     environment:
@@ -24,8 +23,7 @@ services:
   mongo-express:
     image: docker.io/library/mongo-express:latest
     restart: unless-stopped
-    # Loopback only — this console has ME_CONFIG_BASICAUTH disabled, so anyone who can reach the
-    # port owns the database.
+    # Loopback only: basic auth is off, so anyone who reaches this port owns the database.
     ports:
       - "127.0.0.1:8081:8081"
     environment:
@@ -43,8 +41,6 @@ services:
     build:
       context: ..
       dockerfile: docker/otjService.Dockerfile
-    # Named so the admin service can reuse the built image instead of running the Maven build
-    # a second time.
     image: localhost/otj-services:local
     restart: unless-stopped
     ports:
@@ -55,10 +51,6 @@ services:
       MONGO_URI: mongodb://${MONGO_USER}:${MONGO_PASSWORD}@mongo:27017/otjdb?authSource=admin
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
       JAVA_DEBUG: ${JAVA_DEBUG:-true}
-      # Turns on the OtjDriver submission diagnostics — target URL, the exact JSON posted, and
-      # OneAdvanced's rejection body. Defaults to INFO so the payload and learner ID stay out of
-      # the log unless someone asks for them. Set OTJ_DRIVER_LOG_LEVEL=DEBUG to debug a failing
-      # submission; it needs a container recreate, not an image rebuild.
       OTJ_DRIVER_LOG_LEVEL: ${OTJ_DRIVER_LOG_LEVEL:-INFO}
     depends_on:
       mongo:
@@ -66,12 +58,7 @@ services:
     networks:
       - otj-net
 
-  # Invite-code administration. Same image as `app`, different entrypoint — see docker/start.sh.
-  #
-  # Reachable only through `tailscale serve` on the host (bootstrap.sh wires it to https://:8443).
-  # The loopback publish is what makes the Tailscale-User-Login header trustworthy; if you change
-  # it, AdminIdentityFilter stops being a security control. No ANTHROPIC_API_KEY: Dagger never
-  # constructs the LLM client in this graph.
+  # Loopback only: that is what makes Tailscale-User-Login trustworthy.
   admin:
     image: localhost/otj-services:local
     restart: unless-stopped
