@@ -29,17 +29,7 @@ import java.time.Instant;
 import java.util.OptionalLong;
 import java.util.UUID;
 
-/**
- * Anonymous authentication endpoints: signup, login and logout.
- *
- * <p>Deliberately carries <b>no</b> {@link com.github.grepHammerspace.auth.Authenticated}
- * annotation — these are the endpoints a caller reaches before holding a token, so they are
- * anonymous by construction rather than by omission. Everything else in the API is
- * {@code @Authenticated}.
- *
- * <p>Passwords arrive in request bodies here and nowhere else. Nothing in this class logs a
- * password or a raw token; the username is the most that reaches the log.
- */
+// No @Authenticated, on purpose: these are the endpoints reached before holding a token.
 @Path("/auth")
 @Produces("application/json")
 @Consumes("application/json")
@@ -49,11 +39,7 @@ public class AuthResource {
 
     private static final String BEARER_PREFIX = "Bearer ";
 
-    /**
-     * A real bcrypt hash of a passphrase no account uses. Verifying against it costs the same
-     * ~2^12 rounds as a genuine check, so an unknown username and a wrong password take the same
-     * time — without it, response latency would tell an attacker which usernames exist.
-     */
+    // Verifying against this makes an unknown username cost the same as a wrong password.
     private static final String DUMMY_HASH =
             "$2a$12$KmAXjDu8YKcsMbZIRfgItOfwgykh/XjK3U3DiLkff2tssjtqNtSdm";
 
@@ -61,25 +47,10 @@ public class AuthResource {
     private static final String INVITE_REJECTED = "{\"error\": \"Invalid, used or expired invite code\"}";
     private static final String CREDENTIALS_REJECTED = "{\"error\": \"Invalid username or password\"}";
 
-    /**
-     * Login attempts allowed per username per window.
-     *
-     * <p>Usernames are the brute-force surface — they are chosen by the user, may be guessable,
-     * and unlike a token there is no rate at which trying them is legitimate beyond a person
-     * mistyping. Successes count too: a flood of successful logins is still a flood, and
-     * excluding them would leave an attacker with a valid password an unmetered channel.
-     */
+    // Successes count too: a flood of valid logins is still a flood.
     private static final int LOGIN_LIMIT = 10;
     private static final Duration LOGIN_WINDOW = Duration.ofMinutes(15);
 
-    /**
-     * Deliberately distinct from {@link #CREDENTIALS_REJECTED}.
-     *
-     * <p>Saying "you have tried too often" discloses nothing an attacker can use: the limiter is
-     * keyed on the <em>submitted</em> username whether or not an account exists, so a 429 never
-     * reveals that one does. Telling a person who has mistyped their password to wait, rather
-     * than repeating "invalid username or password", is worth more than secrecy that isn't there.
-     */
     private static final ApiError TOO_MANY_LOGINS = new ApiError(
             "Too many login attempts for that username. Wait a few minutes and try again.");
 
@@ -102,15 +73,8 @@ public class AuthResource {
         this.rateLimiter = rateLimiter;
     }
 
-    /**
-     * Redeems an invite code and creates the account, returning a session token so that signup
-     * and login are a single round trip.
-     *
-     * <p>The code is claimed <em>before</em> the user is inserted, because the claim is the
-     * atomic step that decides who wins a contested code. A duplicate username therefore burns
-     * the code — accepted, since codes are minted by hand and re-minting is a one-liner in the
-     * Atlas UI.
-     */
+    // Claim before insert: the atomic claim decides who wins a contested code. A duplicate username
+    // burns the code.
     @POST
     @Path("/signup")
     public Response signup(@Valid SignupRequest body) {
@@ -135,15 +99,13 @@ public class AuthResource {
                 .entity(new TokenResponse(sessionTokenService.issue(userId))).build();
     }
 
-    /** Exchanges username and password for a session token. */
     @POST
     @Path("/session")
     public Response login(@Valid SessionRequest body) {
         String username = body.username().strip();
 
-        // Before the lookup and before the bcrypt verify below. Those are the costs being shed —
-        // checking afterwards would still pay ~2^12 rounds per attempt and limit nothing that
-        // matters.
+        // Before the lookup and the bcrypt verify: they are the cost being shed, and limiting
+        // before the lookup means a 429 can't reveal whether the user exists.
         OptionalLong retryAfter = rateLimiter.tryAcquire(
                 "login:user:" + username, LOGIN_LIMIT, LOGIN_WINDOW);
         if (retryAfter.isPresent()) {
@@ -170,11 +132,6 @@ public class AuthResource {
         return Response.ok(new TokenResponse(sessionTokenService.issue(user.userId()))).build();
     }
 
-    /**
-     * Revokes the presented token. Anonymous, so the token is read straight off the header
-     * rather than from a {@code SecurityContext}, and the response is 204 whether or not
-     * anything was deleted — logging out twice is not an error.
-     */
     @DELETE
     @Path("/session")
     public Response logout(@HeaderParam(HttpHeaders.AUTHORIZATION) String header) {

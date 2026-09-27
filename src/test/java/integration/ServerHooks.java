@@ -18,31 +18,13 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.fail;
 
-/**
- * Cucumber lifecycle hooks that manage infrastructure for each scenario.
- *
- * <p>Before each scenario two fresh Grizzly servers are started on random available ports and
- * wired via {@link TestAppComponent} / {@link TestAppModule}: the main API under
- * {@code "baseUrl"} and the admin API under {@code "adminBaseUrl"}. Because endpoints now require
- * a bearer token, the hook issues a real session token for {@code test-user-id} through the
- * production {@link com.github.grepHammerspace.auth.SessionTokenService} and publishes it as
- * {@code "authToken"} — step definitions attach it as {@code Authorization: Bearer}. After the
- * scenario both servers are shut down. The MongoDB Testcontainer is shared across all scenarios in
- * the suite — it is started lazily on the first scenario and left running for the remainder of
- * the test run. Note that because the database is not wiped between scenarios, tests should not
- * depend on the collection being empty.
- */
+// The Mongo container is shared and never wiped between scenarios.
 public class ServerHooks {
     static final MongoDBContainer MONGO = new MongoDBContainer("mongo:8");
     static final String TEST_USER_ID = "test-user-id";
-    /** The one login {@link TestAppModule} allowlists — anything else must be refused. */
     static final String ADMIN_LOGIN = "admin@test.tailnet";
 
-    /**
-     * The OneAdvanced credentials and MFA code every scenario sends, and that no log line may
-     * ever contain. Distinctive on purpose: a check against {@code "password"} would pass by
-     * coincidence, whereas these strings can only appear if something logged the real value.
-     */
+    // Distinctive on purpose: these can only appear in a log if something logged the real value.
     static final String OA_USERNAME = "leaktest@example.invalid";
     static final String OA_PASSWORD = "pw-DO-NOT-LOG-9f2a";
     static final String OA_MFA_CODE = "919191";
@@ -53,12 +35,6 @@ public class ServerHooks {
     private ListAppender<ILoggingEvent> logCapture;
     private Level originalRootLevel;
 
-    /**
-     * Starts the MongoDB container if not already running, boots a Grizzly server on a random
-     * free port with the authentication filter registered, and publishes {@code "baseUrl"},
-     * {@code "db"} and {@code "authToken"} into {@link ScenarioContext} for use by step
-     * definitions.
-     */
     @Before
     public void start() throws IOException {
         if (!MONGO.isRunning()) MONGO.start();
@@ -77,9 +53,6 @@ public class ServerHooks {
         server = ServerBootstrap.start(port, component.otjServicesResource(), component.authResource(),
             component.accountResource(), component.authenticationFilter());
 
-        // The admin API is a genuinely separate server in production, so the tests run it as one
-        // too — on its own port, with its own resources. Booting it inside the main server would
-        // let a scenario pass while the real split was broken.
         adminServer = ServerBootstrap.start(adminPort, component.adminInviteResource(),
             component.adminIdentityFilter());
 
@@ -96,7 +69,6 @@ public class ServerHooks {
         try (ServerSocket s = new ServerSocket(0)) { return s.getLocalPort(); }
     }
 
-    /** Shuts both Grizzly servers down after each scenario, then audits the captured log. */
     @After
     public void stop() {
         if (server != null) server.shutdownNow();
@@ -108,14 +80,8 @@ public class ServerHooks {
         }
     }
 
-    /**
-     * Captures every log event the scenario produces, with the root logger opened up to TRACE.
-     *
-     * <p>TRACE rather than the configured level on purpose. Asserting at INFO would only prove
-     * that the lines currently enabled are clean, not that the code never builds the string —
-     * and the whole reason this guard exists is that {@code logback.xml} used to pin the two
-     * drivers to DEBUG, which is what put Microsoft flow tokens into the production log.
-     */
+    // TRACE, not the configured level: this proves the code never builds the string, not just that
+    // the enabled lines are clean.
     private void startLogCapture() {
         ch.qos.logback.classic.Logger root =
                 (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(org.slf4j.Logger.ROOT_LOGGER_NAME);
@@ -137,16 +103,8 @@ public class ServerHooks {
         root.setLevel(originalRootLevel);
     }
 
-    /**
-     * Fails the scenario if any sentinel credential reached the log.
-     *
-     * <p>Runs after every scenario rather than as an opt-in {@code Then} step, so a scenario
-     * added later is covered without anyone remembering to ask for it.
-     *
-     * <p>Checks three places, because the formatted message alone would miss most of the real
-     * leaks: the drivers put URLs into <em>exception</em> messages, and {@code log.warn(msg, e)}
-     * keeps those in the throwable proxy rather than the message.
-     */
+    // Checks message, arguments and the throwable chain: the drivers put URLs in exception
+    // messages.
     private void assertNothingLeaked() {
         if (logCapture == null) return;
         List<String> offenders = new ArrayList<>();
@@ -176,7 +134,7 @@ public class ServerHooks {
         }
     }
 
-    /** Names the secret without repeating it — this message itself ends up in CI output. */
+    // Names the secret without repeating it: this message ends up in CI output.
     private static String describe(String secret) {
         if (secret.equals(OA_USERNAME)) return "the OneAdvanced username";
         if (secret.equals(OA_PASSWORD)) return "the OneAdvanced password";

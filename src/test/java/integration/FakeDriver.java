@@ -7,20 +7,9 @@ import com.github.grepHammerspace.web.PrepareResult;
 import java.io.IOException;
 import java.util.List;
 
-/**
- * A {@link Driver} that records what it was handed and makes no network call.
- *
- * <p>Every other production class in {@link TestAppModule} is the real one, but the drivers
- * cannot be: they dial Keycloak and {@code login.microsoftonline.com} for real. This fake is what
- * lets a scenario prove the credentials on the request reach {@code prepare} unchanged, and that
- * the learner ID reaching {@code submitPendingOtjs} is the account's current one.
- *
- * <p>The recorded credentials are held so a test can assert on them. That is the one place in the
- * suite where a password is deliberately retained, and the sentinel values in
- * {@link ServerHooks#SECRETS} are what the log guard hunts for.
- */
+// The one place in the suite that keeps a password on purpose. ServerHooks' log guard hunts for
+// these sentinel values.
 public class FakeDriver implements Driver {
-
     private PrepareResult nextResult = PrepareResult.mfaPushSent();
     private IOException nextFailure = null;
 
@@ -31,12 +20,10 @@ public class FakeDriver implements Driver {
     private volatile String submittedLearnerId;
     private volatile int prepareCalls = 0;
 
-    /** Scripts what the next {@code prepare} returns. */
     public void willReturn(PrepareResult result) {
         this.nextResult = result;
     }
 
-    /** Scripts {@code prepare} to fail, as a wrong password would. */
     public void willFail(IOException failure) {
         this.nextFailure = failure;
     }

@@ -1,6 +1,5 @@
-# Put an older release back: its app image AND its box config together
-# Uses the otj-converge from THAT release's image, not the copy on
-# the box, so a broken script can't block the way back.
+# Uses the otj-converge from that release's image, so a broken copy on the box can't block the way
+# back.
 name: rollback
 
 on:
@@ -12,10 +11,10 @@ on:
         type: string
 
 permissions:
-  id-token: write # OIDC, for the deploy role
+  id-token: write
   contents: read
 
-# One thing touches the box at a time: every box workflow, and deploy.yml, share this group.
+# Shared by every workflow that touches the box, so only one does at a time.
 concurrency:
   group: box
   cancel-in-progress: false

@@ -21,26 +21,8 @@ import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
 
-/**
- * MongoDB-backed store for signup invite codes.
- *
- * <p>Two callers, with very different exposure. {@link #claim} is reached anonymously from
- * {@code POST /auth/signup} and is the only method on the internet-facing path. The rest —
- * {@link #create}, {@link #list}, {@link #revoke} — back the admin API, which is reachable only
- * over the tailnet. A document looks like:
- *
- * <pre>{@code
- * { "code": "OTJ-7F3K-9QMX", "used": false, "note": "for Sam",
- *   "createdAt": ISODate, "expiresAt": ISODate, "usedBy": null, "usedAt": null,
- *   "createdBy": "sam@example.com", "revokedAt": null, "revokedBy": null }
- * }</pre>
- *
- * <p>{@code createdBy} and {@code revokedBy} are absent on codes minted by hand before the admin
- * API existed; every read tolerates that.
- */
 @Singleton
 public class InviteCodeRepository {
-
     private static final Logger log = LoggerFactory.getLogger(InviteCodeRepository.class);
 
     private final MongoCollection<Document> collection;
@@ -51,19 +33,14 @@ public class InviteCodeRepository {
         this(database, Clock.systemUTC());
     }
 
-    /** Visible for tests — lets expiry be driven by a fixed clock. */
     InviteCodeRepository(MongoDatabase database, Clock clock) {
         this.collection = database.getCollection("inviteCodes");
         this.clock = clock;
         collection.createIndex(Indexes.ascending("code"), new IndexOptions().unique(true));
     }
 
-    /**
-     * Atomically claims an unused, unexpired code. Returns true if this call won the claim.
-     *
-     * <p>The match and the write happen in one {@code findOneAndUpdate}, so there is no
-     * read-then-write gap for two people racing the same code to slip through.
-     */
+    // One findOneAndUpdate: no gap for two people racing a code. It knows nothing about revocation
+    // (revoke pulls expiresAt back instead); keep it that way.
     public boolean claim(String code, String usedByUserId) {
         Date now = Date.from(clock.instant());
         Document claimed = collection.findOneAndUpdate(
@@ -84,13 +61,7 @@ public class InviteCodeRepository {
         return true;
     }
 
-    /**
-     * Inserts a freshly minted code.
-     *
-     * <p>Lets a {@link MongoWriteException} escape on a duplicate {@code code} rather than
-     * swallowing it: the caller generates codes randomly, so a collision means the generator
-     * is broken, and retrying around it would hide that.
-     */
+    // A duplicate code escapes rather than being retried: it means the generator is broken.
     public InviteCode create(String code, String note, Instant expiresAt, String createdBy) {
         InviteCode invite = new InviteCode(code, note, false, null, null,
                 clock.instant(), expiresAt, createdBy, null, null);
@@ -99,25 +70,16 @@ public class InviteCodeRepository {
         return invite;
     }
 
-    /** All codes, newest first. The collection is operator-sized, so this is deliberately unpaged. */
     public List<InviteCode> list() {
         List<InviteCode> codes = new ArrayList<>();
         collection.find().sort(Sorts.descending("createdAt")).forEach(doc -> codes.add(fromDocument(doc)));
         return codes;
     }
 
-    /** Outcome of a revocation — distinguished so the resource can map each to its own status. */
     public enum RevokeResult { REVOKED, NOT_FOUND, ALREADY_USED }
 
-    /**
-     * Kills an unclaimed code.
-     *
-     * <p>Sets {@code revokedAt}/{@code revokedBy} for the audit trail and pulls {@code expiresAt}
-     * back to now, which is what actually stops it: {@link #claim} already refuses anything whose
-     * expiry has passed, so revocation needs no change to that filter. The update is conditional
-     * on {@code used: false} in the same operation, so a code being claimed concurrently either
-     * loses the race and is revoked, or wins it and reports {@link RevokeResult#ALREADY_USED}.
-     */
+    // Pulling expiresAt back to now is what stops the code. Conditional on used: false, so a
+    // concurrent claim either loses or yields ALREADY_USED.
     public RevokeResult revoke(String code, String revokedBy) {
         Date now = Date.from(clock.instant());
         Document revoked = collection.findOneAndUpdate(
@@ -134,7 +96,6 @@ public class InviteCodeRepository {
             return RevokeResult.REVOKED;
         }
 
-        // The filter matched nothing: either there is no such code, or it is already claimed.
         boolean exists = collection.countDocuments(Filters.eq("code", code)) > 0;
         log.info("Invite code revocation by {} rejected — {}", revokedBy, exists ? "already used" : "unknown code");
         return exists ? RevokeResult.ALREADY_USED : RevokeResult.NOT_FOUND;

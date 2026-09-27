@@ -7,11 +7,9 @@ import okhttp3.*;
 import org.bson.Document;
 
 public class HttpSteps {
-
     private static final OkHttpClient HTTP = new OkHttpClient();
     private static final MediaType JSON = MediaType.get("application/json");
 
-    /** Attaches the scenario's bearer token (issued by {@link ServerHooks}) if one is present. */
     static Request.Builder authenticated(Request.Builder builder) {
         String token = (String) ScenarioContext.get("authToken");
         if (token != null) builder.header("Authorization", "Bearer " + token);
@@ -22,8 +20,6 @@ public class HttpSteps {
         String responseBody = response.body() != null ? response.body().string() : "";
         ScenarioContext.put("lastResponseCode", response.code());
         ScenarioContext.put("lastResponseBody", responseBody);
-        // Headers too: Retry-After is the first response header this API sets, and a step that
-        // asserted on a stale header map would pass or fail for the wrong reason.
         ScenarioContext.put("lastResponseHeaders", response.headers());
     }
 

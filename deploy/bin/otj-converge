@@ -1,15 +1,7 @@
 #!/usr/bin/env bash
-# otj-converge <sha> [--check]
-# otj-converge --version
-#
-# The one script on the box. Deploys a release, re-applies the
-# box's config, and fixes drift, which are all the same thing: pull the image for <sha>, take the
-# playbook out of it, and run it against this box. Run as root, by CI through `ssm send-command`
-# or by hand in an SSM session. --check shows what would change and changes nothing.
-#
-# Deliberately plain and top to bottom, so it can be read in an emergency. It is installed by
-# hand once (deploy/ansible/README.md, "Building a new box"), and after that by the playbook, last, so a broken
-# copy only affects the next run.
+# otj-converge <sha> [--check] | --version
+# Pulls <sha>'s image, takes the playbook out of it and runs it against this box. Kept plain so it
+# can be read in an emergency.
 set -euo pipefail
 
 VERSION=1
@@ -27,8 +19,7 @@ fi
 
 sha="${1:-}"
 mode="${2:-}"
-# The SHA arrives from a workflow input. Only a full lowercase commit SHA gets anywhere near a
-# command line.
+# Only a full lowercase SHA gets near a command line.
 [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || die "usage: otj-converge <40-char commit sha> [--check]"
 [[ -z "$mode" || "$mode" == "--check" ]] || die "unknown option '$mode'"
 [[ $EUID -eq 0 ]] || die "run as root"
@@ -38,7 +29,6 @@ dest="$RELEASES/$sha"
 
 echo "==> otj-converge $VERSION: $sha${mode:+ ($mode)}"
 
-# 1. What this script itself needs. A no-op after the first run; the playbook owns them after.
 export DEBIAN_FRONTEND=noninteractive
 if ! command -v ansible-playbook >/dev/null || ! command -v podman >/dev/null; then
   apt-get update -q
@@ -46,9 +36,7 @@ if ! command -v ansible-playbook >/dev/null || ! command -v podman >/dev/null; t
 fi
 command -v aws >/dev/null || die "the AWS CLI is missing: deploy/ansible/README.md, \"Building a new box\""
 
-# 2–3. The release's playbook, read out of its image. As root, into root's storage, because on a
-# blank box otjapp doesn't exist yet. The app role pulls again into otjapp's storage, where the
-# containers actually run. Kept on disk so a rollback or a re-run doesn't need to extract again.
+# As root: on a blank box otjapp doesn't exist yet.
 if [[ ! -d "$dest" ]]; then
   echo "==> Extracting the playbook from $image"
   aws ecr get-login-password --region "$REGION" \
@@ -63,15 +51,12 @@ if [[ ! -d "$dest" ]]; then
   mv "$tmp" "$dest"
 fi
 
-# Keep the $KEEP most recently USED releases. Touching this one first means a rollback to an old
-# SHA can't prune the release it's about to run. Directory names are hex SHAs, so ls is safe here.
+# Touched first, so a rollback can't prune the release it's about to run.
 touch "$dest"
 rm -rf "$RELEASES"/.extract.*
 # shellcheck disable=SC2012
 ls -1dt "$RELEASES"/*/ | tail -n +$((KEEP + 1)) | xargs -r rm -rf
 
-# 4–5. Apply. The apt copy of ansible-playbook, by full path: it's the version the roles are
-# written for.
 cd "$dest/ansible"
 args=(-i inventory.ini site.yml -e "image_tag=$sha")
 [[ "$mode" == "--check" ]] && args+=(--check --diff)

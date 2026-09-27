@@ -35,7 +35,6 @@ Feature: Preparing a OneAdvanced session and submitting pending activities
     And the response body contains "login_complete"
     And the response body does not contain "challengeNumber"
 
-  # The driver's own message names the URL it failed on, and that URL carries login_hint=<username>.
   Scenario: Rejected credentials give one fixed message and no detail
     Given an unused invite code "OTJ-PRE-0004" expiring in 7 days
     And I sign up with inviteCode "OTJ-PRE-0004", username "prep4", password "pw", learnerId "L-4"
@@ -60,8 +59,6 @@ Feature: Preparing a OneAdvanced session and submitting pending activities
     Then the response status is 409
     And the response body contains "No prepared session"
 
-  # AzureIdDriver.completeMfa ignores the token it is handed. Without the flow check this call
-  # would be accepted and start a second Microsoft poll racing the one prepare already started.
   Scenario: A typed code is refused against an Azure push session
     Given an unused invite code "OTJ-PRE-0007" expiring in 7 days
     And I sign up with inviteCode "OTJ-PRE-0007", username "prep7", password "pw", learnerId "L-7"
@@ -72,10 +69,6 @@ Feature: Preparing a OneAdvanced session and submitting pending activities
     Then the response status is 409
     And the response body contains "Microsoft Authenticator"
 
-  # The rule this replaces: a correction used to reach only what was logged after it, because the
-  # drivers read the learner ID off the first pending row. It is now read from the account at
-  # submit time, so queued rows post under the corrected value. The stored row is left alone as a
-  # record of what was intended when it was written.
   Scenario: A corrected learner ID applies to activities already queued
     Given an unused invite code "OTJ-PRE-0008" expiring in 7 days
     And I sign up with inviteCode "OTJ-PRE-0008", username "prep8", password "pw", learnerId "L-TYPO"
@@ -91,10 +84,8 @@ Feature: Preparing a OneAdvanced session and submitting pending activities
     And the "azure" driver submitted with learnerId "L-FIXED"
     And the newest activity log for user "prep8" has learnerId "L-TYPO"
 
-  # The learner ID is server-side, so the request has no business carrying one. Jersey's Jackson
-  # provider rejects unknown properties by default, which turns "silently ignored" into "refused"
-  # — the stronger of the two. Pinned here because a future ObjectMapper with
-  # FAIL_ON_UNKNOWN_PROPERTIES disabled would quietly downgrade it.
+  # Pinned: an ObjectMapper with FAIL_ON_UNKNOWN_PROPERTIES off would silently accept a learnerId
+  # here.
   Scenario: A learner ID in the request body is refused
     Given an unused invite code "OTJ-PRE-0009" expiring in 7 days
     And I sign up with inviteCode "OTJ-PRE-0009", username "prep9", password "pw", learnerId "L-REAL"

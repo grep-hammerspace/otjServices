@@ -18,8 +18,6 @@ Feature: Login rate limiting
     And the response header "Retry-After" is a positive integer
     And the response body contains "Too many login attempts"
 
-  # The limiter is keyed on the submitted username whether or not an account exists, so a 429
-  # cannot be used to discover which usernames are real.
   Scenario: An unknown username is limited the same way
     When I POST "/auth/session" with username "no-such-account", password "wrong" 10 times
     Then the response status is 401
@@ -34,8 +32,6 @@ Feature: Login rate limiting
     When I POST "/auth/session" with username "bystander", password "correct-horse"
     Then the response status is 200
 
-  # Successes count too. A flood of valid logins is still a flood, and excluding them would leave
-  # an attacker holding a correct password an unmetered channel for minting tokens.
   Scenario: Successful logins count towards the limit
     Given an unused invite code "OTJ-RL-0003" expiring in 7 days
     And I sign up with inviteCode "OTJ-RL-0003", username "chatty", password "correct-horse", learnerId "L-RL3"

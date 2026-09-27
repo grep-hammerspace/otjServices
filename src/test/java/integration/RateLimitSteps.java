@@ -16,20 +16,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/**
- * Step definitions for {@code rate_limiting.feature}.
- *
- * <p>Adds the two things no existing step class does: repeating a login, and asserting on a
- * response <em>header</em>. {@code Retry-After} is the first header this API sets, so every other
- * assertion in the suite looks only at status and body.
- *
- * <p>Shared assertions are not redefined here; status and {@code contains} come from
- * {@link SharedSteps}. The header map itself is recorded by {@link SignupSteps} and
- * {@link HttpSteps}, so a scenario can mix their steps with these and still read the right
- * response.
- */
 public class RateLimitSteps {
-
     private static final OkHttpClient HTTP = new OkHttpClient();
     private static final MediaType JSON = MediaType.get("application/json");
     private static final ObjectMapper MAPPER = new ObjectMapper();
@@ -50,8 +37,6 @@ public class RateLimitSteps {
                 + "\n  body:    " + ScenarioContext.get("lastResponseBody")
                 + "\n  headers: " + ScenarioContext.get("lastResponseHeaders"));
 
-        // RFC 9110 also allows an HTTP-date, but delay-seconds is what a client can act on
-        // without parsing a date, and it is what this service sends.
         long seconds = Long.parseLong(value.strip());
         assertTrue(seconds > 0, header + " should be a positive number of seconds, was " + seconds);
     }
@@ -63,7 +48,6 @@ public class RateLimitSteps {
 
     private static String headerValue(String header) {
         Headers headers = (Headers) ScenarioContext.get("lastResponseHeaders");
-        // OkHttp's get() is already case-insensitive, matching the wire.
         return headers == null ? null : headers.get(header);
     }
 

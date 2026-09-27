@@ -4,7 +4,6 @@ import jakarta.ws.rs.GET;
 import jakarta.ws.rs.Path;
 import jakarta.ws.rs.core.Response;
 
-/** Liveness probe endpoint. */
 @Path("/health")
 public class HealthResource {
     @GET

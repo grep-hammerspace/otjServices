@@ -11,21 +11,11 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-/**
- * Covers the mapping from the model's typed output onto the persistence types.
- *
- * <p>These replace the previous tests against {@code processResponse}, which exercised
- * hand-rolled JSON handling (fence stripping, {@code time-spent} splitting, error-object
- * detection). Structured output removed that code, so what is left worth testing is the
- * field mapping itself.
- */
 class LlmServiceTest {
-
     private LlmServiceImpl service;
 
     @BeforeEach
     void setUp() {
-        // null client — toResult does not call it
         service = new LlmServiceImpl(null);
     }
 
@@ -122,9 +112,6 @@ class LlmServiceTest {
 
     @Test
     void startTimeCopiedVerbatim() {
-        // A line with no start time is now a missing_start_time error rather than an entry, so
-        // every entry reaching this mapper carries a real HH:MM that OtjDriver can render as
-        // "THH:MM:00". An empty one used to produce the unparseable "T:00" the API rejects.
         ParsedActivities parsed = of(
                 List.of(new Entry("2026/05/30", 1, 0, "09:00", "Started at nine")),
                 List.of());
@@ -160,8 +147,6 @@ class LlmServiceTest {
 
     @Test
     void unitIdAndActivityTypeAreLeftAtDefaults() {
-        // OtjDriver supplies the real unitId and activityType when posting; the parser must not
-        // invent them.
         ParsedActivities parsed = of(
                 List.of(new Entry("2026/05/30", 1, 0, "09:00", "Work")),
                 List.of());

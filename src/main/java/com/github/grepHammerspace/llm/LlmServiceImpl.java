@@ -31,12 +31,8 @@ public class LlmServiceImpl implements LlmService {
 
     private static final Model MODEL = Model.CLAUDE_HAIKU_4_5;
 
-    /**
-     * A ceiling, not a budget — output is billed on tokens actually generated, so lowering this
-     * would save nothing. It only bounds a runaway generation. Kept generous because a truncated
-     * response is invalid JSON that fails the typed parse outright (see the MAX_TOKENS check
-     * below) — a worse failure than the cost it would avoid.
-     */
+    // A ceiling, not a budget: output is billed per token generated, and a truncated response fails
+    // the parse outright.
     private static final long MAX_TOKENS = 2048L;
 
     private final AnthropicClient client;
@@ -50,7 +46,6 @@ public class LlmServiceImpl implements LlmService {
 
     @Override
     public LlmResult parseActivities(String diff, String today, String userId, String learnerId) {
-
         String userMessage = "Today's date: " + today + "\n\nNew activity content to log:\n" + diff;
 
         log.info("Sending request to LLM (model: {})", MODEL);
@@ -60,10 +55,8 @@ public class LlmServiceImpl implements LlmService {
                 .model(MODEL)
                 .maxTokens(MAX_TOKENS)
                 .system(systemPrompt)
-                // Opportunistic lower-latency routing; a no-op without a Priority Tier commitment.
                 .serviceTier(MessageCreateParams.ServiceTier.AUTO)
                 .addUserMessage(userMessage)
-                // Constrains the response to ParsedActivities — there is no JSON to hand-parse.
                 .outputConfig(ParsedActivities.class)
                 .build();
 
@@ -94,8 +87,6 @@ public class LlmServiceImpl implements LlmService {
         log.info("LLM call complete in {} ms (model: {}, {} in / {} out tokens)",
                 elapsedMs, MODEL, message.usage().inputTokens(), message.usage().outputTokens());
 
-        // A truncated response is unrecoverable: the payload is cut mid-JSON and deserialisation
-        // fails with a far less obvious error than this one.
         if (message.stopReason().filter(StopReason.MAX_TOKENS::equals).isPresent()) {
             String msg = "The LLM response was cut off at the " + MAX_TOKENS + "-token limit, " +
                     "so the structured result is incomplete. " +
@@ -120,7 +111,6 @@ public class LlmServiceImpl implements LlmService {
         return toResult(parsed, userId, learnerId);
     }
 
-    /** Visible for testing: maps the model's typed output onto the persistence types. */
     LlmResult toResult(ParsedActivities parsed, String userId, String learnerId) {
         log.info("LLM returned {} entry/entries and {} error(s)",
                 parsed.entries().size(), parsed.errors().size());

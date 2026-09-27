@@ -13,8 +13,6 @@ Feature: The signed-in account
     And the response body contains "readme"
     And the response body contains "L-READ"
 
-  # The assertion worth writing first: AccountResponse is the seam that keeps the hash off the
-  # wire, and a future refactor that serialises User directly would pass every other scenario here.
   Scenario: The account response carries nothing but the username and learner ID
     Given an unused invite code "OTJ-ACC-0002" expiring in 7 days
     And I sign up with inviteCode "OTJ-ACC-0002", username "narrow", password "pw", learnerId "L-NARROW"
@@ -93,8 +91,6 @@ Feature: The signed-in account
     And user "toolong" in the users collection has fields:
       | learnerId | L-KEEP |
 
-  # No format check, deliberately: signup applies none, so this endpoint must not be stricter than
-  # the door the value came in through. Only OneAdvanced knows what a real learner ID looks like.
   Scenario: A learner ID in an unexpected format is still accepted
     Given an unused invite code "OTJ-ACC-0013" expiring in 7 days
     And I sign up with inviteCode "OTJ-ACC-0013", username "oddformat", password "pw", learnerId "L-KEEP"
@@ -116,13 +112,6 @@ Feature: The signed-in account
     Then the response status is 200
     And the newest activity log for user "newrows" has learnerId "L-AFTER"
 
-  # The no-back-fill rule, pinned: a correction does not rewrite rows already written, which keep
-  # the old value as a record of what was intended at the time.
-  #
-  # Note this is only about the *stored* row. Where those rows get posted is a separate question,
-  # and the answer changed: submission reads the learner ID from the account, so a correction does
-  # reach queued activities. That half is pinned in prepare_and_submit.feature — asserting the
-  # stored row here would not have caught the change on its own.
   Scenario: An activity logged before the correction keeps the old learner ID
     Given an unused invite code "OTJ-ACC-0015" expiring in 7 days
     And I sign up with inviteCode "OTJ-ACC-0015", username "oldrows", password "pw", learnerId "L-BEFORE"

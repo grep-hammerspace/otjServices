@@ -1,12 +1,10 @@
-# The public listener on 443: HAProxy from Ubuntu main. Config from deploy/haproxy/.
 - name: HAProxy
   ansible.builtin.apt:
     name: haproxy
     state: present
 
-# The origin certificate is installed BY HAND (README.md, "Building a new box") and never copied,
-# templated or read here: any task that did would print the private key under --diff, and that
-# output reaches CloudWatch and the Actions job. `stat` sees only its metadata.
+# Never copied, templated or read: --diff would print the private key into CloudWatch and the
+# Actions log.
 - name: The origin certificate is in place
   ansible.builtin.stat:
     path: "{{ origin_cert_path }}"
@@ -38,8 +36,6 @@
     mode: "0644"
   notify: Reload haproxy
 
-# Checked with the installed HAProxy before it replaces the live file, so a bad config never
-# reaches a running proxy.
 - name: haproxy.cfg
   ansible.builtin.copy:
     src: "{{ playbook_dir }}/../haproxy/haproxy.cfg"
@@ -50,8 +46,8 @@
     validate: haproxy -c -q -f %s
   notify: Reload haproxy
 
-# journald allows 10,000 messages per 30 s per unit by default, then silently drops the rest. A
-# traffic burst is exactly when the access log matters, so the limit is off for HAProxy.
+# journald drops everything past 10,000 messages per 30 s by default; a burst is when the access log
+# matters.
 - name: haproxy.service drop-in directory
   ansible.builtin.file:
     path: /etc/systemd/system/haproxy.service.d

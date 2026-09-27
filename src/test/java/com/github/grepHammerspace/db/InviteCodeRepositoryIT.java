@@ -27,7 +27,6 @@ import java.util.stream.IntStream;
 import static org.junit.jupiter.api.Assertions.*;
 
 class InviteCodeRepositoryIT {
-
     static final MongoDBContainer MONGO = new MongoDBContainer("mongo:8");
     static MongoDatabase database;
     static InviteCodeRepository repository;
@@ -107,10 +106,6 @@ class InviteCodeRepositoryIT {
                 "an hour on, it is still live");
     }
 
-    /**
-     * The reason {@code claim} is a single {@code findOneAndUpdate} rather than a read followed by
-     * a write: eight threads race the same code from a start gate, and exactly one may win.
-     */
     @Test
     void claim_underContention_exactlyOneWinner() throws Exception {
         mint("CODE-RACE", NOW.plus(Duration.ofDays(7)));
@@ -160,10 +155,6 @@ class InviteCodeRepositoryIT {
                 "a freshly minted code must be usable without any further setup");
     }
 
-    /**
-     * The point of revocation: {@code claim} is never told about it, so this proves the expiry
-     * rewrite is what actually stops the code.
-     */
     @Test
     void revoke_unusedCode_blocksTheSubsequentClaim() {
         repository.create("CODE-REVOKED", "oops", NOW.plus(Duration.ofDays(7)), "admin@example.com");
@@ -186,10 +177,6 @@ class InviteCodeRepositoryIT {
                 repository.revoke("CODE-NEVER-EXISTED", "admin@example.com"));
     }
 
-    /**
-     * Refusing rather than silently succeeding matters: the account the code created still
-     * exists, so reporting success would tell an operator they had undone something they hadn't.
-     */
     @Test
     void revoke_alreadyClaimedCode_isRefused() {
         repository.create("CODE-CLAIMED", "", NOW.plus(Duration.ofDays(7)), "admin@example.com");
@@ -244,7 +231,6 @@ class InviteCodeRepositoryIT {
         assertEquals(InviteCode.Status.EXPIRED, statusOf("CODE-STATUS-EXPIRED"));
     }
 
-    /** A claimed code stays USED once its original expiry passes — the account it made is real. */
     @Test
     void statusAt_usedBeatsExpired() {
         repository.create("CODE-STATUS-BOTH", "", NOW.plus(Duration.ofDays(1)), "admin@example.com");
