@@ -105,7 +105,7 @@ deploy/                   self-host path: podman-compose.yaml, bootstrap.sh, she
 scripts/                  (tailscale branch only) `otj` CLI for hand-testing the API
 ```
 
-Docs worth knowing about (root): `deployment-checklist.md` (AWS bring-up),
+Docs worth knowing about (root): `README.md` (the architecture diagrams), `deployment-checklist.md` (AWS bring-up),
 `steps-04-08-implementation-plan.md` (the multi-user rollout plan; step 08 still open),
 `ansible-migration-plan.md` (building the box with Ansible) and `ansible-deploy-checklist.md`
 (its order of operations), `notes.md` (idea backlog). Finished plans and API specs are deleted once they land; git
