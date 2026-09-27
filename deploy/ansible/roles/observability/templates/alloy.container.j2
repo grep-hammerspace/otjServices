@@ -3,7 +3,8 @@
 #
 # ROOTFUL, unlike the apps, because it reads both the system journal (HAProxy) and otjapp's user
 # journal (the apps), and a rootless container can read neither. Locked down to make up for it:
-# read-only mounts, a read-only root, no capabilities, and no inbound port (plan §4.5).
+# read-only mounts, a read-only root, no capabilities, Podman's AppArmor profile, and no inbound
+# port (plan §4.5).
 [Unit]
 Description=Grafana Alloy: the box's journal to Grafana Cloud
 After=network-online.target
@@ -27,7 +28,11 @@ Volume=/etc/machine-id:/etc/machine-id:ro
 EnvironmentFile=/run/otj/alloy.env
 ReadOnly=true
 DropCapability=all
-NoNewPrivileges=true
+# No NoNewPrivileges=, deliberately. On Ubuntu 24.04 it stops the container from entering Podman's
+# containers-default AppArmor profile, so Alloy is left under Ubuntu's `crun` profile, which has
+# no network rule: every socket() is denied ("listen tcp …: socket: permission denied"). It would
+# add little anyway: with every capability out of the bounding set, a setuid or file-capability
+# binary has nothing to gain.
 
 [Service]
 # otj-render-env is per-user by default; these point it at the system unit's files instead.

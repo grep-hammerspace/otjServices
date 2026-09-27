@@ -214,4 +214,5 @@ jobs:
           sudo journalctl "_UID=$uid" -n 80 --no-pager || true
           sudo journalctl -u haproxy -n 30 --no-pager || true
           sudo journalctl -u alloy -n 60 --no-pager || true
+          sudo dmesg | grep 'apparmor="DENIED"' | tail -20 || true
           docker logs --tail 30 loki || true
