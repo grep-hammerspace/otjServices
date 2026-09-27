@@ -14,11 +14,7 @@ public class LogActivitiesSteps {
     private static final MediaType JSON = MediaType.get("application/json");
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
-    /**
-     * Gives the test user's token an account behind it, as signup would. Written straight to Mongo
-     * and upserted, because the suite's database is not wiped between scenarios: a later scenario
-     * with a different learner ID has to replace this one's.
-     */
+    // Upserted: the suite's Mongo isn't wiped between scenarios.
     @Given("a registered user with learnerId {string}")
     public void registerUser(String learnerId) {
         MongoDatabase db = (MongoDatabase) ScenarioContext.get("db");

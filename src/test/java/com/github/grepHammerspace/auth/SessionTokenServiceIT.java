@@ -18,7 +18,6 @@ import java.util.Optional;
 import static org.junit.jupiter.api.Assertions.*;
 
 class SessionTokenServiceIT {
-
     static final MongoDBContainer MONGO = new MongoDBContainer("mongo:8");
     static MongoDatabase database;
 
@@ -59,11 +58,9 @@ class SessionTokenServiceIT {
     void resolve_pastHalfWindow_extendsExpiry() {
         String token = serviceAt(T0).issue("user-3");
 
-        // 16 days in: less than half the 30-day window remains, so this resolve extends it
         SessionTokenService at16Days = serviceAt(T0.plus(Duration.ofDays(16)));
         assertEquals(Optional.of("user-3"), at16Days.resolve(token));
 
-        // 40 days after issue — dead without the extension, alive with it (16d + 30d = 46d)
         SessionTokenService at40Days = serviceAt(T0.plus(Duration.ofDays(40)));
         assertEquals(Optional.of("user-3"), at40Days.resolve(token));
     }

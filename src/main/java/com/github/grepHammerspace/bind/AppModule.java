@@ -18,12 +18,8 @@ import dagger.Provides;
 
 import javax.inject.Singleton;
 
-/**
- * Dagger module to provide application-wide dependencies.
- */
 @Module
 public class AppModule {
-
     private static final String DB_NAME = "otjdb";
 
     @Provides
@@ -35,7 +31,6 @@ public class AppModule {
     @Provides
     @Singleton
     MongoClient provideMongoClient() {
-        // MongoClient is a wrapper around a connection pool and it thread-safe. Designed to be created one and reused
         String uri = System.getenv().getOrDefault("MONGO_URI", "mongodb://localhost:27017");
         return MongoClients.create(uri);
     }
@@ -58,13 +53,7 @@ public class AppModule {
         return impl;
     }
 
-    /*
-     * The two drivers are bound behind the Driver interface rather than injected as concrete
-     * types. That keeps the resource from naming implementations, and it is what lets the
-     * integration tests substitute a fake — otherwise a scenario touching prepare would dial
-     * Keycloak and Microsoft for real. Deliberately not @Singleton: each prepare needs its own
-     * cookie jar.
-     */
+    // Behind Driver so tests can bind fakes. Not @Singleton: each prepare needs its own cookie jar.
 
     @Provides
     @Keycloak

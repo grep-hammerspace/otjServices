@@ -14,7 +14,6 @@ import java.time.temporal.ChronoUnit;
 import static org.junit.jupiter.api.Assertions.*;
 
 class UserRepositoryIT {
-
     static final MongoDBContainer MONGO = new MongoDBContainer("mongo:8");
     static UserRepository repository;
     static MongoDatabase database;
@@ -88,10 +87,6 @@ class UserRepositoryIT {
         assertEquals("L-CORRECTED", repository.findByUserId("uid-learner").learnerId());
     }
 
-    /**
-     * The point of the {@code $set}: everything the caller of {@code PATCH /auth/me} never sent
-     * has to survive. Replacing the whole document from a partial request would blank all of it.
-     */
     @Test
     void updateLearnerId_leavesEveryOtherFieldAlone() {
         repository.insert(new User("uid-untouched", "untouched-name", "$2a$12$fakehashfortesting",
@@ -105,10 +100,6 @@ class UserRepositoryIT {
         assertEquals(CREATED, found.createdAt().truncatedTo(ChronoUnit.SECONDS));
     }
 
-    /**
-     * Null rather than an upsert, which would insert here, resurrecting a deleted account with
-     * whatever the caller happened to be holding; the resource turns this into a 404.
-     */
     @Test
     void updateLearnerId_unknownUser_returnsNullAndInsertsNothing() {
         assertNull(repository.updateLearnerId("uid-does-not-exist", "L-GHOST"));

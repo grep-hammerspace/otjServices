@@ -7,16 +7,7 @@ import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
 
-/**
- * Guards the {@code toString()} override.
- *
- * <p>A record's generated {@code toString()} prints every component, so without the override a
- * single {@code log.info("...{}", body)} would put the OneAdvanced password in the log. These
- * cover the shapes that reach {@code toString()} without anyone meaning to: SLF4J argument
- * substitution, and the record sitting inside a collection that gets logged.
- */
 class OneAdvancedCredentialsTest {
-
     private static final String USERNAME = "leaktest@example.invalid";
     private static final String PASSWORD = "pw-DO-NOT-LOG-9f2a";
 

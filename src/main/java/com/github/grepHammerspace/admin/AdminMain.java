@@ -6,19 +6,8 @@ import com.github.grepHammerspace.bind.DaggerAdminComponent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-/**
- * Entry point for the admin API — a second server, in a second container, from the same image
- * as {@link com.github.grepHammerspace.Main}.
- *
- * <p>It is a separate process rather than a path on the main API because the main API is destined
- * to sit behind a public domain (step 09 of the auth plan), and a path is one proxy rule away from
- * being internet-facing. This binds a port that is published to loopback only and never proxied
- * anywhere but the tailnet.
- *
- * <p>The graph it builds is deliberately small: no browser drivers, no LLM client, no session
- * handling. Dagger instantiates providers lazily, so the admin container does not need
- * {@code ANTHROPIC_API_KEY} to boot even though {@code AppModule} declares a binding for it.
- */
+// No drivers, LLM client or sessions in this graph. Dagger providers are lazy, so it boots without
+// ANTHROPIC_API_KEY.
 public class AdminMain {
     private static final Logger log = LoggerFactory.getLogger(AdminMain.class);
 

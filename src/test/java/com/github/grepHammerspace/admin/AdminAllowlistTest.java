@@ -6,7 +6,6 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class AdminAllowlistTest {
-
     @Test
     void permits_listedLogin() {
         AdminAllowlist allowlist = AdminAllowlist.parse("sam@example.com");
@@ -30,7 +29,6 @@ class AdminAllowlistTest {
         assertFalse(allowlist.permits(""), "the trailing empty entry must not become a permitted login");
     }
 
-    /** Mail addresses aren't case-sensitive in practice, and the header's casing isn't ours to control. */
     @Test
     void permits_ignoresCaseOnBothSides() {
         AdminAllowlist allowlist = AdminAllowlist.parse("Sam@Example.COM");
@@ -46,11 +44,6 @@ class AdminAllowlistTest {
         assertTrue(allowlist.permits(" sam@example.com "));
     }
 
-    /**
-     * The important one: a missing or empty {@code ADMIN_ALLOWED_LOGINS} must lock everyone out
-     * rather than wave everyone through. A deploy that forgets the variable should be unusable,
-     * not wide open to every device on the tailnet.
-     */
     @Test
     void emptyAllowlist_permitsNobody() {
         assertTrue(AdminAllowlist.parse(null).isEmpty());

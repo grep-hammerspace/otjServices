@@ -16,7 +16,6 @@ import java.time.Instant;
 import static org.junit.jupiter.api.Assertions.*;
 
 class SessionRepositoryIT {
-
     static final MongoDBContainer MONGO = new MongoDBContainer("mongo:8");
     static MongoDatabase database;
     static SessionRepository repository;

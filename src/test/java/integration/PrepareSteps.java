@@ -19,19 +19,7 @@ import java.util.Map;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 
-/**
- * Step definitions for {@code prepare_and_submit.feature}.
- *
- * <p>All requests use the signup token, for the same reason {@link AccountSteps} does: these
- * endpoints read the caller's user document for the learner ID, and the hook's seeded
- * {@code test-user-id} has no account behind it.
- *
- * <p>Shared assertions are not redefined here — status and {@code contains} come from
- * {@link SharedSteps}, {@code does not contain} from {@link PendingSteps}, and the
- * stored-row check from {@link AccountSteps}.
- */
 public class PrepareSteps {
-
     private static final OkHttpClient HTTP = new OkHttpClient();
     private static final MediaType JSON = MediaType.get("application/json");
     private static final ObjectMapper MAPPER = new ObjectMapper();
@@ -42,8 +30,6 @@ public class PrepareSteps {
         assertNotNull(fake, "no " + which + " fake driver in the scenario context");
         return fake;
     }
-
-    // ── Scripting the fake ────────────────────────────────────────────────────
 
     @Given("the {string} driver will require a number match of {int}")
     public void driverWillRequireNumberMatch(String which, int number) {
@@ -57,15 +43,13 @@ public class PrepareSteps {
 
     @Given("the {string} driver will reject the credentials")
     public void driverWillRejectCredentials(String which) {
-        // Shaped like the real failure: AzureIdDriver reports the page it landed on, and that URL
-        // carries login_hint=<username>. The endpoint must not pass any of it through.
+        // Shaped like the real failure: the URL carries login_hint=<username>, which the endpoint
+        // must not pass through.
         driver(which).willFail(new IOException(
                 "Expected MFA page (ConvergedTFA), got pgid=ConvergedSignIn — URL: "
                         + "https://login.microsoftonline.com/common/oauth2/authorize"
                         + "?login_hint=" + ServerHooks.OA_USERNAME + ". Credentials may be wrong."));
     }
-
-    // ── Requests ──────────────────────────────────────────────────────────────
 
     @When("I POST {string} with the OneAdvanced credentials using the signup token")
     public void postWithCredentials(String path) throws Exception {
@@ -89,8 +73,6 @@ public class PrepareSteps {
         post(path, Map.of("mfaCode", ServerHooks.OA_MFA_CODE));
     }
 
-    // ── Assertions on what the driver received ────────────────────────────────
-
     @Then("the {string} driver received the OneAdvanced credentials")
     public void driverReceivedCredentials(String which) {
         FakeDriver fake = driver(which);
@@ -111,8 +93,6 @@ public class PrepareSteps {
         assertEquals(0, driver(which).prepareCalls(),
                 "a request rejected on validation should never reach the driver");
     }
-
-    // ── Plumbing ──────────────────────────────────────────────────────────────
 
     private static Map<String, Object> credentials(String username, String password) {
         Map<String, Object> body = new LinkedHashMap<>();

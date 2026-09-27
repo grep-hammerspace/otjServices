@@ -15,12 +15,8 @@ import java.util.HashSet;
 import java.util.Set;
 import java.util.concurrent.Executors;
 
-/** Configures and starts the Grizzly HTTP server. */
 public class ServerBootstrap {
-    /**
-     * Starts the server on {@code port}, replacing Grizzly's default thread pool with a
-     * thread-per-task executor so blocking login/submission HTTP calls don't saturate carrier threads.
-     */
+    // Thread-per-task executor: login and submit calls block for minutes.
     public static HttpServer start(int port, Object... resources) throws IOException {
         URI baseUri = UriBuilder.fromUri("http://0.0.0.0/").port(port).build();
         Set<Object> singletons = new HashSet<>(Arrays.asList(resources));

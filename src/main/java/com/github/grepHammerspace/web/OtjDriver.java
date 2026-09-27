@@ -21,9 +21,7 @@ public class OtjDriver implements Driver {
     private static final Logger log = LoggerFactory.getLogger(OtjDriver.class);
     private static final MediaType JSON_TYPE = MediaType.get("application/json");
 
-    // Entry point for the OneAdvanced SSO/Keycloak discovery flow.
-    // Double-encoded redirectUri passes through two layers of redirect before landing
-    // back at education.oneadvanced.com after a successful login.
+    // redirectUri is double-encoded: it passes through two redirects.
     private static final String DISCOVER_URL =
             "https://auth.identity.oneadvanced.com/auth/discover"
             + "?redirectUri=https%3A%2F%2Feducation.oneadvanced.com%2Fparseauth"
@@ -75,11 +73,6 @@ public class OtjDriver implements Driver {
         }
     }
 
-    /**
-     * Performs the multi-step Keycloak OIDC login flow over plain HTTP, stopping at the
-     * TOTP/MFA page. The session cookies and the MFA form action URL are retained in
-     * this instance so the caller can supply the OTP code separately.
-     */
     @Override
     public PrepareResult prepare(String username, String password) throws IOException {
         boolean isEmail = username.contains("@");
@@ -152,11 +145,6 @@ public class OtjDriver implements Driver {
         throw new IOException("Did not reach MFA page after 5 steps — last URL: " + SafeUrl.redact(currentUrl));
     }
 
-    /**
-     * Completes login by POSTing the TOTP code to the stored MFA form action URL.
-     * Keycloak follows the OIDC callback chain and sets the final session cookies,
-     * which the cookie jar carries automatically into subsequent API calls.
-     */
     @Override
     public void completeMfa(String mfaToken) throws IOException {
         if (mfaActionUrl == null) {
@@ -171,7 +159,7 @@ public class OtjDriver implements Driver {
                 .build();
 
         try (Response response = httpClient.newCall(request).execute()) {
-            response.body().string(); // consume to complete the redirect chain
+            response.body().string();
             String landingUrl = response.request().url().toString();
             log.info("MFA submitted, landing URL: {}", SafeUrl.redact(landingUrl));
             log.debug("Cookies after MFA: {}", ((InMemoryCookieJar) httpClient.cookieJar()).cookieNames());
@@ -181,10 +169,6 @@ public class OtjDriver implements Driver {
         }
     }
 
-    /**
-     * Fetches all unposted OTJs from MongoDB and POSTs each one to the activity-log API.
-     * The httpClient already carries the authenticated session cookies from the login flow.
-     */
     @Override
     public OtjSubmitResult submitPendingOtjs(String userId, String learnerId) {
         List<ActivityLog> pending = activityLogRepository.getUnpostedActivityLogsFor(userId);
@@ -195,9 +179,7 @@ public class OtjDriver implements Driver {
         }
 
         String postUrl = String.format(ACTIVITY_LOG_API, learnerId.strip());
-        // At INFO the URL is withheld: the learner ID is a path segment and it identifies the
-        // student. At DEBUG it is printed in full, because when a submission is being rejected
-        // the target is the first thing you need to see. See logback.xml.
+        // The URL is withheld at INFO (the learner ID is in the path) and printed at DEBUG.
         log.info("Submitting {} pending OTJ(s) for user {}", pending.size(), userId);
         log.debug("POST target: {}", postUrl);
 
@@ -225,9 +207,7 @@ public class OtjDriver implements Driver {
                         // Status only at WARN: the WWW-Authenticate challenge and the response
                         // body are upstream material that can carry session and account detail.
                         log.warn("Failed to post activity log {} — HTTP {}", activityLog.id(), response.code());
-                        // At DEBUG, the whole thing. OneAdvanced puts the actual reason a post was
-                        // rejected in the body, so withholding it is what makes a failing
-                        // submission undebuggable from logs alone.
+                        // DEBUG gets the body: OneAdvanced puts the rejection reason there.
                         if (log.isDebugEnabled()) {
                             log.debug("Rejected activity log {} — HTTP {}, WWW-Authenticate: [{}], body: {}",
                                     activityLog.id(), response.code(),
@@ -249,10 +229,6 @@ public class OtjDriver implements Driver {
         return new OtjSubmitResult(posted, failed);
     }
 
-    /**
-     * @param learnerId the account's current learner ID, which wins over the one stamped on the
-     *                  row when it was logged — see {@link Driver#submitPendingOtjs}.
-     */
     private Map<String, Object> buildPayload(ActivityLog activityLog, String learnerId) {
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("learnerId", learnerId.strip());
@@ -260,13 +236,10 @@ public class OtjDriver implements Driver {
         payload.put("unitId", "ef974f73-5d9d-447e-8652-379ba9535229");
         payload.put("activityDate", activityLog.activityDate().replace("/", "-"));
         payload.put("activityTime", "T" + activityLog.activityTime() + ":00");
-        // ActivityLog.activityType() is always 0 (never set by the LLM parser) — the
-        // real OneAdvanced activity-log API expects a fixed code here, confirmed working at 16.
+        // The API expects 16 here; activityType is never set by the parser.
         payload.put("activityType", 16);
         payload.put("hours", activityLog.hours());
         payload.put("minutes", String.format("%02d", activityLog.minutes()));
-        // No log line here: the caller logs the serialised JSON, which is strictly more useful
-        // than a summary of the map that produced it.
         return payload;
     }
 }

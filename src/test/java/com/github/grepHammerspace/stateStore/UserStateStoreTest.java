@@ -6,12 +6,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestTemplate;
 
-/**
- * Unit tests for {@link com.github.grepHammerspace.stateStore.UserStateStore}.
- * Each test gets a fresh store instance via {@code @BeforeEach} so there is no shared state.
- */
 public class UserStateStoreTest {
-
     private UserStateStore userStateStore;
     private static final String DUMMY_ID = "dummyId";
 
@@ -28,10 +23,8 @@ public class UserStateStoreTest {
 
     @Test
     public void testGetStateForUs(){
-        // Assert null when empty
         Assertions.assertNull(userStateStore.getStateForUser(DUMMY_ID));
 
-        // Assert not null for valid user
         userStateStore.createUserState(DUMMY_ID);
         Assertions.assertTrue(userStateStore.getStateForUser(DUMMY_ID) != null);
     }

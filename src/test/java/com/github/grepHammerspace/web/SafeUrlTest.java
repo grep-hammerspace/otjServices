@@ -7,7 +7,6 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class SafeUrlTest {
-
     @Test
     void dropsTheUsernameFromTheKeycloakLoginHint() {
         String redacted = SafeUrl.redact(
@@ -50,7 +49,6 @@ class SafeUrlTest {
         assertFalse(redacted.contains("SECRET-TOKEN"), redacted);
     }
 
-    /** The whole point of the class: what cannot be parsed cannot be proven safe. */
     @Test
     void neverEchoesBackAnUnparseableUrl() {
         String redacted = SafeUrl.redact("not a url at all ?login_hint=leaked@example.test");

@@ -12,7 +12,6 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.*;
 
 class ActivityLogRepositoryIT {
-
     static final MongoDBContainer MONGO = new MongoDBContainer("mongo:8");
     static ActivityLogRepository repository;
 
@@ -158,7 +157,6 @@ class ActivityLogRepositoryIT {
         assertEquals("Paired on the auth filter", updated.activityImpact());
         assertEquals(row.id(), updated.id(), "an edit must not move the row to a new _id");
 
-        // ReturnDocument.AFTER is only useful if what it returns is what was stored.
         ActivityLog reread = repository.findUnpostedNewestFirst("user-12").get(0);
         assertEquals("Paired on the auth filter", reread.activityImpact());
         assertEquals(45, reread.minutes());

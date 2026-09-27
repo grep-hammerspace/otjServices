@@ -73,9 +73,6 @@ Feature: Signup and login
     And I DELETE "/auth/session" with the signup token
     Then the response status is 204
 
-  # 200 rather than 401 is the point: the filter accepted the token and let the request reach the
-  # handler. GET /pending is the endpoint to use for this — it is authenticated, deterministic,
-  # and needs no OneAdvanced credentials, unlike the prepare endpoints this used to call.
   Scenario: A token from signup works on a protected endpoint
     Given an unused invite code "OTJ-TEST-0010" expiring in 7 days
     And I sign up with inviteCode "OTJ-TEST-0010", username "tokenworks", password "pw", learnerId "L9"

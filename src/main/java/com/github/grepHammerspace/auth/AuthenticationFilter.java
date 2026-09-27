@@ -15,13 +15,6 @@ import javax.inject.Singleton;
 import java.security.Principal;
 import java.util.Optional;
 
-/**
- * Resolves {@code Authorization: Bearer <token>} to a {@link SecurityContext} whose principal
- * name is the userId. Missing, malformed, unknown or expired tokens abort with 401 before the
- * request reaches the resource.
- *
- * <p>Applied only to resources annotated {@link Authenticated} via JAX-RS name binding.
- */
 @Authenticated
 @Provider
 @Priority(Priorities.AUTHENTICATION)

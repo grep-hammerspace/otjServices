@@ -5,7 +5,6 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
 
 class PasswordHasherTest {
-
     private final PasswordHasher hasher = new PasswordHasher();
 
     @Test
@@ -33,7 +32,6 @@ class PasswordHasherTest {
 
     @Test
     void hashing_samePassword_twice_producesDifferentHashes() {
-        // each hash embeds a fresh salt
         assertNotEquals(hasher.hash("same"), hasher.hash("same"));
     }
 }

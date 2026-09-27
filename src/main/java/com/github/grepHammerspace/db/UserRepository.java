@@ -19,15 +19,8 @@ import javax.inject.Inject;
 import javax.inject.Singleton;
 import java.util.Date;
 
-/**
- * MongoDB-backed store for registered users.
- *
- * <p>Stores only the bcrypt hash of the app password — no field in the collection can be
- * decrypted back to any credential.
- */
 @Singleton
 public class UserRepository {
-
     private static final Logger log = LoggerFactory.getLogger(UserRepository.class);
 
     private final MongoCollection<Document> collection;
@@ -38,11 +31,6 @@ public class UserRepository {
         collection.createIndex(Indexes.ascending("appUsername"), new IndexOptions().unique(true));
     }
 
-    /**
-     * Inserts a new user, failing closed on a duplicate {@code appUsername}.
-     *
-     * @return true if the user was created; false if the username is already taken
-     */
     public boolean insert(User user) {
         try {
             collection.insertOne(toDocument(user));
@@ -61,20 +49,8 @@ public class UserRepository {
         return fromDocument(collection.find(Filters.eq("userId", userId)).first());
     }
 
-    /**
-     * Sets {@code learnerId} on one user, leaving every other field alone.
-     *
-     * <p>Returns the updated user, or {@code null} when no document matched — the account was
-     * deleted while a token for it was still live.
-     *
-     * <p>A {@code $set} of the one field rather than {@link #save(User)}: that method replaces the
-     * whole document and upserts, so it would make this a read-modify-write that clobbers any
-     * concurrent change, and a lost race against a deletion would resurrect the account with
-     * whatever the caller happened to be holding — including no password hash.
-     *
-     * <p>{@code ReturnDocument.AFTER} so the caller answers with the new state without a second read.
-     * The log line records that the ID changed and for whom, never the value.
-     */
+    // A $set of one field, never a whole-document replace, which could clobber a concurrent change
+    // or resurrect a deleted account. Logs that it changed, never the value.
     public User updateLearnerId(String userId, String learnerId) {
         Document updated = collection.findOneAndUpdate(
                 Filters.eq("userId", userId),
@@ -89,7 +65,6 @@ public class UserRepository {
         return fromDocument(updated);
     }
 
-    /** Looks up a user by their app login name — the login path. */
     public User findByAppUsername(String appUsername) {
         return fromDocument(collection.find(Filters.eq("appUsername", appUsername)).first());
     }

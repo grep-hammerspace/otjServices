@@ -1,12 +1,7 @@
 Feature: Log activities via LLM
 
-  # Scenarios share one Mongo database with no per-scenario reset, so the counts below are only
-  # meaningful if each scenario starts from an empty log collection.
-  #
-  # The quota reset is load-bearing for the same reason: llmQuota is keyed {userId, date} and
-  # every scenario here spends test-user-id's daily allowance. llm_quota.feature sets that counter
-  # to its limit, and feature ordering is filesystem-dependent, so without this line these
-  # scenarios would start over quota and 429.
+  # The quota reset is required: llm_quota.feature leaves the counter at its limit, and Mongo isn't
+  # reset between scenarios.
   Background:
     Given a registered user with learnerId "L001"
     And there are no activity logs for the test user

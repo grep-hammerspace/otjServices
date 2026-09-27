@@ -1,7 +1,5 @@
 Feature: List and delete pending activities
 
-  # Scenarios share one Mongo database with no per-scenario reset, so every count below is only
-  # meaningful if each scenario starts from an empty log collection.
   Background:
     Given a registered user with learnerId "L001"
     And there are no activity logs for the test user
