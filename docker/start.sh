@@ -1,10 +1,7 @@
 #!/usr/bin/env bash
 set -eou pipefail
 
-# One image, two entrypoints. The shaded jar carries every class, so the role only decides which
-# main class runs — which in turn guarantees the API and the admin API are always the same build.
-#   APP_ROLE=api    (default) the main REST API on 8945
-#   APP_ROLE=admin            the tailnet-only invite admin API on 8946
+# APP_ROLE=api (default, :8945) or admin (:8946). One image, so both are always the same build.
 APP_ROLE="${APP_ROLE:-api}"
 
 JAVA_OPTS=""

@@ -1,15 +1,3 @@
-// Written by the observability role for release {{ image_tag }}. Don't edit on the box: the next
-// converge puts it back. How to read what it sends: deploy/ansible/README.md.
-//
-// Two pipelines, one token: the journal to Grafana Cloud Loki (logs), and the host's CPU, memory,
-// disk and network to Grafana Cloud Prometheus (metrics, at the end of this file).
-//
-// Three trails, all read from the journal, and nothing else from it leaves the box:
-//   _SYSTEMD_UNIT=haproxy.service   service="edge", proxy="haproxy"
-//   CONTAINER_NAME=hours-api        service="hours-api"
-//   CONTAINER_NAME=admin-api        service="admin-api"
-// Labels stay low-cardinality. userId, path and IP stay in the line, for LogQL line filters.
-
 loki.relabel "journal" {
   forward_to = []
 
@@ -41,7 +29,6 @@ loki.relabel "journal" {
   }
 }
 
-// The system journal and otjapp's user journal, both under this one directory.
 loki.source.journal "box" {
   path          = "/var/log/journal"
   relabel_rules = loki.relabel.journal.rules
@@ -49,10 +36,8 @@ loki.source.journal "box" {
   forward_to    = [loki.process.scrub.receiver]
 }
 
-// HAProxy writes the client address already truncated (IPv4 /24, IPv6 /48) at the start of each
-// access-log line, and the full address as a trailing full_src= field for the local journal only
-// (deploy/haproxy/haproxy.cfg). That field is cut here. Any line still carrying one afterwards is
-// dropped, not sent, so a change to the format fails closed.
+// HAProxy puts the truncated address first and the full one last as full_src=. Cut it, and drop any
+// line that still has one, so a format change fails closed.
 loki.process "scrub" {
   stage.replace {
     expression = "( full_src=\\S+)$"
@@ -73,27 +58,21 @@ loki.write "grafana_cloud" {
 
     basic_auth {
       username = "{{ loki_user }}"
-      // Write-only (logs:write and metrics:write, this stack). Rendered from Parameter Store into
-      // /run/otj/alloy.env at unit start by otj-render-env; no file Ansible writes ever holds it.
       password = sys.env("GRAFANA_CLOUD_TOKEN")
     }
   }
 }
 
-// ── Host metrics ─────────────────────────────────────────────────────────────────────────────
-// The box as a whole, not per container. Read from the host's /proc and /sys, mounted read-only
-// under /host (alloy.container). Nothing else of the host is mounted: disk usage is read through
-// /var/lib/alloy, which is on the root filesystem, so the host's / is never mounted into Alloy.
 prometheus.exporter.unix "box" {
   procfs_path              = "/host/proc"
   sysfs_path               = "/host/sys"
-  // statfs("/var/lib/alloy/") reports the root filesystem, which is the only disk the box has.
+  // statfs("/var/lib/alloy/") reports the root filesystem.
   rootfs_path              = "/var/lib/alloy"
   udev_data_path           = "/run/udev/data"
   set_collectors           = ["cpu", "diskstats", "filesystem", "loadavg", "meminfo", "netdev", "pressure", "stat", "uname", "vmstat"]
   include_exporter_metrics = false
 
-  // "/" only. Any other mount point would be measured through the same directory, and be wrong.
+  // "/" only: any other mount point would be measured through the same directory.
   filesystem {
     mount_points_exclude = "^/.+"
   }
@@ -103,7 +82,6 @@ prometheus.exporter.unix "box" {
   }
 }
 
-// job and instance as Grafana's Linux dashboards expect them.
 discovery.relabel "box" {
   targets = prometheus.exporter.unix.box.targets
 
@@ -121,13 +99,12 @@ discovery.relabel "box" {
 prometheus.scrape "box" {
   targets         = discovery.relabel.box.output
   scrape_interval = "{{ metrics_scrape_interval }}"
-  // No longer than the shortest interval used (the rehearsal's); the default 10s would be refused.
+  // Must not exceed the shortest scrape interval used (the rehearsal's).
   scrape_timeout  = "5s"
   forward_to      = [prometheus.relabel.keep.receiver]
 }
 
-// Only what the dashboards chart. The free tier counts active series, and the exporter's
-// defaults produce many more than these.
+// Only what the dashboards chart: the free tier counts active series.
 prometheus.relabel "keep" {
   rule {
     source_labels = ["__name__"]

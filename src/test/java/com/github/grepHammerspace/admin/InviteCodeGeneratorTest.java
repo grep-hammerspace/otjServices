@@ -11,7 +11,6 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class InviteCodeGeneratorTest {
-
     private static final Pattern SHAPE = Pattern.compile("OTJ-[A-Z2-9]{4}-[A-Z2-9]{4}");
 
     private final InviteCodeGenerator generator = new InviteCodeGenerator();
@@ -22,15 +21,9 @@ class InviteCodeGeneratorTest {
                 "codes are documented as OTJ-XXXX-XXXX and operators read them aloud");
     }
 
-    /**
-     * The alphabet exists to survive being dictated over the phone and typed on a handset.
-     * {@code I}/{@code 1} and {@code O}/{@code 0} are the pairs people get wrong, so none of the
-     * four may ever appear.
-     */
     @Test
     void generate_neverEmitsAmbiguousGlyphs() {
-        // Only the random groups are under test. The fixed "OTJ-" prefix legitimately contains an
-        // 'O' — it is never transcribed by hand, because it is the same on every code.
+        // The fixed "OTJ-" prefix legitimately contains an 'O'.
         String thousandGroups = IntStream.range(0, 1000)
                 .mapToObj(i -> generator.generate().substring("OTJ-".length()).replace("-", ""))
                 .reduce("", String::concat);
@@ -41,10 +34,6 @@ class InviteCodeGeneratorTest {
         }
     }
 
-    /**
-     * Not a randomness test — that's SecureRandom's job. This catches the generator being wired
-     * to a constant seed or returning a cached value, which would silently reissue live codes.
-     */
     @Test
     void generate_doesNotRepeatItself() {
         Set<String> codes = new HashSet<>();

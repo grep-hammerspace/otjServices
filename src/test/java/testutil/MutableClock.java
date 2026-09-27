@@ -5,15 +5,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneId;
 
-/**
- * A {@link Clock} that stands still until a test advances it.
- *
- * <p>{@link Clock#fixed} covers the existing tests, which only ever need one instant — but it
- * cannot move, so it cannot express "the window slid". Anything testing an expiry or a sliding
- * window needs to step time forward without sleeping, which is what this provides.
- */
 public final class MutableClock extends Clock {
-
     private final ZoneId zone;
     private Instant instant;
 

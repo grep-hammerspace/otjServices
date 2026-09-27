@@ -1,35 +1,24 @@
-# The PR rehearsal's overrides (.github/workflows/box.yml), passed with -e @ci-vars.yml. Not
-# under group_vars/, so nothing loads it on the box by accident. The job runs with
-# --skip-tags tailnet,aws: a runner can't join the tailnet or read the account's ECR and secrets.
+# The PR rehearsal's overrides. Never under group_vars/, so the box can't load them.
 
-# The image the job built and saved, loaded instead of pulled.
 image_repo: localhost/otj-hours-api
 app_image_archive: /tmp/otj-image.tar
 
-# Secrets from fixture files instead of Parameter Store: dummy values, and a throwaway Mongo the
-# job starts on the runner's own address. Keyed by the parameter name's last segment.
 render_env_source: fixture
 render_env_fixture:
-  mongo-uri: "{{ ci_mongo_uri }}" # passed with -e by the job
-  anthropic-api-key: dummy-not-a-key # the app needs one to boot; the rehearsal never calls the LLM
+  mongo-uri: "{{ ci_mongo_uri }}"
+  anthropic-api-key: dummy-not-a-key
   admin-allowed-logins: ci@example.invalid
-  grafana-cloud-logs-token: dummy-not-a-token # the rehearsal's Loki and Prometheus don't check it
+  grafana-cloud-logs-token: dummy-not-a-token
 
-# Alloy pushes to a Loki the job starts on the runner's loopback, and the job reads the lines back
-# to check the labels and that no full client address got through.
 loki_push_url: http://127.0.0.1:3100/loki/api/v1/push
 loki_user: ci
-# And metrics to a Prometheus on the same loopback, scraped often enough to check within a minute.
 prom_remote_write_url: http://127.0.0.1:9090/api/v1/write
 prom_user: ci
 metrics_scrape_interval: 10s
 
-# 127.0.0.1 joins Cloudflare's ranges so the job can send CF-Connecting-IP from loopback and prove
-# each client gets its own bucket. Requests from the runner's own address stay untrusted, which is
-# the other half of the test.
+# 127.0.0.1 is trusted so the job can test per-client buckets from loopback; the runner's own
+# address stays untrusted.
 edge_trusted_extra:
   - 127.0.0.1/32
 
-# The runner's own wildcard listeners, which the box doesn't have. Filled in from the first
-# rehearsal run; each entry says what it is.
 verify_wildcard_allowed_extra: []

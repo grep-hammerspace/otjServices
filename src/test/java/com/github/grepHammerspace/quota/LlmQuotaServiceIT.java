@@ -24,14 +24,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/**
- * Integration tests for {@link LlmQuotaService} against a real MongoDB.
- *
- * <p>Follows the house IT conventions: the container is started once in {@code @BeforeAll} and
- * never cleaned between tests, so each test uses its own {@code userId} for isolation.
- */
 class LlmQuotaServiceIT {
-
     static final MongoDBContainer MONGO = new MongoDBContainer("mongo:8");
     static MongoDatabase database;
 
@@ -43,8 +36,6 @@ class LlmQuotaServiceIT {
         database = MongoClients.create(MONGO.getConnectionString()).getDatabase("testdb");
     }
 
-    /** Mirrors {@code InviteCodeRepositoryIT.repositoryAt} — the quota's state is in Mongo, so a
-     *  different day is expressed by a new service at a new instant rather than a moving clock. */
     private static LlmQuotaService serviceAt(Instant instant) {
         return new LlmQuotaService(database, Clock.fixed(instant, ZoneOffset.UTC));
     }
@@ -94,7 +85,6 @@ class LlmQuotaServiceIT {
                 "one document per user per day");
     }
 
-    /** The boundary is UTC midnight, not the box's local midnight — that is what the API promises. */
     @Test
     void rollsOverAtUtcMidnight() {
         serviceAt(Instant.parse("2026-08-16T23:59:59Z")).tryConsume("quota-midnight");
@@ -120,15 +110,6 @@ class LlmQuotaServiceIT {
                 "a later call in the same day must not push the expiry out");
     }
 
-    /**
-     * The race the retry exists for: with no document yet, every thread's upsert tries to insert
-     * and the unique index lets exactly one through.
-     *
-     * <p>Three assertions, each earning its place. No thread throwing covers the retry itself —
-     * {@code Future.get} would rethrow a duplicate-key error. Exactly ten trues is the quota.
-     * And the stored count matching the caller count is what a retry that double-counted, or
-     * swallowed an increment, would break.
-     */
     @Test
     void underContentionConsumesExactlyTheLimit() throws Exception {
         LlmQuotaService service = serviceAt(NOW);

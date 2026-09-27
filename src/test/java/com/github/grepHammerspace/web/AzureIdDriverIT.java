@@ -12,26 +12,10 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
-/**
- * Manual, live end-to-end run of the Azure AD login + OTJ submission flow.
- *
- * <p>This hits the real QMUL Azure AD / OneAdvanced endpoints and blocks waiting for a real
- * Microsoft Authenticator approval on your phone, so it is intentionally named {@code *IT}
- * (this project has no failsafe plugin configured, so {@code mvn test} never picks it up) and
- * must be run by hand, e.g.:
- *
- * <pre>
- * OTJ_IT_USERNAME=you@qmul.ac.uk OTJ_IT_PASSWORD=… OTJ_IT_LEARNER_ID=… \
- *   mvn test -Dtest=AzureIdDriverIT
- * </pre>
- *
- * <p>Credentials come from the environment rather than constants. They used to be fields with a
- * "fill in locally" comment, which committed a real account name and left a guard that compared
- * the password against a placeholder it no longer held — so the assumption always passed and the
- * test fired a live login with an empty password.
- */
+// Manual and live: hits the real QMUL and OneAdvanced endpoints and waits for a phone approval. Run
+// by hand:
+// OTJ_IT_USERNAME=... OTJ_IT_PASSWORD=... OTJ_IT_LEARNER_ID=... mvn test -Dtest=AzureIdDriverIT
 class AzureIdDriverIT {
-
     private static final String USERNAME   = System.getenv("OTJ_IT_USERNAME");
     private static final String PASSWORD   = System.getenv("OTJ_IT_PASSWORD");
     private static final String LEARNER_ID = System.getenv("OTJ_IT_LEARNER_ID");
@@ -48,7 +32,6 @@ class AzureIdDriverIT {
                 MongoClients.create(MONGO.getConnectionString()).getDatabase("testdb")
         );
 
-        // A mocked-up activity log — mirrors what LlmServiceImpl.toActivityLog() would produce.
         ActivityLog mocked = new ActivityLog(
                 TEST_USER_ID,
                 LEARNER_ID,

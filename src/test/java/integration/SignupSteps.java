@@ -15,22 +15,8 @@ import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 
-/**
- * Step definitions for {@code signup.feature}.
- *
- * <p>The {@code Given an unused invite code} steps insert straight into the {@code inviteCodes}
- * collection via the {@link MongoDatabase} handle from {@link ScenarioContext} — that is exactly
- * how codes are minted in production (by hand in the Atlas UI), so the test seeds them the same
- * way rather than through an endpoint that does not exist.
- *
- * <p>Signup and login requests deliberately carry no {@code Authorization} header: {@code /auth}
- * is anonymous, and sending the hook's seeded token would hide a regression where the resource
- * accidentally starts requiring one. Tokens the endpoints hand back are stashed under
- * {@code "signupToken"} so later steps can use them.
- *
- * <p>Assertions on status and body live in {@link SharedSteps} — Cucumber glue is global,
- * so they are shared rather than duplicated here.
- */
+// No Authorization header: /auth is anonymous, and sending a token would hide a regression that
+// starts requiring one.
 public class SignupSteps {
     private static final OkHttpClient HTTP = new OkHttpClient();
     private static final MediaType JSON = MediaType.get("application/json");
@@ -53,11 +39,6 @@ public class SignupSteps {
                 "password", password, "learnerId", learnerId));
     }
 
-    /**
-     * Signs up and asserts it worked, for scenarios where the account is a precondition rather
-     * than the thing under test. Failing loudly here stops a broken signup from surfacing as a
-     * confusing 401 several steps later.
-     */
     @Given("I sign up with inviteCode {string}, username {string}, password {string}, learnerId {string}")
     public void signUp(String inviteCode, String username, String password, String learnerId) throws Exception {
         postSignup("/auth/signup", inviteCode, username, password, learnerId);
@@ -102,10 +83,6 @@ public class SignupSteps {
         record(HTTP.newCall(req).execute());
     }
 
-    /**
-     * Records status and body, and lifts any {@code token} out of the body so later steps can
-     * authenticate with it.
-     */
     private static void record(Response response) throws Exception {
         String body = response.body() != null ? response.body().string() : "";
         ScenarioContext.put("lastResponseCode", response.code());

@@ -1,5 +1,4 @@
-# Installing runs everywhere, the PR rehearsal included. Joining the tailnet and `serve` are
-# tagged `tailnet`: a runner can't join it, so the rehearsal skips them.
+# Joining and serve are tagged `tailnet`: a runner can't join, so the rehearsal skips them.
 - name: Tailscale apt repository
   ansible.builtin.deb822_repository:
     name: tailscale
@@ -31,12 +30,8 @@
       failed_when: false # exits non-zero when logged out, which is the state we're checking for
       check_mode: false
 
-    # Only when not already Running, so a re-run never re-authenticates the node. It fires once, on
-    # a new box's first converge. The key goes through a 0600 file in /run, never an argument, so
-    # it isn't in `ps`, and the task is no_log so it isn't in the deploy output.
-    #
-    # Before a rebuild, remove the old `hours-api` machine in the Tailscale admin console, or this
-    # one joins as `hours-api-1` (README.md, "Building a new box").
+    # Only when not Running, so a re-run never re-authenticates. The key goes through a 0600 file,
+    # never argv, and the task is no_log.
     - name: Join the tailnet as {{ tailscale_hostname }}
       when: (tailscale_status_raw.stdout | default('{}') | from_json).BackendState | default('') != 'Running'
       ansible.builtin.shell:
@@ -47,7 +42,6 @@
           trap 'rm -f "$keyfile"' EXIT
           key=$(aws ssm get-parameter --region {{ aws_region }} --name {{ tailscale_authkey_param }} \
                   --with-decryption --query Parameter.Value --output text)
-          # An OAuth client secret mints the node's key itself, and has to be told what kind.
           case "$key" in
             tskey-client-*) key="${key}?ephemeral=false&preauthorized=true" ;;
           esac
@@ -69,9 +63,6 @@
       changed_when: false
       check_mode: false
 
-    # `serve status --json` is {"TCP": {"<port>": {...}}, "Web": {"<name>:<port>": {"Handlers":
-    # {"/": {"Proxy": "<target>"}}}}}. (Verify against the installed version on the first converge;
-    # `serve get-config`/`set-config` in newer releases would make this declarative.)
     - name: Parse it
       ansible.builtin.set_fact:
         tailscale_dns_name: "{{ tailscale_serve_raw.stdout_lines[0] }}"
@@ -85,9 +76,8 @@
           .Proxy | default(''))}) }}
       loop: "{{ tailscale_serve | dict2items }}"
 
-    # HAProxy owns 443. tailscaled binds 443 on the tailnet address specifically, which collides
-    # with HAProxy's wildcard bind: the old box had to move the main API from 443 to 8444 for
-    # exactly this (the reason site.yml runs this role before edge).
+    # Never on 443: tailscaled binding it on the tailnet address collides with HAProxy's wildcard
+    # bind.
     - name: Nothing served on 443
       ansible.builtin.command: tailscale serve --https=443 off
       when: "'443' in (tailscale_serve_config.TCP | default({}))"

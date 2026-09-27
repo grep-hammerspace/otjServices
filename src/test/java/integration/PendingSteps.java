@@ -17,10 +17,7 @@ import org.bson.types.ObjectId;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-/** Glue for {@code pending.feature}. Assertions on the response shape live here rather than as
- *  raw substring matches, because the point of these endpoints is the shape. */
 public class PendingSteps {
-
     private static final OkHttpClient HTTP = new OkHttpClient();
     private static final ObjectMapper MAPPER = new ObjectMapper();
     private static final MediaType JSON = MediaType.get("application/json");
@@ -65,23 +62,12 @@ public class PendingSteps {
         assertFalse(body.contains(needle), "response body should not contain '" + needle + "': " + body);
     }
 
-    /** Reads the id out of the previous response and deletes it. This is the step that proves the
-     *  id is a usable delete handle rather than decoration. */
     @When("I DELETE the first pending activity")
     public void deleteFirstPendingActivity() throws Exception {
         String id = lastBody().get("activities").get(0).get("id").asText();
         sendDelete(id);
     }
 
-    // ---------------------------------------------------------------------------------------
-    // PUT /pending/{id}
-    // ---------------------------------------------------------------------------------------
-
-    /** Edits the row the previous {@code GET /pending} listed first.
-     *
-     *  <p>Remembers the id and {@code createdAt} it had before the edit, so a later step can prove
-     *  neither moved — {@code createdAt} comes from the ObjectId timestamp and must keep meaning
-     *  "when this was added", not "when it was last touched". */
     @When("I PUT the first pending activity with body:")
     public void putFirstPendingActivity(String body) throws Exception {
         JsonNode row = lastBody().get("activities").get(0);
@@ -90,8 +76,6 @@ public class PendingSteps {
         sendPut(row.get("id").asText(), body);
     }
 
-    /** Edits the row a {@code Given} seeded straight into Mongo — the rows whose ownership or
-     *  {@code posted} flag the scenario needs to control, which the fake LLM cannot produce. */
     @When("I PUT the seeded activity with body:")
     public void putSeededActivity(String body) throws Exception {
         sendPut((String) ScenarioContext.get("seededId"), body);
@@ -117,14 +101,11 @@ public class PendingSteps {
                 "createdAt is when the row was added, not when it was last touched");
     }
 
-    /** Asserts on the stored document rather than the response, because the point is what the edit
-     *  did <em>not</em> write: only five fields are the caller's to set. */
     @Then("the edited activity in the database has fields:")
     public void editedActivityInDatabaseHasFields(DataTable table) {
         Document doc = activityLogById((String) ScenarioContext.get("editedId"));
         assertNotNull(doc, "the edited row should still be in the database");
         table.asMap().forEach((field, expected) ->
-                // An empty DataTable cell arrives as null; unitId really is stored as "".
                 assertEquals(expected == null ? "" : expected, String.valueOf(doc.get(field)),
                         "field '" + field + "' should not have been touched by the edit"));
     }
@@ -150,7 +131,6 @@ public class PendingSteps {
 
     private static final String SEEDED_IMPACT = "Seeded row";
 
-    /** Writes a row straight into Mongo and publishes its id as {@code seededId}. */
     private void seed(String userId, boolean posted) {
         MongoDatabase db = (MongoDatabase) ScenarioContext.get("db");
         Document doc = new Document()

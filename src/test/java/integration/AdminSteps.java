@@ -10,23 +10,8 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/**
- * Step definitions for {@code admin_invites.feature}.
- *
- * <p>These talk to {@code adminBaseUrl} — a different server on a different port from every other
- * feature, which is the point: in production the admin API is a separate process reachable only
- * through its own {@code tailscale serve} mapping.
- *
- * <p>The identity header is set explicitly here because there is no {@code tailscale serve} in
- * front of the test server to inject it. That is exactly the production trust model with the
- * proxy removed, so scenarios can exercise an allowlisted login, an unlisted one and no header
- * at all.
- *
- * <p>A minted code is stashed under {@code "mintedCode"} so signup steps can redeem it — that
- * hand-off is what proves the admin API and the signup path actually fit together.
- */
+// The identity header is set by hand: no tailscale serve sits in front of the test server.
 public class AdminSteps {
-
     private static final OkHttpClient HTTP = new OkHttpClient();
     private static final MediaType JSON = MediaType.get("application/json");
     private static final ObjectMapper MAPPER = new ObjectMapper();
@@ -153,7 +138,6 @@ public class AdminSteps {
         record(HTTP.newCall(req).execute());
     }
 
-    /** Records status and body, lifting any minted {@code code} out for later steps. */
     private static void record(Response response) throws Exception {
         String body = response.body() != null ? response.body().string() : "";
         ScenarioContext.put("lastResponseCode", response.code());

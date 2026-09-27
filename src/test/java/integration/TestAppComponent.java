@@ -15,20 +15,11 @@ import dagger.Component;
 
 import javax.inject.Singleton;
 
-/**
- * Dagger component for the integration test object graph.
- *
- * <p>Mirrors {@link com.github.grepHammerspace.bind.AppComponent} but uses
- * {@link TestAppModule} so that the LLM, MongoDB and the two login drivers are test doubles.
- * A new component instance is built per scenario in {@link ServerHooks}, giving
- * each scenario a fresh, isolated set of singletons.
- */
 @Singleton
 @Component(modules = TestAppModule.class)
 public interface TestAppComponent {
     OtjServicesResource otjServicesResource();
 
-    /** The fakes behind the two prepare endpoints, so steps can assert on what they received. */
     @Keycloak FakeDriver keycloakDriver();
     @AzurePush FakeDriver azurePushDriver();
 

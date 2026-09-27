@@ -1,5 +1,4 @@
-# Everything here runs as otjapp, against otjapp's own systemd manager and rootless Podman storage.
-# `otjapp_env` (set by the otjapp role) is what lets `scope: user` find that manager.
+# `otjapp_env` is what lets `scope: user` reach otjapp's systemd manager.
 
 - name: otjapp's directories
   become: true
@@ -43,8 +42,6 @@
     loop_var: svc
   notify: "Restart {{ svc }}"
 
-# PR rehearsal only (render_env_source: fixture, from ci-vars.yml): dummy values in place of
-# Parameter Store, which a runner can't reach. Never set on the box.
 - name: CI only, the fixture values otj-render-env reads instead of Parameter Store
   when: render_env_source == 'fixture'
   become: true
@@ -65,9 +62,7 @@
       loop_control:
         label: "{{ item.key }}"
 
-# ── The image, into otjapp's storage ─────────────────────────────────────────────────────────
-# otj-converge already pulled it once as root, only to read the playbook out of it. The containers
-# run rootless, so they need their own copy.
+# The containers run rootless, so they need their own copy of the image.
 - name: The release image is in otjapp's storage
   become: true
   become_user: "{{ otjapp_user }}"
@@ -108,9 +103,7 @@
   ansible.builtin.command: podman load --quiet --input {{ app_image_archive }}
   changed_when: true
 
-# ── The units ────────────────────────────────────────────────────────────────────────────────
-# A new SHA changes Image=, which changes the file, which restarts that unit. The same SHA
-# converged again changes nothing, so nothing restarts.
+# A new SHA changes Image=, which restarts that unit; the same SHA restarts nothing.
 - name: Quadlets
   become: true
   become_user: "{{ otjapp_user }}"
@@ -123,12 +116,9 @@
     loop_var: svc
   notify: [Reload otjapp's systemd, "Restart {{ svc }}"]
 
-# The daemon-reload has to happen before the first start, or the units don't exist yet.
 - name: Apply unit changes now
   ansible.builtin.meta: flush_handlers
 
-# Quadlet units are generated, so they can't be `enabled`. Their [Install] section starts them at
-# boot, and linger keeps otjapp's manager running without a login.
 - name: Both services running
   become: true
   become_user: "{{ otjapp_user }}"

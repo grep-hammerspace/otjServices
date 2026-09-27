@@ -5,7 +5,6 @@ import com.github.grepHammerspace.bind.DaggerAppComponent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-/** Application entry point. */
 public class Main {
     private static final Logger log = LoggerFactory.getLogger(Main.class);
 

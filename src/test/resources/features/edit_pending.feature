@@ -1,17 +1,7 @@
 Feature: Editing a pending activity
 
-  # A pending row is the model's reading of one line of free text: it gets the duration right and
-  # the date wrong, or clips the description. Editing repairs it in place instead of forcing a
-  # delete-and-retype, which would re-run the LLM to fix a typo.
-  #
-  # Scenarios share one Mongo database with no per-scenario reset, so the background clears the
-  # test user's rows first.
-  #
-  # The quota reset is load-bearing for the same reason, and for the same reason it is in
-  # log_activities.feature: nearly every scenario here seeds its row through "I have already
-  # logged", which spends one of test-user-id's ten daily LLM calls. Without this line the
-  # Examples table below runs out partway through and the later cases 429 instead of reaching
-  # the endpoint under test.
+  # The quota reset is required: seeding rows spends test-user-id's daily LLM calls, and Mongo isn't
+  # reset between scenarios.
   Background:
     Given a registered user with learnerId "L001"
     And there are no activity logs for the test user
@@ -120,8 +110,6 @@ Feature: Editing a pending activity
       """
     Then the response status is 401
 
-  # Each rule gets a 400 whose body names what was wrong — the mobile client renders that string,
-  # so a generic message would cost the user the reason.
   Scenario Outline: <case> is rejected with a message naming the problem
     Given I have already logged "Worked on the assignment"
     When I GET "/otj-services/pending"

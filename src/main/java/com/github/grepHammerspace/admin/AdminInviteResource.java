@@ -24,23 +24,12 @@ import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
 
-/**
- * Mint, list and revoke signup invite codes.
- *
- * <p>Runs on the admin server ({@link AdminMain}), not the main API, and every method is gated by
- * {@link AdminIdentity} — the caller is a tailnet login, not a session token holder. That identity
- * is recorded on each code it mints or revokes, so the collection doubles as the audit log.
- *
- * <p>There is no endpoint to read back a code after minting beyond {@code GET /admin/invites},
- * and none to un-revoke: mint a new one instead. Codes are cheap.
- */
 @Path("/admin/invites")
 @Produces("application/json")
 @Consumes("application/json")
 @AdminIdentity
 @Singleton
 public class AdminInviteResource {
-
     private static final Logger log = LoggerFactory.getLogger(AdminInviteResource.class);
 
     private final InviteCodeRepository inviteCodeRepository;
@@ -52,10 +41,6 @@ public class AdminInviteResource {
         this.generator = generator;
     }
 
-    /**
-     * Mints a code. The body is optional; {@code POST} with no body yields the default lifetime
-     * and an empty note.
-     */
     @POST
     public Response create(@Valid CreateInviteRequest body, @Context SecurityContext sc) {
         CreateInviteRequest request = body == null ? new CreateInviteRequest(null, null) : body;
@@ -71,7 +56,6 @@ public class AdminInviteResource {
                 .build();
     }
 
-    /** Every code, newest first, each with its derived status. */
     @GET
     public Response list(@Context SecurityContext sc) {
         Instant now = Instant.now();
@@ -83,13 +67,7 @@ public class AdminInviteResource {
         return Response.ok(codes).build();
     }
 
-    /**
-     * Revokes an unclaimed code.
-     *
-     * <p>A code that has already been claimed is a 409 rather than a silent success — the account
-     * it created still exists, and pretending otherwise would let an operator believe they had
-     * undone something they had not.
-     */
+    // 409 for a claimed code: the account it created exists, so revoking would undo nothing.
     @DELETE
     @Path("/{code}")
     public Response revoke(@PathParam("code") String code, @Context SecurityContext sc) {

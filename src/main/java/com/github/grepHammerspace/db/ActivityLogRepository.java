@@ -31,7 +31,6 @@ public class ActivityLogRepository {
     }
 
     public List<ActivityLog> getUnpostedActivityLogsFor(String userId){
-
         Bson filter = Filters.and(
             Filters.eq("tailscaleUserId", userId),
             Filters.eq("posted", false)
@@ -42,11 +41,8 @@ public class ActivityLogRepository {
                 .into(new ArrayList<>());
     }
 
-    /** Unposted logs for the user, newest first (_id descending).
-     *
-     *  <p>Deliberately separate from {@link #getUnpostedActivityLogsFor}: that one feeds
-     *  {@code OtjDriver:188} and {@code AzureIdDriver:508}, which use its order to decide the
-     *  order rows reach OneAdvanced. Adding a sort there would silently reorder submissions. */
+    // Separate from getUnpostedActivityLogsFor, whose order decides submission order: don't add a
+    // sort there.
     public List<ActivityLog> findUnpostedNewestFirst(String userId) {
         Bson filter = Filters.and(
             Filters.eq("tailscaleUserId", userId),
@@ -59,11 +55,7 @@ public class ActivityLogRepository {
                 .into(new ArrayList<>());
     }
 
-    /** Deletes one unposted log owned by {@code userId}.
-     *
-     *  <p>Returns {@code false} when the filter matched nothing — unknown id, someone else's id,
-     *  or already posted. Ownership is part of the filter rather than a check after the read, so
-     *  a caller can never learn that an id they do not own exists. */
+    // Ownership is in the filter, so a caller can't learn that an id it doesn't own exists.
     public boolean deleteUnpostedById(String userId, ObjectId id) {
         Document deleted = collection.findOneAndDelete(
                 Filters.and(
@@ -80,20 +72,8 @@ public class ActivityLogRepository {
         return false;
     }
 
-    /** Replaces the editable fields of one unposted log owned by {@code userId}.
-     *
-     *  <p>Returns {@code null} when the filter matched nothing — unknown id, someone else's id, or
-     *  already posted. Ownership and {@code posted} are part of the filter rather than a check after
-     *  the read, so a caller can never learn that an id they do not own exists. Keeping
-     *  {@code posted} in the filter also settles the race where a submission run posts the row while
-     *  the edit sheet is open: the write matches nothing and the caller gets the same "it's gone"
-     *  answer a deleted row would give.
-     *
-     *  <p>{@code Updates.combine} names exactly the five fields a person can edit.
-     *  {@code tailscaleUserId}, {@code learnerId}, {@code unitId}, {@code activityType} and
-     *  {@code posted} are never the caller's to set. {@link #markAsPosted} is not a precedent to
-     *  copy: it filters on {@code _id} alone, which is safe only because its input came from a
-     *  per-user query. */
+    // Ownership and posted are in the filter: no id-existence oracle, and an edit racing a
+    // submission matches nothing. Only the five editable fields are set.
     public ActivityLog updateUnpostedById(String userId, ObjectId id,
                                           String activityDate, String activityTime,
                                           int hours, int minutes, String activityImpact) {
@@ -108,7 +88,6 @@ public class ActivityLogRepository {
                         Updates.set("hours", hours),
                         Updates.set("minutes", minutes),
                         Updates.set("activityImpact", activityImpact)),
-                // The endpoint answers with the new state, so there is no follow-up read.
                 new FindOneAndUpdateOptions().returnDocument(ReturnDocument.AFTER));
 
         if (updated == null) {
@@ -119,8 +98,6 @@ public class ActivityLogRepository {
         return fromDoc(updated);
     }
 
-    /** Inserts the log and returns it with the generated {@code _id} populated, so a caller can
-     *  hand the client a row it can immediately address with {@code DELETE /pending/{id}}. */
     public ActivityLog saveActivityLog(ActivityLog activityLog){
         Document doc = new Document()
                 .append("tailscaleUserId", activityLog.tailscaleUserId())
@@ -134,7 +111,6 @@ public class ActivityLogRepository {
                 .append("minutes", activityLog.minutes())
                 .append("posted", activityLog.posted());
 
-        // insertOne mutates doc with the generated _id, so no follow-up read is needed.
         collection.insertOne(doc);
         log.info("Saved activity log for user {}", activityLog.tailscaleUserId());
         return fromDoc(doc);

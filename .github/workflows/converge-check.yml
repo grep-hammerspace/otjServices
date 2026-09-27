@@ -1,7 +1,3 @@
-# What a converge WOULD change, changing nothing: `otj-converge <sha> --check`
-# The job summary lists the tasks that would change; the full
-# diff is in CloudWatch. Also the review step before the first converge (checklist step 5), and the
-# nightly drift check once that's on.
 name: converge-check
 
 on:
@@ -13,10 +9,10 @@ on:
         type: string
 
 permissions:
-  id-token: write # OIDC, for the deploy role
+  id-token: write
   contents: read
 
-# One thing touches the box at a time: every box workflow, and deploy.yml, share this group.
+# Shared by every workflow that touches the box, so only one does at a time.
 concurrency:
   group: box
   cancel-in-progress: false

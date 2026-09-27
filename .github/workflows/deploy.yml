@@ -1,5 +1,3 @@
-# Java's tests on every PR. On a merge to master, the whole deploy:
-# every check again on the merge commit, the image, the stack, then otj-converge on the box.
 name: Deploy
 
 on:
@@ -25,8 +23,7 @@ jobs:
 
       - run: mvn -B test
 
-  # box.yml's checks, on the merge commit itself: a merge can differ from the PR head that passed.
-  # On a PR, box.yml runs on its own trigger, so it isn't called here.
+  # On the merge commit itself: it can differ from the PR head that passed.
   box:
     if: github.event_name == 'push'
     uses: ./.github/workflows/box.yml
@@ -36,7 +33,7 @@ jobs:
     if: github.event_name == 'push'
     runs-on: ubuntu-24.04
     permissions:
-      id-token: write # OIDC, for the deploy role
+      id-token: write
       contents: read
     steps:
       - uses: actions/checkout@v4
@@ -72,18 +69,16 @@ jobs:
     runs-on: ubuntu-24.04
     environment: production
     permissions:
-      id-token: write # OIDC, for the deploy role
+      id-token: write
       contents: read
-    # One thing touches the box at a time: every box workflow, and this job, share this group.
+    # Shared by every workflow that touches the box, so only one does at a time.
     concurrency:
       group: box
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
 
-      # Two merges close together race through the checks, and the older one can reach this job
-      # second. Converging it then would roll the box back, so only master's head deploys. If a
-      # newer merge exists, its own run deploys it.
+      # Only master's head deploys: an older run finishing second would roll the box back.
       - name: Still master's newest commit?
         id: head
         run: |
@@ -106,8 +101,6 @@ jobs:
         with:
           node-version: "22"
 
-      # The stack policy (aws/stack-policy.json) makes CloudFormation refuse any update that would
-      # replace the instance or the Elastic IP, so a surprise like 2026-09-25's fails here instead.
       - name: cdk deploy
         if: steps.head.outputs.deploy == 'true'
         working-directory: aws
@@ -115,8 +108,6 @@ jobs:
           npm ci
           npx cdk deploy OtjServicesStack --require-approval never
 
-      # The same path as the converge button. box-run.sh also smoke-tests /health through
-      # Cloudflare and records the SHA in /otj/prod/image-tag.
       - name: otj-converge on the box
         if: steps.head.outputs.deploy == 'true'
         run: .github/scripts/box-run.sh converge "$GITHUB_SHA"

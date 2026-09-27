@@ -18,19 +18,8 @@ import java.time.Instant;
 import java.util.Date;
 import java.util.concurrent.TimeUnit;
 
-/**
- * MongoDB-backed store for bearer sessions.
- *
- * <p>Two indexes back the collection: a unique one on {@code tokenHash}, which is also the only
- * field sessions are ever looked up by, and a TTL index on {@code expiresAt} that lets Mongo reap
- * dead sessions without the application having to sweep. Expiry <em>policy</em> — how long a
- * window is and when it slides — lives in
- * {@link com.github.grepHammerspace.auth.SessionTokenService}; this class only stores what it is
- * told.
- */
 @Singleton
 public class SessionRepository {
-
     private static final Logger log = LoggerFactory.getLogger(SessionRepository.class);
 
     private final MongoCollection<Document> collection;
@@ -48,7 +37,6 @@ public class SessionRepository {
         log.debug("Stored session for user {}", session.userId());
     }
 
-    /** Looks up a session by token hash, or null if there is none. Does not check expiry. */
     public Session findByTokenHash(String tokenHash) {
         return fromDocument(collection.find(Filters.eq("tokenHash", tokenHash)).first());
     }
@@ -61,7 +49,6 @@ public class SessionRepository {
         log.debug("Extended session {} to {}", sessionId, newExpiry);
     }
 
-    /** Deletes the session with this token hash. Returns true if one was found and deleted. */
     public boolean deleteByTokenHash(String tokenHash) {
         return collection.deleteOne(Filters.eq("tokenHash", tokenHash)).getDeletedCount() > 0;
     }

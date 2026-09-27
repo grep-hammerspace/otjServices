@@ -1,9 +1,6 @@
-# ansible-lint config for deploy/ansible. CI runs the production profile (pr.yml).
 profile: production
 skip_list:
-  # Task names here often start with a file, unit or user name that is lowercase on the box
-  # (haproxy.cfg, otjapp, sshd, tailscaled). Capitalising them would make the log harder to match
-  # against the box, not easier.
+  # Task names often start with a lowercase name from the box (haproxy.cfg, otjapp).
   - name[casing]
 exclude_paths:
   - ci-vars.yml

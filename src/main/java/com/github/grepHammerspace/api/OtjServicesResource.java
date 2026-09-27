@@ -52,13 +52,6 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
-/** Primary JAX-RS resource for OTJ automation endpoints.
- *
- * <p>All endpoints require a valid bearer token: {@link Authenticated} binds
- * {@link com.github.grepHammerspace.auth.AuthenticationFilter}, which rejects unauthenticated
- * requests with 401 before they reach this class and exposes the userId as the
- * {@link SecurityContext} principal.
- */
 @Path("/otj-services")
 @Produces("application/json")
 @Consumes("application/json")
@@ -66,11 +59,8 @@ import java.util.concurrent.TimeoutException;
 public class OtjServicesResource {
     private static final Logger log = LoggerFactory.getLogger(OtjServicesResource.class);
 
-    /*
-     * One constant per failure, in the style of AuthResource's INVITE_REJECTED /
-     * CREDENTIALS_REJECTED. A driver's own exception message is never forwarded: it carries URLs
-     * from the login chain, and those chains put the username in a query parameter.
-     */
+    // A driver's own message is never forwarded: it carries login-chain URLs with the username in
+    // them.
     private static final ApiError LOGIN_FAILED = new ApiError(
             "Could not sign in to OneAdvanced. Check the username and password and try again.");
     private static final ApiError CREDENTIALS_MISSING = new ApiError(
@@ -89,10 +79,6 @@ public class OtjServicesResource {
             "This session expects a typed code — call POST /otj-services/submit-with-mfa instead.");
     private static final ApiError NO_LEARNER_ID = new ApiError(
             "No learner ID on this account. Set one via PATCH /auth/me before submitting.");
-    /**
-     * Interpolates the enforced limit rather than repeating the number in prose, so the message
-     * cannot drift from {@link LlmQuotaService#DAILY_LIMIT}.
-     */
     private static final ApiError QUOTA_EXHAUSTED = new ApiError(
             "Daily limit of " + LlmQuotaService.DAILY_LIMIT
                     + " AI requests reached. It resets at midnight UTC.");
@@ -121,17 +107,6 @@ public class OtjServicesResource {
         this.azurePushDriverProvider = azurePushDriverProvider;
     }
 
-    /**
-     * Signs in to OneAdvanced through Keycloak and stops at the OTP prompt.
-     *
-     * <p>Takes the user's OneAdvanced credentials in the request body — this service does not
-     * store them. They are used for the length of this call and handed straight to the driver.
-     *
-     * <p>The half-finished session is parked in
-     * {@link com.github.grepHammerspace.stateStore.UserStateStore} because a TOTP is only valid
-     * for about 30 seconds, which is not long enough to log in from scratch afterwards. Follow
-     * with {@code POST /submit-with-mfa}.
-     */
     @POST
     @Path("/prepare-browser")
     public Response prepareBrowser(OneAdvancedCredentials body, @Context SecurityContext sc) {
@@ -159,17 +134,14 @@ public class OtjServicesResource {
 
         User user = userRepository.findByUserId(userId);
         if (user == null) {
-            // Signup creates the account, so a valid token without one means it was deleted.
             String msg = "No account found for this session. Sign up again.";
             log.warn("User {} not found in repository", userId);
             return Response.status(Response.Status.BAD_REQUEST)
                     .entity("{\"error\": \"" + msg + "\"}").build();
         }
 
-        // After the 400s, so a malformed request never spends quota, and before the call, so a
-        // request that is refused never reaches the model. Content diffing is gone, which means
-        // every request that gets this far does cost a call — there is no resubmit-is-free path
-        // left to lean on.
+        // After the 400s so a malformed request never spends quota; before the call so a refused
+        // one never reaches the model.
         if (!llmQuotaService.tryConsume(userId)) {
             log.info("Rejected log-activities for user {} — daily LLM quota reached", userId);
             return Response.status(429)
@@ -196,8 +168,6 @@ public class OtjServicesResource {
                     .entity("{\"error\": \"" + msg + "\"}").build();
         }
 
-        // Map from the saved row, not the parsed one: only the saved row has an id, which is what
-        // lets the client delete a line it just added without refetching /pending.
         List<PendingActivity> saved = new ArrayList<>();
         for (ActivityLog entry : result.ok()) {
             saved.add(PendingActivity.from(activityLogRepository.saveActivityLog(entry)));
@@ -221,8 +191,6 @@ public class OtjServicesResource {
         String userId = resolveUserState(sc);
         log.info("Received request from user {} to do {}", userId, "pending");
 
-        // No findByUserId check: unlike log-activities, which needs learnerId, reading needs
-        // nothing from the user document. An unregistered caller simply has no rows.
         List<ActivityLog> rows = activityLogRepository.findUnpostedNewestFirst(userId);
         return Response.ok(PendingResponse.from(rows)).build();
     }
@@ -233,30 +201,20 @@ public class OtjServicesResource {
         String userId = resolveUserState(sc);
         log.info("Received request from user {} to do {} for {}", userId, "delete-pending", id);
 
-        // ObjectId.isValid rather than catching IllegalArgumentException from the constructor:
-        // same 400-not-500 outcome, without exception control flow.
         if (!ObjectId.isValid(id)) {
             return Response.status(Response.Status.BAD_REQUEST)
                     .entity("{\"error\": \"'" + id + "' is not a valid activity id.\"}").build();
         }
 
         if (!activityLogRepository.deleteUnpostedById(userId, new ObjectId(id))) {
-            // One body for all three misses — unknown id, someone else's, already posted.
-            // Distinguishing them would confirm that an id the caller does not own exists.
+            // One body for all three misses, so a caller can't confirm that an id it doesn't own
+            // exists.
             return Response.status(Response.Status.NOT_FOUND)
                     .entity("{\"error\": \"No unposted activity log with that id for this user.\"}").build();
         }
         return Response.noContent().build();
     }
 
-    /** Replaces the editable fields of one unposted row owned by the caller.
-     *
-     * <p>Answers with the updated row rather than 204 so the client can write it straight into its
-     * react-query cache and redraw without a refetch — the same reasoning that made
-     * {@code log-activities} return saved rows rather than just a count. {@code createdAt} is
-     * derived from the ObjectId timestamp, so it does not move when a row is edited: "added 3 hours
-     * ago" keeps meaning when the row was added, not when it was last touched.
-     */
     @PUT
     @Path("/pending/{id}")
     public Response updatePending(@PathParam("id") String id, UpdateActivityRequest body,
@@ -282,23 +240,19 @@ public class OtjServicesResource {
                 edit.activityDate(), edit.activityTime(), edit.hours(), edit.minutes(),
                 edit.activityImpact());
         if (updated == null) {
-            // Same body as deletePending's, for the same reason: unknown id, someone else's, and
-            // already posted must be indistinguishable. The client treats a 404 here as "the row is
-            // gone" and refetches rather than reporting a failure.
+            // Same body as deletePending's: the three misses must stay indistinguishable.
             return jsonError(Response.Status.NOT_FOUND,
                     "No unposted activity log with that id for this user.");
         }
         return Response.ok(PendingActivity.from(updated)).build();
     }
 
-    /** Completes the Keycloak flow with a typed OTP, then posts everything pending. */
     @POST
     @Path("/submit-with-mfa")
     public Response useMfaCodeToSubmitUnSubmittedOTJs(SubmitWithMfaRequest body, @Context SecurityContext sc) {
         String userId = resolveUserState(sc);
         log.info("Received request from user {} to do {}", userId, "submit-with-mfa");
-        // The code itself is deliberately absent from this log line — it is a live credential
-        // for the ~30 s it remains valid.
+        // The code itself stays out of this log: it is a live credential.
 
         if (body == null || isBlank(body.mfaCode())) {
             return Response.status(Response.Status.BAD_REQUEST).entity(MFA_CODE_MISSING).build();
@@ -308,9 +262,7 @@ public class OtjServicesResource {
         if (session == null) {
             return Response.status(Response.Status.CONFLICT).entity(NO_SESSION).build();
         }
-        // Without this check an Azure session would be accepted here, and AzureIdDriver ignores
-        // the token it is given — it would start a second background poll racing the first over
-        // the same Microsoft flow token.
+        // Without this, an Azure session would be accepted here and start a second Microsoft poll.
         if (session.flow() != LoginFlow.KEYCLOAK_TOTP) {
             return Response.status(Response.Status.CONFLICT).entity(WRONG_FLOW_AZURE).build();
         }
@@ -325,14 +277,6 @@ public class OtjServicesResource {
         return submitPending(userId, session);
     }
 
-    /**
-     * Logs in to OneAdvanced's cloud-education platform via the QMUL Azure AD path.
-     *
-     * <p>Takes the user's OneAdvanced credentials in the request body — this service does not
-     * store them. Sends a Microsoft Authenticator push and returns immediately, along with the
-     * number to tap when Microsoft asks for a number match. Approval is then waited on by a
-     * background poll, so call {@code GET /azure-id/complete} to pick up the result.
-     */
     @POST
     @Path("/azure-id/prepare")
     public Response azureIdPrepare(OneAdvancedCredentials body, @Context SecurityContext sc) {
@@ -341,22 +285,13 @@ public class OtjServicesResource {
         return prepare(userId, body, LoginFlow.AZURE_PUSH);
     }
 
-    /**
-     * The shared body of both prepare endpoints.
-     *
-     * <p>The credentials never leave this method: they go from the request record into
-     * {@link Driver#prepare} and are not stored, logged, or echoed. On failure the driver's own
-     * message is dropped in favour of {@link #LOGIN_FAILED}, because that message embeds URLs
-     * from the login chain and the chain carries the username in {@code login_hint}.
-     */
     private Response prepare(String userId, OneAdvancedCredentials body, LoginFlow flow) {
         if (body == null || isBlank(body.username()) || isBlank(body.password())) {
             return Response.status(Response.Status.BAD_REQUEST).entity(CREDENTIALS_MISSING).build();
         }
 
-        // Checked before the login rather than after: the Azure flow would otherwise have the
-        // user approve a push, wait two minutes, and only then discover there is nothing to
-        // post under. The learner ID is server-side and is never accepted from the request.
+        // Before the login, so an Azure user isn't made to approve a push with nothing to post
+        // under.
         User user = userRepository.findByUserId(userId);
         if (user == null || isBlank(user.learnerId())) {
             return Response.status(Response.Status.CONFLICT).entity(NO_LEARNER_ID).build();
@@ -384,16 +319,12 @@ public class OtjServicesResource {
         }
 
         if (flow == LoginFlow.KEYCLOAK_TOTP) {
-            // Nothing to wait on — this flow does not progress until the user posts a code, so
-            // the session's future is already complete.
             userState.setSession(new LoginSession(
                     flow, driver, CompletableFuture.completedFuture(null), Instant.now()));
             return Response.ok(PrepareResponse.otpRequired(
                     "Enter the current code from your authenticator app.")).build();
         }
 
-        // Azure: Microsoft is polled in the background so the client is not held open for the
-        // full two minutes. /azure-id/complete waits on this future.
         CompletableFuture<Void> loginFuture = new CompletableFuture<>();
         Thread.ofVirtual().start(() -> {
             try {
@@ -411,10 +342,6 @@ public class OtjServicesResource {
         return Response.ok(PrepareResponse.pushSent(result.userMessage(), challengeNumber)).build();
     }
 
-    /**
-     * Waits for the background EndAuth poll (started by /azure-id/prepare) to complete.
-     * Returns as soon as the user approves in Microsoft Authenticator.
-     */
     @GET
     @Path("/azure-id/complete")
     public Response azureIdComplete(@Context SecurityContext sc) {
@@ -430,8 +357,7 @@ public class OtjServicesResource {
         }
 
         try {
-            // Five seconds past the driver's own 40 x 3 s poll budget, so the poller gets to
-            // report its own timeout rather than being pre-empted by this one.
+            // Past the driver's 40 x 3 s poll budget, so the poller reports its own timeout.
             session.future().get(125, TimeUnit.SECONDS);
         } catch (TimeoutException e) {
             return Response.status(408).entity(MFA_TIMED_OUT).build();
@@ -440,7 +366,6 @@ public class OtjServicesResource {
                     e.getCause() == null ? "unknown" : e.getCause().getClass().getSimpleName());
             return Response.status(Response.Status.BAD_REQUEST).entity(LOGIN_FAILED).build();
         } catch (CancellationException e) {
-            // A newer prepare superseded this session.
             return Response.status(Response.Status.CONFLICT).entity(NO_SESSION).build();
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
@@ -451,13 +376,8 @@ public class OtjServicesResource {
         return submitPending(userId, session);
     }
 
-    /**
-     * Posts everything pending over a completed login, then retires the session.
-     *
-     * <p>The learner ID is read from the account here, at submit time, rather than taken from the
-     * rows being posted. That is what makes a correction through {@code PATCH /auth/me} reach
-     * activities that were already queued when the typo was noticed.
-     */
+    // Read from the account at submit time, so a PATCH /auth/me correction reaches rows already
+    // queued.
     private Response submitPending(String userId, LoginSession session) {
         User user = userRepository.findByUserId(userId);
         if (user == null || isBlank(user.learnerId())) {
@@ -468,8 +388,7 @@ public class OtjServicesResource {
         try {
             result = session.driver().submitPendingOtjs(userId, user.learnerId());
         } finally {
-            // One prepare, one submit. The session holds live OneAdvanced cookies, so it is
-            // dropped as soon as it has been spent rather than left for the TTL to collect.
+            // Dropped once spent: it holds live OneAdvanced cookies.
             userStateStore.getStateForUser(userId).clearSession();
         }
 
@@ -491,22 +410,13 @@ public class OtjServicesResource {
         return value == null || value.isBlank();
     }
 
-    /** Builds the {@code {"error": "..."}} body the mobile client's {@code errorMessage()} reads.
-     *
-     * <p>Same shape as the hand-built strings elsewhere in this class, but the message is escaped —
-     * validation messages quote back what the caller sent, and a stray {@code "} in there would
-     * otherwise produce a body that does not parse, costing the user the specific reason. */
+    // Escaped: validation messages quote the caller's input back.
     private static Response jsonError(Response.Status status, String message) {
         String escaped = message.replace("\\", "\\\\").replace("\"", "\\\"")
                 .replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t");
         return Response.status(status).entity("{\"error\": \"" + escaped + "\"}").build();
     }
 
-    /**
-     * Reads the authenticated userId from the {@link SecurityContext} set by
-     * {@link com.github.grepHammerspace.auth.AuthenticationFilter} and lazily initialises
-     * per-user state if it doesn't exist yet.
-     */
     private String resolveUserState(SecurityContext sc) {
         String userId = sc.getUserPrincipal().getName();
         userStateStore.createUserState(userId);

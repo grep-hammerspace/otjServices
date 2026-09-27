@@ -26,29 +26,13 @@ import java.util.UUID;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-/**
- * Drives login to OneAdvanced's cloud-education platform via the QMUL Azure AD federation path:
- *   PKCE bypass → Keycloak OIDC → Azure AD broker → Microsoft login → MFA push → education.oneadvanced.com
- *
- * The OneAdvanced discover endpoint only recognises {@code se24.qmul.ac.uk} emails, not
- * {@code qmul.ac.uk}, so we replicate what discover does: generate PKCE code_verifier/challenge,
- * inject STATE and CODE_VERIFIER cookies, and go straight to Keycloak.
- *
- * Once logged in, {@link #submitPendingOtjs} posts to the same JSON activity-log API as
- * {@link OtjDriver}, reusing the cookies collected during this login instead of OtjDriver's
- * direct (non-federated) Keycloak login.
- *
- * Usage:
- *   1. prepare(username, password) — stops after sending the Microsoft Authenticator push
- *   2. completeMfa("") — polls until the user approves, then completes the redirect chain to education.oneadvanced.com
- *      (no-op if an existing SSO session already finished login inside prepare)
- */
+// QMUL's Azure AD federation. OneAdvanced discover only recognises se24.qmul.ac.uk emails, so the
+// PKCE cookies discover would set are generated here instead.
 public class AzureIdDriver implements Driver {
     private static final Logger log = LoggerFactory.getLogger(AzureIdDriver.class);
 
     private static final MediaType JSON_TYPE = MediaType.get("application/json; charset=UTF-8");
 
-    // Keycloak OIDC endpoint for QMUL — bypasses OneAdvanced discover
     private static final String KEYCLOAK_AUTH_URL =
             "https://identity.oneadvanced.com/auth/realms/queen-mary-university-london"
             + "/protocol/openid-connect/auth";
@@ -56,18 +40,8 @@ public class AzureIdDriver implements Driver {
     private static final String OA_REDIRECT_URI =
             "https://auth.identity.oneadvanced.com/auth/redirect";
 
-    // STATE cookie value sent by the discover endpoint; we inject it ourselves.
-    // Encodes: {"clientId":"advancedsso","redirectUri":"https://education.oneadvanced.com/parseauth?redirectUri=https://education.oneadvanced.com/",
-    //           "organizationRef":"queen-mary-university-london"}
-    // redirectUri matches OtjDriver's DISCOVER_URL target exactly (confirmed against a captured
-    // HAR of a real login).
-    //
-    // No "authenticationDomain" field here — a live IT run proved that including one routes
-    // auth.identity.oneadvanced.com/auth/redirect to https://authcookies.<authenticationDomain>/auth/authenticate,
-    // a per-customer cookie-bounce host that only exists for third-party apps (confirmed against
-    // the original SmartAssessor HAR: authcookies.smartassessor.co.uk). education.oneadvanced.com
-    // is a first-party OneAdvanced app — OtjDriver's DISCOVER_URL never sends authenticationDomain
-    // either — so omitting it here routes straight to auth.identity.oneadvanced.com/auth/authenticate.
+    // No authenticationDomain: including one routes to a per-customer cookie-bounce host that
+    // doesn't exist for education.oneadvanced.com.
     private static final String STATE_JSON =
             "{\"clientId\":\"advancedsso\","
             + "\"redirectUri\":\"https://education.oneadvanced.com/parseauth?redirectUri=https://education.oneadvanced.com/\","
@@ -91,8 +65,6 @@ public class AzureIdDriver implements Driver {
     private static final int MAX_POLL_ATTEMPTS = 40; // 40 × 3 s = 2 min
     private static final long POLL_INTERVAL_MS = 3_000L;
 
-    // Same JSON activity-log API OtjDriver posts to — reachable once the Azure AD login
-    // above lands us on education.oneadvanced.com with a valid session.
     private static final String ACTIVITY_LOG_API =
             "https://education.oneadvanced.com/api/cloud-education/v1/learner/%s/activity-log";
 
@@ -101,19 +73,13 @@ public class AzureIdDriver implements Driver {
     private final ObjectMapper mapper;
     private final ActivityLogRepository activityLogRepository;
 
-    // State held between prepare() and completeMfa()
     private String mfaCtx;
     private String mfaFlowToken;
     private String mfaCanary;
     private String mfaSessionId;
-    /**
-     * The OneAdvanced username, and the one credential-derived value this class is allowed to
-     * retain. Microsoft's ProcessAuth step needs it in its {@code login} field, and ProcessAuth
-     * runs in {@link #completeMfa} — a separate HTTP request, minutes after {@link #prepare}
-     * received it. Everything else, the password above all, stays a local variable. Never log it.
-     */
+    // The one credential-derived value kept between requests: ProcessAuth needs it in completeMfa.
+    // Never log it.
     private String mfaLogin;
-    // Set to true when an existing MS SSO session completes the whole flow inside prepare()
     private boolean loginComplete = false;
 
     @Inject
@@ -127,13 +93,7 @@ public class AzureIdDriver implements Driver {
                 .build();
     }
 
-    /**
-     * Returns the <em>names</em> of all cookies whose domain contains {@code domain}.
-     *
-     * <p>Names only, never values: after login the jar holds live {@code education.oneadvanced.com}
-     * session cookies, and a value here is a ready-to-replay credential. "Did we get a session
-     * cookie at all?" is the only question this needs to answer.
-     */
+    // Names only: a cookie value here is a replayable credential.
     List<String> cookieNamesFor(String domain) {
         return cookieJar.allCookies().stream()
                 .filter(c -> c.domain().contains(domain))
@@ -141,7 +101,6 @@ public class AzureIdDriver implements Driver {
                 .toList();
     }
 
-    // ── Cookie jar ─────────────────────────────────────────────────────────────
     private static final class InMemoryCookieJar implements CookieJar {
         private final List<Cookie> store = new ArrayList<>();
 
@@ -166,36 +125,16 @@ public class AzureIdDriver implements Driver {
         }
     }
 
-    // ── $Config extraction ──────────────────────────────────────────────────────
-    // Microsoft embeds all page state in a $Config = {...} JS object.
-    // We pull individual string values by key rather than parsing the full object.
     private static String cfg(String html, String key) {
         Matcher m = Pattern.compile("\"" + key + "\"\\s*:\\s*\"([^\"]+)\"").matcher(html);
         return m.find() ? m.group(1) : null;
     }
 
-    // ── Driver interface ────────────────────────────────────────────────────────
-
-    /**
-     * Executes the Azure AD login flow up to and including sending the Microsoft
-     * Authenticator push notification. Stops and returns so the caller can
-     * inform the user to approve on their phone, then call {@link #completeMfa(String)}.
-     *
-     * If an active Microsoft SSO session is detected the entire login completes
-     * here and {@link #completeMfa(String)} becomes a no-op.
-     */
     @Override
     public PrepareResult prepare(String username, String password) throws IOException {
         this.mfaLogin = username;
         this.loginComplete = false;
 
-        // ── Steps 1-2: bypass OneAdvanced discover with hand-crafted PKCE ───
-        // The discover endpoint just generates a PKCE code_verifier / code_challenge
-        // pair, sets them as cookies on auth.identity.oneadvanced.com, and redirects
-        // to Keycloak. We replicate that here so we can supply any Microsoft-format
-        // username without needing the email to be registered in the discover service.
-
-        // Generate PKCE verifier (32 random bytes → base64url, no padding)
         byte[] verifierBytes = new byte[32];
         new SecureRandom().nextBytes(verifierBytes);
         String codeVerifier  = Base64.getUrlEncoder().withoutPadding().encodeToString(verifierBytes);
@@ -208,7 +147,6 @@ public class AzureIdDriver implements Driver {
         }
         String codeChallenge = Base64.getUrlEncoder().withoutPadding().encodeToString(challengeHash);
 
-        // Inject the STATE and CODE_VERIFIER cookies that discover would have set
         String stateValue = Base64.getUrlEncoder().withoutPadding()
                 .encodeToString(STATE_JSON.getBytes(StandardCharsets.UTF_8));
         HttpUrl authBase = HttpUrl.parse("https://auth.identity.oneadvanced.com/");
@@ -220,7 +158,6 @@ public class AzureIdDriver implements Driver {
         ));
         log.info("PKCE ready — going directly to Keycloak");
 
-        // ── Step 3: GET Keycloak OIDC auth page ────────────────────────────
         String keycloakUrl = KEYCLOAK_AUTH_URL
                 + "?client_id=advancedsso"
                 + "&response_type=code"
@@ -248,7 +185,6 @@ public class AzureIdDriver implements Driver {
         resp.close();
         log.info("Broker page: {}", SafeUrl.redact(currentUrl));
 
-        // ── Step 4: POST SAMLRequest to Microsoft ───────────────────────────
         doc = Jsoup.parse(body, currentUrl);
         Element samlFormEl = doc.selectFirst("form");
         if (samlFormEl == null) throw new IOException("SAML form not found on broker page — URL: " + SafeUrl.redact(currentUrl));
@@ -257,9 +193,8 @@ public class AzureIdDriver implements Driver {
         body = resp.body().string();
         resp.close();
 
-        // ── Step 5: Handle Microsoft SSO interstitial (oPostParams / sso_reload) ──
-        // Microsoft returns a "Redirecting" page whose JS re-POSTs oPostParams to
-        // the same endpoint with ?sso_reload=true, picking up the canary.
+        // Microsoft's SSO interstitial re-POSTs oPostParams with ?sso_reload=true to pick up the
+        // canary.
         if (body.contains("oPostParams")) {
             log.info("Handling Microsoft SSO interstitial");
             Matcher m = Pattern.compile("\"oPostParams\"\\s*:\\s*\\{([^}]+)\\}").matcher(body);
@@ -276,7 +211,6 @@ public class AzureIdDriver implements Driver {
             log.info("After sso_reload, at: {}", SafeUrl.redact(currentUrl));
         }
 
-        // ── Fast-path: existing MS SSO session already sent us the SAMLResponse ──
         if (body.contains("name=\"SAMLResponse\"") || body.contains("name='SAMLResponse'")) {
             log.info("Existing Microsoft SSO session detected — completing login without MFA");
             completeSamlChain(body, currentUrl);
@@ -284,9 +218,7 @@ public class AzureIdDriver implements Driver {
             return PrepareResult.loginComplete();
         }
 
-        // ── Step 6: POST credentials to Microsoft login endpoint ────────────
-        // The modern Microsoft ConvergedSignIn page has no HTML <form>; it's JS-rendered.
-        // We extract $Config values and POST directly to urlPost.
+        // The sign-in page is JS-rendered with no <form>: POST to $Config's urlPost directly.
         String pgid = cfg(body, "pgid");
         if (!"ConvergedSignIn".equals(pgid)) {
             throw new IOException("Expected Microsoft login page (ConvergedSignIn), got pgid=" + pgid
@@ -334,7 +266,6 @@ public class AzureIdDriver implements Driver {
         resp.close();
         log.debug("After cred POST: pgid={} url={}", cfg(body, "pgid"), SafeUrl.redact(currentUrl));
 
-        // ── Fast-path: Microsoft responded with SAMLResponse immediately (no MFA) ──
         if (body.contains("name=\"SAMLResponse\"") || body.contains("name='SAMLResponse'")) {
             log.info("Microsoft returned SAMLResponse directly — completing login without MFA");
             completeSamlChain(body, currentUrl);
@@ -342,7 +273,6 @@ public class AzureIdDriver implements Driver {
             return PrepareResult.loginComplete();
         }
 
-        // ── Step 7: Extract MFA page state and send BeginAuth ────────────────
         String mfaPgid = cfg(body, "pgid");
         if (!"ConvergedTFA".equals(mfaPgid)) {
             throw new IOException("Expected MFA page (ConvergedTFA), got pgid=" + mfaPgid
@@ -402,11 +332,6 @@ public class AzureIdDriver implements Driver {
         return result;
     }
 
-    /**
-     * Polls Microsoft until the phone push is approved, then completes the
-     * Keycloak → education.oneadvanced.com redirect chain. Blocks for up to ~2 minutes.
-     * The {@code ignoredToken} parameter is not used.
-     */
     @Override
     public void completeMfa(String ignoredToken) throws IOException {
         if (loginComplete) {
@@ -417,7 +342,6 @@ public class AzureIdDriver implements Driver {
             throw new IllegalStateException("No MFA state — call prepare first");
         }
 
-        // ── Poll EndAuth ────────────────────────────────────────────────────
         long lastPollStart = 0, lastPollEnd = 0;
         boolean approved = false;
 
@@ -485,7 +409,6 @@ public class AzureIdDriver implements Driver {
             throw new IOException("Timed out waiting for Microsoft Authenticator approval");
         }
 
-        // ── POST ProcessAuth ─────────────────────────────────────────────────
         FormBody processBody = new FormBody.Builder()
                 .add("type",              "22")
                 .add("mfaAuthMethod",     "PhoneAppNotification")
@@ -510,11 +433,6 @@ public class AzureIdDriver implements Driver {
         completeSamlChain(processHtml, processUrl);
     }
 
-    /**
-     * Fetches all unposted OTJs from MongoDB and POSTs each one to the activity-log API —
-     * identical to {@link OtjDriver#submitPendingOtjs}, just reusing the session cookies
-     * this driver collected via the Azure AD login instead of a direct Keycloak login.
-     */
     @Override
     public OtjSubmitResult submitPendingOtjs(String userId, String learnerId) {
         List<ActivityLog> pending = activityLogRepository.getUnpostedActivityLogsFor(userId);
@@ -565,10 +483,6 @@ public class AzureIdDriver implements Driver {
         return new OtjSubmitResult(posted, failed);
     }
 
-    /**
-     * @param learnerId the account's current learner ID, which wins over the one stamped on the
-     *                  row when it was logged — see {@link Driver#submitPendingOtjs}.
-     */
     private Map<String, Object> buildPayload(ActivityLog activityLog, String learnerId) {
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("learnerId", learnerId.strip());
@@ -576,8 +490,7 @@ public class AzureIdDriver implements Driver {
         payload.put("unitId", "ef974f73-5d9d-447e-8652-379ba9535229");
         payload.put("activityDate", activityLog.activityDate().replace("/", "-"));
         payload.put("activityTime", "T" + activityLog.activityTime() + ":00");
-        // ActivityLog.activityType() is always 0 (never set by the LLM parser) — the
-        // real OneAdvanced activity-log API expects a fixed code here, confirmed working at 16.
+        // The API expects 16 here; activityType is never set by the parser.
         payload.put("activityType", 16);
         payload.put("hours", activityLog.hours());
         payload.put("minutes", String.format("%02d", activityLog.minutes()));
@@ -587,10 +500,6 @@ public class AzureIdDriver implements Driver {
         return payload;
     }
 
-    // ── Helpers ────────────────────────────────────────────────────────────────
-
-    /** Scrapes the SAMLResponse auto-submit form and POSTs it to Keycloak, then follows
-     *  the full redirect chain to education.oneadvanced.com. */
     private void completeSamlChain(String html, String baseUrl) throws IOException {
         Document doc = Jsoup.parse(html, baseUrl);
         Element samlForm = doc.selectFirst("form");
@@ -598,7 +507,7 @@ public class AzureIdDriver implements Driver {
 
         Response finalResp = post(samlForm.absUrl("action"), hiddenInputsOf(samlForm));
         String landingUrl = finalResp.request().url().toString();
-        finalResp.body().string(); // consume to follow the full redirect chain
+        finalResp.body().string();
         finalResp.close();
 
         log.info("Login complete — landing URL: {}", SafeUrl.redact(landingUrl));
@@ -607,7 +516,6 @@ public class AzureIdDriver implements Driver {
         }
     }
 
-    /** Builds a FormBody from all hidden inputs in a form element. */
     private static FormBody hiddenInputsOf(Element form) {
         FormBody.Builder b = new FormBody.Builder();
         for (Element input : form.select("input[type=hidden]")) {
@@ -616,13 +524,12 @@ public class AzureIdDriver implements Driver {
         return b.build();
     }
 
-    /** Parses a Microsoft SAS API response body into a JsonNode. */
     private JsonNode decodeSasResponse(String raw) throws IOException {
         String trimmed = raw.trim();
         if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
             return mapper.readTree(trimmed);
         }
-        // Older behaviour: some endpoints return base64-encoded JSON.
+        // Some endpoints return base64-encoded JSON.
         byte[] bytes = Base64.getMimeDecoder().decode(trimmed);
         return mapper.readTree(bytes);
     }

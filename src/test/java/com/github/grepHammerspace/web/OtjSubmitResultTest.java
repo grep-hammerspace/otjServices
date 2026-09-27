@@ -7,7 +7,6 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.*;
 
 class OtjSubmitResultTest {
-
     @Test
     void nothingToPost_true_whenBothListsEmpty() {
         assertTrue(new OtjSubmitResult(List.of(), List.of()).nothingToPost());

@@ -19,22 +19,6 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.stream.Collectors;
 
-/**
- * Dagger module for the integration test object graph.
- *
- * <p>Mirrors {@link com.github.grepHammerspace.bind.AppModule} but replaces two production
- * dependencies with test doubles:
- * <ul>
- *   <li><b>MongoDB URI</b> — supplied by the Testcontainer rather than read from the environment,
- *       so tests never touch a real database.</li>
- *   <li><b>{@link com.github.grepHammerspace.llm.LlmService}</b> — a fake that parses the diff
- *       locally, so tests never call the Anthropic API.</li>
- * </ul>
- * All other bindings ({@link com.github.grepHammerspace.stateStore.UserStateStore},
- * {@link com.github.grepHammerspace.db.UserRepository},
- * {@link com.github.grepHammerspace.auth.SessionTokenService}, etc.) are the real production
- * classes. Scenarios authenticate with real bearer tokens issued by {@link ServerHooks}.
- */
 @Module
 public class TestAppModule {
     private final String mongoUri;
@@ -46,11 +30,6 @@ public class TestAppModule {
     @Provides @Singleton
     UserStateStore provideUserStateStore() { return new UserStateStore(); }
 
-    /**
-     * A fixed allowlist rather than {@link AdminAllowlist#fromEnv()} — scenarios must not depend
-     * on the developer's environment, and {@code admin_invites.feature} needs a login that is
-     * definitely off the list to prove the gate rejects it.
-     */
     @Provides @Singleton
     AdminAllowlist provideAdminAllowlist() { return AdminAllowlist.parse(ServerHooks.ADMIN_LOGIN); }
 
@@ -62,10 +41,6 @@ public class TestAppModule {
         return client.getDatabase("otjdb");
     }
 
-    /**
-     * Fake LLM service for integration tests — returns one ActivityLog per non-blank line
-     * in the diff without calling the Anthropic API.
-     */
     @Provides @Singleton
     LlmService provideLlmService() {
         return (diff, today, userId, learnerId) -> {
@@ -77,12 +52,7 @@ public class TestAppModule {
         };
     }
 
-    /*
-     * The drivers are the third and fourth test doubles. Unlike the LLM, these are not swapped
-     * to save money — they are swapped because the real ones perform a live SSO login against
-     * Keycloak and Microsoft, which no scenario can do. @Singleton so a step definition and the
-     * running resource see the same instance.
-     */
+    // @Singleton so a step and the running resource see the same fake.
 
     @Provides @Singleton @Keycloak
     Driver provideKeycloakDriver(@Keycloak FakeDriver fake) { return fake; }

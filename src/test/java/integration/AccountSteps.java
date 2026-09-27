@@ -17,29 +17,12 @@ import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-/**
- * Step definitions for {@code account.feature} — {@code GET} and {@code PATCH /auth/me}.
- *
- * <p>Everything here authenticates with the <b>signup token</b> rather than the hook's seeded
- * {@code test-user-id} token. These endpoints read and write the caller's user document, and the
- * seeded token belongs to a userId that no signup ever created — so scenarios need an account that
- * actually exists, which means the token the signup handed back.
- *
- * <p>Cucumber glue is global, so shared assertions are not redefined here: status and
- * {@code contains} come from {@link SharedSteps}, {@code does not contain} from
- * {@link PendingSteps}, and the users-collection field check from {@link SharedSteps}. Only
- * the steps this feature is the first to need are below.
- */
+// Uses the signup token: the hook's seeded test-user-id has no account behind it.
 public class AccountSteps {
     private static final OkHttpClient HTTP = new OkHttpClient();
     private static final MediaType JSON = MediaType.get("application/json");
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
-    /**
-     * Parks the current signup token under a name, so a later scenario step can use it after a
-     * second signup has overwritten {@code "signupToken"}. What proves one account cannot read
-     * another's.
-     */
     @Given("I remember the signup token as {string}")
     public void rememberSignupToken(String name) {
         Object token = ScenarioContext.get("signupToken");
@@ -57,7 +40,6 @@ public class AccountSteps {
         patchWithBody(path, MAPPER.writeValueAsString(Map.of("learnerId", learnerId)));
     }
 
-    /** The raw-body form, for the bodies a typed step cannot express: {@code {}} and a null field. */
     @When("I PATCH {string} with body {string} using the signup token")
     public void patchRawBody(String path, String body) throws Exception {
         patchWithBody(path, body);
@@ -81,11 +63,6 @@ public class AccountSteps {
         send(request(path, null).post(RequestBody.create(body, JSON)));
     }
 
-    /**
-     * The narrowness assertion. {@code AccountResponse} is the seam that keeps
-     * {@code appPasswordHash} and the server-minted {@code userId} off the wire, and a refactor
-     * that serialised {@code User} directly would satisfy every {@code contains} check in the file.
-     */
     @Then("the response body has exactly the keys {string}")
     public void responseBodyHasExactlyKeys(String expected) throws Exception {
         List<String> want = Arrays.stream(expected.split(",")).map(String::strip).sorted().toList();
@@ -98,11 +75,7 @@ public class AccountSteps {
         assertEquals(want, got, "response body keys differ\nActual body: " + ScenarioContext.get("lastResponseBody"));
     }
 
-    /**
-     * Proves a learner ID change did not disturb the password hash. Checking the stored hash still
-     * starts with {@code $2a$} would pass against a hash of some *other* password; only a login
-     * shows the original one still works.
-     */
+    // A login, not a $2a$ prefix check, is what proves the original password still works.
     @Then("the account {string} can still log in with password {string}")
     public void canStillLogIn(String username, String password) throws Exception {
         String base = (String) ScenarioContext.get("baseUrl");
@@ -116,11 +89,6 @@ public class AccountSteps {
         }
     }
 
-    /**
-     * Reads the row back from Mongo rather than from a response body: {@code PendingActivity} omits
-     * {@code learnerId} on purpose, so the stored document is the only place this is visible — and
-     * the stored document is what the submission drivers actually send.
-     */
     @And("the newest activity log for user {string} has learnerId {string}")
     public void newestActivityLogHasLearnerId(String appUsername, String expected) {
         MongoDatabase db = (MongoDatabase) ScenarioContext.get("db");
@@ -140,7 +108,6 @@ public class AccountSteps {
         send(request(path, null).patch(RequestBody.create(body, JSON)));
     }
 
-    /** A builder for {@code path}, bearing the remembered token named {@code name}, or the signup token. */
     private static Request.Builder request(String path, String name) {
         String base = (String) ScenarioContext.get("baseUrl");
         Object token = ScenarioContext.get(name == null ? "signupToken" : "token:" + name);

@@ -1,23 +1,8 @@
 #!/usr/bin/env bash
-# box-run.sh <action> <arg>
-#
-# The one path from GitHub Actions to the box, used by every workflow that touches it.
-# It finds the instance, sends a FIXED command through
-# `ssm send-command`, waits for it, and reports.
-#
-#   converge <sha>    otj-converge <sha>             apply a release (app and box config)
-#   check    <sha>    otj-converge <sha> --check     show what would change; change nothing
-#   rollback <sha>    otj-converge <sha>, but with the otj-converge taken from <sha>'s image,
-#                     so a broken copy on the box can't block the way back
-#   restart  <unit>   restart one of hours-api, admin-api, haproxy, alloy, then check it's healthy
-#
-# Arguments come from workflow inputs, so each one is validated here before it goes near a
-# command line: a full hex SHA, or a unit from a fixed list. Nothing else reaches the box.
-#
-# What it prints: the PLAY RECAP, the failed tasks, and for `check` the names of the tasks that
-# would change. The FULL output (diffs included) goes to the /otj/converge CloudWatch log group
-# instead, because GitHub job logs are readable by any signed-in GitHub user. Ansible never
-# handles a secret, so neither place can contain one.
+# box-run.sh <converge|check|rollback|restart> <arg>: sends a fixed command to the box through SSM
+# and reports.
+# Arguments come from workflow inputs, so each is validated before it nears a command line. The full
+# output goes to CloudWatch, not here: GitHub job logs are readable by any signed-in GitHub user.
 set -euo pipefail
 
 REGION=eu-west-2
@@ -25,7 +10,7 @@ STACK=OtjServicesStack
 LOG_GROUP=/otj/converge
 REPO=378849626815.dkr.ecr.eu-west-2.amazonaws.com/otj-hours-api
 POLL_SECONDS=10
-MAX_POLLS=180 # 30 minutes: a first converge on a blank box installs everything
+MAX_POLLS=180
 
 action="${1:?usage: box-run.sh <converge|check|rollback|restart> <arg>}"
 arg="${2:?usage: box-run.sh <converge|check|rollback|restart> <arg>}"
@@ -43,7 +28,6 @@ case "$action" in
   *) die "unknown action '$action'" ;;
 esac
 
-# ── The script the box runs, as root ────────────────────────────────────────────────────────
 case "$action" in
   converge) remote="/usr/local/sbin/otj-converge $arg" ;;
   check) remote="/usr/local/sbin/otj-converge $arg --check" ;;
@@ -63,7 +47,6 @@ EOF
     if [[ "$arg" == haproxy ]]; then
       remote="set -euo pipefail; systemctl restart haproxy; sleep 2; systemctl is-active haproxy"
     elif [[ "$arg" == alloy ]]; then
-      # A system unit, like HAProxy. Ready means its config loaded and its components are healthy.
       remote=$(cat <<EOF
 set -euo pipefail
 systemctl restart alloy
@@ -86,8 +69,7 @@ EOF
     ;;
 esac
 
-# Sent base64-encoded and piped to bash, so no quoting survives the trip into SSM's JSON and
-# whatever shell AWS-RunShellScript uses.
+# Base64 and piped to bash, so no quoting has to survive SSM's JSON.
 encoded=$(printf '%s\n' "$remote" | base64 -w0)
 params=$(jq -nc --arg c "echo $encoded | base64 -d | bash" \
   '{commands: [$c], executionTimeout: ["1800"]}')
@@ -118,10 +100,7 @@ for _ in $(seq 1 "$MAX_POLLS"); do
 done
 echo "==> $status"
 
-# ── Report ───────────────────────────────────────────────────────────────────────────────────
-# The agent uploads output as the command runs, but the last events can trail completion by a
-# few seconds. By prefix, not by naming stdout and stderr: a stream only exists once something
-# was written to it, and naming a missing one fails the whole call.
+# By prefix: a stream exists only once written to, and naming a missing one fails the call.
 stream="$command_id/$instance/aws-runShellScript"
 output=""
 for _ in 1 2 3 4 5 6; do
@@ -141,11 +120,8 @@ done
   echo
   echo '```'
   if [[ "$action" == restart || "$output" != *"PLAY RECAP"* ]]; then
-    # A restart, or a failure before Ansible got going (otj-converge itself, the ECR pull): the
-    # last lines are the story.
     printf '%s\n' "$output" | tail -n 20
   else
-    # Failed tasks, with the TASK line each belongs to.
     printf '%s\n' "$output" | awk '/^TASK \[/{t=$0} /^(fatal|failed):/{print t; print}' | cut -c1-300
     if [[ "$action" == check ]]; then
       echo "--- would change:"
@@ -158,14 +134,12 @@ done
 
 [[ "$status" == Success ]] || die "$action $arg ended $status"
 
-# ── After a successful apply ─────────────────────────────────────────────────────────────────
 if [[ "$action" == converge || "$action" == rollback ]]; then
-  # What's live, for converge-check's default and for rebuilds.
   aws ssm put-parameter --region "$REGION" --name /otj/prod/image-tag --type String \
     --value "$arg" --overwrite >/dev/null
   echo "==> /otj/prod/image-tag = $arg"
 
-  # Through Cloudflare, end to end. cf-ray proves it came through the proxy.
+  # cf-ray proves it came through Cloudflare.
   headers=$(curl -sS -D - -o /dev/null --max-time 20 https://otj-services.com/health || true)
   if grep -q '^HTTP/[0-9.]* 200' <<<"$headers" && grep -qi '^cf-ray:' <<<"$headers"; then
     echo "==> https://otj-services.com/health: 200 through Cloudflare"

@@ -8,17 +8,10 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-/** The validation rules for {@code PUT /pending/{id}}, exercised without the HTTP layer.
- *
- *  <p>The rules exist so that a hand-edited row cannot end up less valid than a parsed one, which
- *  makes each one worth a case of its own. {@code edit_pending.feature} then proves that a failure
- *  here reaches the client as a 400 with the message in it. */
 class UpdateActivityRequestTest {
-
     private static final DateTimeFormatter YYYY_MM_DD = DateTimeFormatter.ofPattern("uuuu/MM/dd");
     private static final String YESTERDAY = LocalDate.now().minusDays(1).format(YYYY_MM_DD);
 
-    /** A request that passes every rule, so each test can vary exactly one thing. */
     private static UpdateActivityRequest valid() {
         return new UpdateActivityRequest(YESTERDAY, "09:30", 2, 30, "Paired on the auth filter");
     }
@@ -43,7 +36,6 @@ class UpdateActivityRequestTest {
         return new UpdateActivityRequest(YESTERDAY, "09:00", 1, 0, impact);
     }
 
-    /** Asserts every value is refused, and that the message says which field was at fault. */
     private static void allRejected(List<UpdateActivityRequest> requests, String expectedInMessage) {
         for (UpdateActivityRequest request : requests) {
             String error = errorFor(request);

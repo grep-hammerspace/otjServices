@@ -7,8 +7,7 @@
     name: alloy.service
     state: restarted
 
-# A config change only: Alloy re-reads it in place and keeps its journal position. Retried because
-# on a first run it follows the restart above, while Alloy is still starting.
+# Retried: on a first run this follows the restart, while Alloy is still starting.
 - name: Reload alloy
   ansible.builtin.uri:
     url: http://127.0.0.1:12345/-/reload

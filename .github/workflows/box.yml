@@ -1,7 +1,3 @@
-# Checks for the box's configuration (deploy/ansible, deploy/haproxy, deploy/bin) on every PR:
-# static checks, then the box rehearsal, which applies the real playbook to a GitHub runner, twice
-# Java's tests are in deploy.yml, which also calls this workflow on a
-# merge to master and deploys only if it passes, so there's no push trigger here.
 name: Box
 
 on:
@@ -19,10 +15,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # The same apt packages the box gets, so the checks use the box's versions.
       - run: sudo apt-get update -q && sudo apt-get install -y -q ansible-core ansible-lint shellcheck haproxy
 
-      # With apt's Ansible, not the runner's newer pipx one that comes first in its PATH.
+      # apt's Ansible, not the runner's newer pipx one.
       - name: ansible-lint (production profile)
         working-directory: deploy/ansible
         run: env PATH=/usr/sbin:/usr/bin:/sbin:/bin /usr/bin/ansible-lint
@@ -34,8 +29,6 @@ jobs:
       - name: shellcheck
         run: shellcheck deploy/bin/otj-converge deploy/ansible/roles/app/files/otj-render-env .github/scripts/box-run.sh
 
-      # haproxy.cfg names absolute paths, so the check puts a throwaway cert and the range list
-      # where the box has them.
       - name: haproxy -c, with the box's HAProxy
         run: |
           sudo install -d -m 0700 /etc/haproxy/certs
@@ -52,12 +45,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # The runner differs from the box in four ways (found by a spike before this was built). Each
-      # is corrected here, in the job, and never in the roles, because the box has none of them.
-      #
-      # 1. The runner image writes its own environment into /etc/environment, and pam_env hands it
-      #    to every user's systemd manager, so otjapp's Quadlet generator would look in
-      #    /home/runner. Put back Ubuntu's default before otjapp exists.
+      # The runner differs from the box in four ways, corrected here and never in the roles:
+      # 1. The runner's /etc/environment would point otjapp's Quadlet generator at /home/runner.
       - name: A stock /etc/environment
         run: |
           echo 'PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin"' \
@@ -71,27 +60,21 @@ jobs:
           docker save localhost/otj-hours-api:ci -o /tmp/otj-image.tar
           chmod 0644 /tmp/otj-image.tar
 
-      # On the runner's own address, not a wildcard and not loopback: rootless containers reach the
-      # host through slirp4netns, which can't see the host's 127.0.0.1.
+      # The runner's own address: rootless containers can't reach the host's 127.0.0.1.
       - name: A throwaway Mongo
         run: |
           ip=$(hostname -I | awk '{print $1}')
           echo "RUNNER_IP=$ip" >> "$GITHUB_ENV"
           docker run -d --name mongo -p "$ip:27017:27017" docker.io/library/mongo:8
 
-      # Where Alloy pushes in the rehearsal, in place of Grafana Cloud (ci-vars.yml), so the job can
-      # read the lines back. Loopback only, so verify's wildcard-listener check doesn't see it.
       - name: A throwaway Loki
         run: docker run -d --name loki -p 127.0.0.1:3100:3100 docker.io/grafana/loki:3.7.8
 
-      # And where Alloy remote-writes host metrics, in place of Grafana Cloud Prometheus.
       - name: A throwaway Prometheus
         run: |
           docker run -d --name prometheus -p 127.0.0.1:9090:9090 docker.io/prom/prometheus:v3.15.0 \
             --config.file=/etc/prometheus/prometheus.yml --web.enable-remote-write-receiver
 
-      # The box's certificate is installed by hand, so the rehearsal does the same, with a
-      # self-signed one. Valid for more than verify's 90-day expiry check.
       - name: A throwaway origin certificate
         run: |
           sudo install -d -m 0700 /etc/haproxy/certs
@@ -99,10 +82,9 @@ jobs:
             -keyout /tmp/k.pem -out /tmp/c.pem 2>/dev/null
           cat /tmp/c.pem /tmp/k.pem | sudo install -m 0600 /dev/stdin /etc/haproxy/certs/origin.pem
 
-      # 2. The runner's sudo passes the caller's environment through, so the playbook runs from a
-      #    clean root environment, like an SSM command gets on the box.
-      # 3. otjapp can't enter the checkout directory, which is fine here: only root reads it.
-      # 4. A newer pipx Ansible comes first in the runner's PATH, so apt's is called by full path.
+      # 2. The runner's sudo passes its environment through, so run from a clean one.
+      # 3. otjapp can't enter the checkout; only root reads it.
+      # 4. apt's Ansible, by full path.
       - name: Apply the playbook
         working-directory: deploy/ansible
         run: |
@@ -129,8 +111,7 @@ jobs:
           code=$(curl -sk -o /dev/null -w '%{http_code}' "${lo[@]}" $url/health)
           [ "$code" = 200 ] || { echo "::error::/health through HAProxy: $code"; exit 1; }
 
-          # A login with a fresh username each time, so the app's own per-username limiter never
-          # answers instead of HAProxy's. Prints "<status> <Retry-After>".
+          # A fresh username each time, so the app's own limiter never answers instead of HAProxy's.
           login() {
             curl -sk -o /dev/null -D - -X POST "$@" $url/auth/session \
               -H 'Content-Type: application/json' \
@@ -139,15 +120,12 @@ jobs:
           }
           eleventh() { for _ in $(seq 1 10); do login "$@" >/dev/null; done; login "$@"; }
 
-          # Trusted source (127.0.0.1 is in the CI range list): each CF-Connecting-IP is its own
-          # client. If this collapses, every user shares one bucket in production.
+          # If this collapses, every user shares one bucket in production.
           read -r s ra <<<"$(eleventh "${lo[@]}" -H 'CF-Connecting-IP: 198.51.100.1')"
           [ "$s" = 429 ] && [[ "$ra" =~ ^[0-9]+$ ]] || { echo "::error::11th trusted login: '$s' Retry-After '$ra'"; exit 1; }
           read -r s _ <<<"$(login "${lo[@]}" -H 'CF-Connecting-IP: 198.51.100.2')"
           [ "$s" != 429 ] || { echo "::error::a second client shared the first one's bucket"; exit 1; }
 
-          # Untrusted source (the runner's own address): the header must be ignored, so changing it
-          # doesn't escape the limit.
           read -r s _ <<<"$(eleventh "${ext[@]}" -H 'CF-Connecting-IP: 203.0.113.1')"
           [ "$s" = 429 ] || { echo "::error::11th untrusted login: '$s'"; exit 1; }
           read -r s _ <<<"$(login "${ext[@]}" -H 'CF-Connecting-IP: 203.0.113.2')"
@@ -173,9 +151,6 @@ jobs:
             || { echo "::error::no HAProxy access log in the journal"; exit 1; }
           echo "journal: ok"
 
-      # The whole Alloy path: journal → relabel → scrub → push. All three trails arrive with their
-      # labels, the edge lines carry the truncated client address, and no full address reaches
-      # Loki, while the local journal keeps it. The addresses are the ones the rate-limit step sent.
       - name: Logs reach Loki, and no full client address does
         run: |
           set -euo pipefail
@@ -201,17 +176,14 @@ jobs:
              || grep -qwF "$RUNNER_IP" <<<"$edge"; then
             echo "::error::a full client address reached Loki"; exit 1
           fi
-          # Nothing else from the journal is shipped. No `|| true`: a failed query must not pass as
-          # an empty one. (Loki refuses a selector with only a negative matcher, hence env="prod".)
+          # No `|| true`: a failed query must not pass as an empty one. Loki refuses a selector with
+          # only a negative matcher.
           others=$(lines '{env="prod", service!~"edge|hours-api|admin-api"}')
           [ -z "$others" ] || { echo "::error::lines other than the three trails reached Loki"; exit 1; }
           sudo journalctl -u haproxy -q --no-pager | grep -q 'full_src=198\.51\.100\.1:' \
             || { echo "::error::the local journal lost the full client address"; exit 1; }
           echo "loki: ok ($(wc -l <<<"$edge") edge, $(wc -l <<<"$api") hours-api, $(wc -l <<<"$admin") admin-api lines)"
 
-      # The metrics path: exporter → scrape → keep-list → remote write. The labels the dashboards
-      # rely on, the root filesystem measured correctly through /var/lib/alloy, and nothing outside
-      # the keep-list sent.
       - name: Host metrics reach Prometheus
         run: |
           set -euo pipefail
@@ -226,7 +198,6 @@ jobs:
           [ -n "$mem" ] || { echo "::error::no node_memory_MemAvailable_bytes in Prometheus"; exit 1; }
           cpu=$(q 'count(node_cpu_seconds_total{env="prod"})' '.data.result[0].value[1] // 0')
           [ "$cpu" -gt 0 ] || { echo "::error::no node_cpu_seconds_total in Prometheus"; exit 1; }
-          # The same bytes df reports for /, give or take what was written in between.
           fs=$(q 'node_filesystem_size_bytes{mountpoint="/", env="prod"}' '.data.result[0].value[1] // 0')
           df=$(df -B1 --output=size / | tail -1 | tr -d ' ')
           [ "${fs%.*}" = "$df" ] || { echo "::error::root filesystem size $fs, but df says $df"; exit 1; }
