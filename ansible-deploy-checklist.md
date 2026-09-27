@@ -200,7 +200,7 @@ would be recorded in CloudWatch (plan §7 has the method to use then).
       hardware key; the `otj-alloy-prod` access policy has **`logs:write` only**, for this stack;
       there are no public dashboards or snapshots; there are no other tokens.
 - [ ] 🧑 `put /otj/prod/grafana-cloud-logs-token SecureString` (the helper from step 3).
-- [ ] 🧑 From the stack's Loki details page, the push URL and the user ID (neither is secret) into
+- [x] 🧑 From the stack's Loki details page, the push URL and the user ID (neither is secret) into
       `loki_push_url` and `loki_user` in `group_vars/all.yml`, on the observability PR.
 - [ ] Merge the **observability PR** (the `observability` role, the edge's truncated-address
       `log-format`). The merge deploys it. `converge-check` can't look first, because only `master`
