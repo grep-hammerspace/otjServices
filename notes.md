@@ -9,3 +9,9 @@
    - `MongoIndexesIT`: against a fresh Testcontainer, assert the unique index on `users.appUsername`, unique `sessions.tokenHash` plus the TTL on `sessions.expiresAt`, unique `inviteCodes.code`, and unique compound `llmQuota {userId, date}`.
    - `isolation.feature`: sign up users A and B; B must not be able to change or delete A's activity logs (404), and A's logs stay intact.
    - Make `*IT` classes run under `mvn test` (Surefire's default includes skip them), so the integration suite can't be skipped by accident.
+7) Box, left over from the Ansible rebuild (the deleted `ansible-deploy-checklist.md`; git history has it):
+   - A nightly `converge-check` that fails, and so emails, on drift; then prove it with a deliberate, harmless hand change.
+   - Session Manager logging to CloudWatch, through CDK.
+   - Rehearse a rebuild on a throwaway instance (`deploy/ansible/README.md`, "Building a new box").
+   - CDK user data for new instances, so a rebuild needs no hand bootstrap.
+   - Authenticated Origin Pulls: the origin currently accepts any Cloudflare zone, not only ours.

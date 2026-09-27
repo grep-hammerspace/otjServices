@@ -1,5 +1,5 @@
 # Installing runs everywhere, the PR rehearsal included. Joining the tailnet and `serve` are
-# tagged `tailnet`: a runner can't join it, so the rehearsal skips them (plan §8.3).
+# tagged `tailnet`: a runner can't join it, so the rehearsal skips them.
 - name: Tailscale apt repository
   ansible.builtin.deb822_repository:
     name: tailscale
@@ -36,7 +36,7 @@
     # it isn't in `ps`, and the task is no_log so it isn't in the deploy output.
     #
     # Before a rebuild, remove the old `hours-api` machine in the Tailscale admin console, or this
-    # one joins as `hours-api-1` (plan §11).
+    # one joins as `hours-api-1` (README.md, "Building a new box").
     - name: Join the tailnet as {{ tailscale_hostname }}
       when: (tailscale_status_raw.stdout | default('{}') | from_json).BackendState | default('') != 'Running'
       ansible.builtin.shell:

@@ -1,9 +1,7 @@
 # The production box, as code
 
 Everything the EC2 box runs is declared here and applied by Ansible, on the box, against itself.
-Nobody changes the box by hand; they change this directory and merge. The *why* is in
-`ansible-migration-plan.md`, and the order of operations for building a box is in
-`ansible-deploy-checklist.md`.
+Nobody changes the box by hand; they change this directory and merge.
 
 | Path | What |
 |---|---|
@@ -59,11 +57,11 @@ A missing parameter fails that unit's start, and the error names it. To rotate o
 
 **The origin certificate is the one exception, and it lives on disk.** It is
 `/etc/haproxy/certs/origin.pem`: cert then key, `0600 root`, installed by hand
-(`ansible-deploy-checklist.md` step 4). The `edge` role only `stat`s it and fails early if it's
+("Building a new box", below). The `edge` role only `stat`s it and fails early if it's
 missing, and `verify` warns 90 days before it expires. It's a 15-year Cloudflare Origin CA
 certificate, so there is no renewal job. To replace it, issue a new one in the Cloudflare
 dashboard, install it, and restart `haproxy`. Once Session Manager logging is on, don't paste the
-key into a session: plan §7 has the method to use then.
+key into a session: "Building a new box" has the method to use then.
 
 ## How traffic reaches the app
 
@@ -274,6 +272,61 @@ These are the box as a whole, not per container: `sudo podman stats --no-stream`
 session splits it by container. Alloy mounts only the host's `/proc`, `/sys` and udev database
 for this, all read-only, and never the host's `/`: disk usage is read through `/var/lib/alloy`,
 which is on the root filesystem.
+
+## Building a new box
+
+For a deliberate rebuild (a newer AMI, a bigger disk), `aws/README.md`, "The instance must never be
+replaced by accident", covers the stack side. The Elastic IP stays, so the Atlas allowlist and the
+Cloudflare record don't change. The box itself needs:
+
+1. **Before replacing it**, remove the old `hours-api` node in the Tailscale admin console, so the
+   new box gets the same name rather than `hours-api-1`. `/otj/prod/tailscale-authkey` is an OAuth
+   client secret, which doesn't expire.
+2. **A new origin certificate.** Cloudflare → SSL/TLS → Origin Server → Create Certificate: RSA,
+   `otj-services.com` and `*.otj-services.com`, 15 years. The key is shown once. Revoke the old
+   certificate on the same page.
+3. **The bootstrap**, once, in an SSM session (`aws ssm start-session --target <instance> --region
+   eu-west-2`, then `sudo -i`). `<sha>` is the live release (`/otj/prod/image-tag`); `<registry>`
+   is the host part of the stack's `EcrRepositoryUri` output.
+
+   ```bash
+   # What otj-converge needs before Ansible exists
+   apt-get update && apt-get install -y ansible-core podman unzip curl
+
+   # AWS CLI v2, for the ECR login. The base role takes over and pins the version.
+   curl -fsSLo /tmp/awscliv2.zip https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip
+   unzip -q /tmp/awscliv2.zip -d /tmp && /tmp/aws/install && rm -rf /tmp/aws /tmp/awscliv2.zip
+
+   # otj-converge, from the image. From then on the playbook manages it.
+   IMG=<registry>/otj-hours-api:<sha>
+   aws ecr get-login-password --region eu-west-2 | podman login -u AWS --password-stdin "${IMG%%/*}"
+   podman pull "$IMG" && cid=$(podman create "$IMG")
+   podman cp "$cid:/deploy/bin/otj-converge" /usr/local/sbin/otj-converge
+   podman rm "$cid" && podman rmi "$IMG"
+   chown root:root /usr/local/sbin/otj-converge && chmod 0755 /usr/local/sbin/otj-converge
+   otj-converge --version
+   ```
+
+4. **The certificate, onto the box.** Cert then key, in one file, `0600 root`:
+
+   ```bash
+   install -d -m 0700 -o root -g root /etc/haproxy/certs
+   install -m 0600 -o root -g root /dev/stdin /etc/haproxy/certs/origin.pem <<'EOF'
+   -----BEGIN CERTIFICATE-----
+   ...
+   -----END PRIVATE KEY-----
+   EOF
+   openssl x509 -in /etc/haproxy/certs/origin.pem -noout -subject -enddate
+   ```
+
+   **If Session Manager logging is on, don't paste the key into the session**: everything typed
+   there is recorded in CloudWatch. Instead, from your laptop, put the file in a temporary
+   `SecureString` parameter; on the box, write it out with
+   `aws ssm get-parameter --with-decryption --query Parameter.Value --output text > file`, which
+   prints nothing; then delete the parameter.
+
+5. **Actions → `converge`** with the same SHA. The `verify` role at the end checks health, HAProxy,
+   the certificate, Alloy and the listeners. From then on, merges deploy.
 
 ## Running it by hand
 

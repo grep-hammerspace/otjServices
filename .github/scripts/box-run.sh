@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # box-run.sh <action> <arg>
 #
-# The one path from GitHub Actions to the box, used by every workflow that touches it
-# (ansible-migration-plan.md §9). It finds the instance, sends a FIXED command through
+# The one path from GitHub Actions to the box, used by every workflow that touches it.
+# It finds the instance, sends a FIXED command through
 # `ssm send-command`, waits for it, and reports.
 #
 #   converge <sha>    otj-converge <sha>             apply a release (app and box config)
 #   check    <sha>    otj-converge <sha> --check     show what would change; change nothing
 #   rollback <sha>    otj-converge <sha>, but with the otj-converge taken from <sha>'s image,
-#                     so a broken copy on the box can't block the way back (plan R4)
+#                     so a broken copy on the box can't block the way back
 #   restart  <unit>   restart one of hours-api, admin-api, haproxy, alloy, then check it's healthy
 #
 # Arguments come from workflow inputs, so each one is validated here before it goes near a
@@ -17,7 +17,7 @@
 # What it prints: the PLAY RECAP, the failed tasks, and for `check` the names of the tasks that
 # would change. The FULL output (diffs included) goes to the /otj/converge CloudWatch log group
 # instead, because GitHub job logs are readable by any signed-in GitHub user. Ansible never
-# handles a secret (plan §7), so neither place can contain one.
+# handles a secret, so neither place can contain one.
 set -euo pipefail
 
 REGION=eu-west-2
@@ -160,7 +160,7 @@ done
 
 # ── After a successful apply ─────────────────────────────────────────────────────────────────
 if [[ "$action" == converge || "$action" == rollback ]]; then
-  # What's live, for converge-check's default and for rebuilds (plan §9.1, §11).
+  # What's live, for converge-check's default and for rebuilds.
   aws ssm put-parameter --region "$REGION" --name /otj/prod/image-tag --type String \
     --value "$arg" --overwrite >/dev/null
   echo "==> /otj/prod/image-tag = $arg"

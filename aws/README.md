@@ -155,7 +155,7 @@ also write the `/otj/converge` log group.
 ### Rollback
 
 There is nothing on the box to roll back until the Ansible deploy lands. Its `rollback`
-workflow re-applies an older SHA (`ansible-migration-plan.md` §9.2). SHA tags in ECR are
+workflow re-applies an older SHA. SHA tags in ECR are
 immutable and the lifecycle rule keeps the last 20, so any recent image can be redeployed without
 a rebuild.
 

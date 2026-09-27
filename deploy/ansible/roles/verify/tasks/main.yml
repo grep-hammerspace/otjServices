@@ -1,4 +1,4 @@
-# Runs last on every apply (ansible-migration-plan.md §4.4). Any failure here fails the deploy.
+# Runs last on every apply. Any failure here fails the deploy.
 # Skipped in --check, where nothing was restarted and there is nothing new to check.
 - name: Checks after the apply
   when: not ansible_check_mode
@@ -16,7 +16,7 @@
         label: "{{ item.key }}"
 
     # Ready means its components are healthy. Whether Grafana Cloud accepted the lines can only be
-    # seen there (ansible-deploy-checklist.md step 7); the rehearsal reads them back from its Loki.
+    # seen there; the rehearsal reads them back from its Loki.
     - name: Alloy answers /-/ready on loopback
       ansible.builtin.uri:
         url: http://127.0.0.1:12345/-/ready

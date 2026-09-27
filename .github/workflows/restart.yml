@@ -1,4 +1,4 @@
-# Restart one unit and check it comes back healthy (ansible-migration-plan.md §9.2). For rotating a
+# Restart one unit and check it comes back healthy. For rotating a
 # secret: `put-parameter --overwrite`, then restart, which renders the env file again.
 name: restart
 

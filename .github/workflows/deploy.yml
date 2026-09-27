@@ -1,4 +1,4 @@
-# Java's tests on every PR. On a merge to master, the whole deploy (ansible-migration-plan.md §9.1):
+# Java's tests on every PR. On a merge to master, the whole deploy:
 # every check again on the merge commit, the image, the stack, then otj-converge on the box.
 name: Deploy
 

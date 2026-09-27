@@ -186,7 +186,7 @@ export class OtjServicesStack extends cdk.Stack {
     repository.grantPull(instanceRole);
 
     // Secrets reach the containers at unit start, straight from Parameter Store into tmpfs, by
-    // `otj-render-env` running as the instance role (ansible-migration-plan.md §7). Ansible never
+    // `otj-render-env` running as the instance role (deploy/ansible/README.md, "Secrets"). Ansible never
     // reads them, which is why this grant sits on the instance and nowhere else. Read-only, and only
     // under /otj/prod/. GetParameter as well as GetParameters because the one-off origin-key
     // install after Session Manager logging is on (§7) fetches a single value.

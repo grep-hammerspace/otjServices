@@ -2,13 +2,13 @@
 # otj-converge <sha> [--check]
 # otj-converge --version
 #
-# The one script on the box (ansible-migration-plan.md §4.2). Deploys a release, re-applies the
+# The one script on the box. Deploys a release, re-applies the
 # box's config, and fixes drift, which are all the same thing: pull the image for <sha>, take the
 # playbook out of it, and run it against this box. Run as root, by CI through `ssm send-command`
 # or by hand in an SSM session. --check shows what would change and changes nothing.
 #
 # Deliberately plain and top to bottom, so it can be read in an emergency. It is installed by
-# hand once (ansible-deploy-checklist.md step 4), and after that by the playbook, last, so a broken
+# hand once (deploy/ansible/README.md, "Building a new box"), and after that by the playbook, last, so a broken
 # copy only affects the next run.
 set -euo pipefail
 
@@ -44,7 +44,7 @@ if ! command -v ansible-playbook >/dev/null || ! command -v podman >/dev/null; t
   apt-get update -q
   apt-get install -y -q ansible-core podman
 fi
-command -v aws >/dev/null || die "the AWS CLI is missing: ansible-deploy-checklist.md step 4"
+command -v aws >/dev/null || die "the AWS CLI is missing: deploy/ansible/README.md, \"Building a new box\""
 
 # 2–3. The release's playbook, read out of its image. As root, into root's storage, because on a
 # blank box otjapp doesn't exist yet. The app role pulls again into otjapp's storage, where the

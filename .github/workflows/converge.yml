@@ -1,5 +1,5 @@
-# Apply a release to the box: its app image AND its box config (ansible-migration-plan.md §9.2).
-# Also how the box is built the first time (ansible-deploy-checklist.md step 5).
+# Apply a release to the box: its app image AND its box config. Also how a new box gets
+# everything after its bootstrap (deploy/ansible/README.md, "Building a new box").
 name: converge
 
 on:

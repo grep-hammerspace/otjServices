@@ -1,4 +1,4 @@
-# Telemetry to Grafana Cloud (ansible-migration-plan.md §4.5): Grafana Alloy, a rootful system
+# Telemetry to Grafana Cloud: Grafana Alloy, a rootful system
 # Quadlet, reads the journal and pushes three trails to Loki, and pushes the host's CPU, memory,
 # disk and network to Prometheus. Root throughout, because Alloy is a system unit.
 
@@ -30,7 +30,7 @@
   loop_control:
     label: "{{ item.path }}"
 
-# ── The token, by the same mechanism as the apps' secrets (plan §7) ───────────────────────────
+# ── The token, by the same mechanism as the apps' secrets ───────────────────────────────────
 - name: otj-render-env, the app role's script, for system units
   ansible.builtin.copy:
     src: "{{ role_path }}/../app/files/otj-render-env"

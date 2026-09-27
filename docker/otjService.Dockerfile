@@ -32,7 +32,7 @@ COPY --from=build /app/target/app.jar app.jar
 COPY docker/start.sh /start.sh
 
 # The box's configuration for THIS release: the playbook, otj-converge and the HAProxy config
-# (ansible-migration-plan.md §4.1). otj-converge reads them out of the image on the box and never
+# otj-converge reads them out of the image on the box and never
 # runs them inside a container, so they are inert here. Shipping them in the same image is what
 # makes a rollback move the app and the box config together.
 COPY deploy/ansible/ /deploy/ansible/

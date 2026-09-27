@@ -1,4 +1,4 @@
-# The PR rehearsal's overrides (ansible-migration-plan.md §8.3), passed with -e @ci-vars.yml. Not
+# The PR rehearsal's overrides (.github/workflows/box.yml), passed with -e @ci-vars.yml. Not
 # under group_vars/, so nothing loads it on the box by accident. The job runs with
 # --skip-tags tailnet,aws: a runner can't join the tailnet or read the account's ECR and secrets.
 

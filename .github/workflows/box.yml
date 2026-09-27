@@ -1,6 +1,6 @@
 # Checks for the box's configuration (deploy/ansible, deploy/haproxy, deploy/bin) on every PR:
 # static checks, then the box rehearsal, which applies the real playbook to a GitHub runner, twice
-# (ansible-migration-plan.md §8). Java's tests are in deploy.yml, which also calls this workflow on a
+# Java's tests are in deploy.yml, which also calls this workflow on a
 # merge to master and deploys only if it passes, so there's no push trigger here.
 name: Box
 
@@ -52,7 +52,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # The runner differs from the box in four ways (plan §8.3, found by the runner spike). Each
+      # The runner differs from the box in four ways (found by a spike before this was built). Each
       # is corrected here, in the job, and never in the roles, because the box has none of them.
       #
       # 1. The runner image writes its own environment into /etc/environment, and pam_env hands it

@@ -1,6 +1,6 @@
 # Put an older release back: its app image AND its box config together
-# (ansible-migration-plan.md §9.2). Uses the otj-converge from THAT release's image, not the copy on
-# the box, so a broken script can't block the way back (plan R4).
+# Uses the otj-converge from THAT release's image, not the copy on
+# the box, so a broken script can't block the way back.
 name: rollback
 
 on:
