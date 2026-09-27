@@ -1,0 +1,122 @@
+# Java's tests on every PR. On a merge to master, the whole deploy (ansible-migration-plan.md §9.1):
+# every check again on the merge commit, the image, the stack, then otj-converge on the box.
+name: Deploy
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "25"
+          cache: maven
+
+      - run: mvn -B test
+
+  # box.yml's checks, on the merge commit itself: a merge can differ from the PR head that passed.
+  # On a PR, box.yml runs on its own trigger, so it isn't called here.
+  box:
+    if: github.event_name == 'push'
+    uses: ./.github/workflows/box.yml
+
+  image:
+    needs: [build-and-test, box]
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    permissions:
+      id-token: write # OIDC, for the deploy role
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: eu-west-2
+
+      - uses: aws-actions/amazon-ecr-login@v2
+        id: ecr-login
+
+      - name: Check if image already pushed
+        id: image-check
+        run: |
+          if aws ecr describe-images --repository-name otj-hours-api \
+               --image-ids imageTag=${{ github.sha }} --region eu-west-2 >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build and push image
+        if: steps.image-check.outputs.exists == 'false'
+        env:
+          ECR_REPO: ${{ steps.ecr-login.outputs.registry }}/otj-hours-api
+        run: |
+          docker build -f docker/otjService.Dockerfile -t "$ECR_REPO:${{ github.sha }}" .
+          docker push "$ECR_REPO:${{ github.sha }}"
+
+  deploy:
+    needs: image
+    runs-on: ubuntu-24.04
+    environment: production
+    permissions:
+      id-token: write # OIDC, for the deploy role
+      contents: read
+    # One thing touches the box at a time: every box workflow, and this job, share this group.
+    concurrency:
+      group: box
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+
+      # Two merges close together race through the checks, and the older one can reach this job
+      # second. Converging it then would roll the box back, so only master's head deploys. If a
+      # newer merge exists, its own run deploys it.
+      - name: Still master's newest commit?
+        id: head
+        run: |
+          head=$(git ls-remote origin refs/heads/master | cut -f1)
+          if [ "$head" = "$GITHUB_SHA" ]; then
+            echo "deploy=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "deploy=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::master has moved on to $head; that run deploys instead of this one."
+          fi
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        if: steps.head.outputs.deploy == 'true'
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: eu-west-2
+
+      - uses: actions/setup-node@v4
+        if: steps.head.outputs.deploy == 'true'
+        with:
+          node-version: "22"
+
+      # The stack policy (aws/stack-policy.json) makes CloudFormation refuse any update that would
+      # replace the instance or the Elastic IP, so a surprise like 2026-09-25's fails here instead.
+      - name: cdk deploy
+        if: steps.head.outputs.deploy == 'true'
+        working-directory: aws
+        run: |
+          npm ci
+          npx cdk deploy OtjServicesStack --require-approval never
+
+      # The same path as the converge button. box-run.sh also smoke-tests /health through
+      # Cloudflare and records the SHA in /otj/prod/image-tag.
+      - name: otj-converge on the box
+        if: steps.head.outputs.deploy == 'true'
+        run: .github/scripts/box-run.sh converge "$GITHUB_SHA"

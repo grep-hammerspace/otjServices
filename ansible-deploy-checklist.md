@@ -5,11 +5,10 @@ The work, in order, that builds the new AWS box with Ansible and brings the publ
 match the plan's §10.
 
 **Where things stand (2026-09-27).** The hand-provisioned box was destroyed when a merge replaced
-the instance (plan, top). The instance now running, `i-0d937e3a7abb82ebb`, is blank Ubuntu. The
-public API returns 521 and stays down, by choice, until step 5. User data in Atlas, the images in
-ECR and the Elastic IP are all intact. The stack policy is set, so a merge can no longer replace
-the instance. Step 3's manual prep is done: all four parameters are in Parameter Store, and the
-new origin certificate is waiting for step 4. #48 is merged. Next: #49, then step 4.
+the instance (plan, top). The new one, `i-0d937e3a7abb82ebb`, was bootstrapped by hand (step 4) and
+converged by Ansible to #49's merge commit (step 5). **The public API is back.** The stack policy
+is set, so a merge can no longer replace the instance. Next: the `deploy.yml` PR (step 6), so that
+merges deploy again without pressing `converge`.
 
 **Who does what.** Items marked 🧑 are yours: settings, a laptop command, a dashboard, a button, or
 a check that needs your judgement or your devices. The rest is repo work that comes to you as a PR.
@@ -47,7 +46,7 @@ Session Manager plugin. Check first that `aws sts get-caller-identity` works.
       `deploy/prod/` and `staging-to-master-cutover.md`, after moving their reasoning into
       `deploy/ansible/README.md` and `haproxy.cfg`'s comments.
   - [x] The rehearsal is green, and the **second apply changes nothing** (the job fails otherwise).
-- [ ] **Ops-workflows PR (#49, stacked on #48):** `converge-check`, `converge`, `rollback` and
+- [x] **Ops-workflows PR (#49, stacked on #48):** `converge-check`, `converge`, `rollback` and
       `restart` (plan §9.2). They have to be on `master` before their buttons appear. None of them
       runs on push, and no workflow prints app or edge logs.
 - [x] **IAM PR** (`aws/lib/`, #47):
@@ -67,7 +66,7 @@ GitHub:
       `cd aws && npx cdk diff GithubOidcStack && npx cdk deploy GithubOidcStack`. CI can't update
       the role it signs in with.
 - [x] Merge the IAM PR. CI deploys the `OtjServicesStack` half.
-- [ ] Right after #48 merges: Settings → Rules → Rulesets → `protect-master` → **Require status
+- [x] Right after #48 merges: Settings → Rules → Rulesets → `protect-master` → **Require status
       checks to pass**, with `box-static`, `box-rehearsal` and `build-and-test`. `master` is protected
       by this ruleset, not by classic branch protection. Both workflows run on every PR to `master`,
       with no path filter, so requiring them can't leave an unrelated PR waiting forever.
@@ -159,28 +158,29 @@ openssl x509 -in /etc/haproxy/certs/origin.pem -noout -subject -enddate
 Paste the key now, **before step 8** turns on Session Manager logging. After that, a pasted key
 would be recorded in CloudWatch (plan §7 has the method to use then).
 
-- [ ] `otj-converge --version` prints.
-- [ ] The certificate shows `otj-services.com` and an end date 15 years out.
+- [x] `otj-converge --version` prints.
+- [x] The certificate shows `otj-services.com` and an end date 15 years out.
 - [ ] Delete your local copy of the key.
 
 ## Step 5 — First converge: the API comes back
 
-- [ ] 🧑 **Actions → `converge-check`** with the playbook PR's SHA. Read what it will do: on a blank
-      box, that's everything. Look for anything **unexpected**, such as a port or path you don't
+- [x] 🧑 **Actions → `converge-check`** with the playbook PR's SHA. Read what it will do: on a blank
+      box, that's everything. *(It can't run on a truly blank box: check mode can't find the
+      `tailscale` apt package, because the repository was never really added. Fine once converged.)* Look for anything **unexpected**, such as a port or path you don't
       recognise.
-- [ ] 🧑 **Actions → `converge`** with the same SHA.
-- [ ] 🧑 Verify:
-  - [ ] The PLAY RECAP shows `failed=0`, and `verify` ran.
-  - [ ] `curl -sI https://otj-services.com/health` returns 200 with a `cf-ray` header.
-  - [ ] Tailnet, from your phone or laptop: `https://hours-api.<tailnet>.ts.net:8444/health` returns
+- [x] 🧑 **Actions → `converge`** with the same SHA.
+- [x] 🧑 Verify:
+  - [x] The PLAY RECAP shows `failed=0`, and `verify` ran.
+  - [x] `curl -sI https://otj-services.com/health` returns 200 with a `cf-ray` header.
+  - [x] Tailnet, from your phone or laptop: `https://hours-api.<tailnet>.ts.net:8444/health` returns
         200, and `GET :8443/admin/invites` works as an allowed login.
-  - [ ] The origin is only reachable through Cloudflare. From outside, all three of these **time out**:
+  - [ ] *Skipped by choice.* The origin is only reachable through Cloudflare. From outside, all three of these **time out**:
         `https://<ElasticIp>/health`, `http://<ElasticIp>:8945/health` and
         `http://<ElasticIp>:8946/admin/invites`.
-  - [ ] The rate limits, with the Cloudflare WAF rule paused. Eleven `POST /auth/session` requests
+  - [ ] *Skipped by choice; the rehearsal tests the same limits on every PR.* The rate limits, with the Cloudflare WAF rule paused. Eleven `POST /auth/session` requests
         4 s apart: the 11th is a **429 with `Retry-After`**. The first request from a different
         network (a phone off wifi) is a 401, not a 429. **Re-enable the WAF rule.**
-  - [ ] The mobile app logs in and loads pending activities.
+  - [ ] *Skipped by choice.* The mobile app logs in and loads pending activities.
 
 **The public API is back.**
 
