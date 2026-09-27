@@ -1,6 +1,9 @@
 // Written by the observability role for release {{ image_tag }}. Don't edit on the box: the next
 // converge puts it back. The design, and why, is ansible-migration-plan.md §4.5.
 //
+// Two pipelines, one token: the journal to Grafana Cloud Loki (logs), and the host's CPU, memory,
+// disk and network to Grafana Cloud Prometheus (metrics, at the end of this file).
+//
 // Three trails, all read from the journal, and nothing else from it leaves the box:
 //   _SYSTEMD_UNIT=haproxy.service   service="edge", proxy="haproxy"
 //   CONTAINER_NAME=hours-api        service="hours-api"
@@ -70,9 +73,80 @@ loki.write "grafana_cloud" {
 
     basic_auth {
       username = "{{ loki_user }}"
-      // Write-only (logs:write, this stack). Rendered from Parameter Store into /run/otj/alloy.env
-      // at unit start by otj-render-env; no file Ansible writes ever holds it.
-      password = sys.env("GRAFANA_CLOUD_LOGS_TOKEN")
+      // Write-only (logs:write and metrics:write, this stack). Rendered from Parameter Store into
+      // /run/otj/alloy.env at unit start by otj-render-env; no file Ansible writes ever holds it.
+      password = sys.env("GRAFANA_CLOUD_TOKEN")
+    }
+  }
+}
+
+// ── Host metrics ─────────────────────────────────────────────────────────────────────────────
+// The box as a whole, not per container. Read from the host's /proc and /sys, mounted read-only
+// under /host (alloy.container). Nothing else of the host is mounted: disk usage is read through
+// /var/lib/alloy, which is on the root filesystem, so the host's / is never mounted into Alloy.
+prometheus.exporter.unix "box" {
+  procfs_path              = "/host/proc"
+  sysfs_path               = "/host/sys"
+  // statfs("/var/lib/alloy/") reports the root filesystem, which is the only disk the box has.
+  rootfs_path              = "/var/lib/alloy"
+  udev_data_path           = "/run/udev/data"
+  set_collectors           = ["cpu", "diskstats", "filesystem", "loadavg", "meminfo", "netdev", "pressure", "stat", "uname", "vmstat"]
+  include_exporter_metrics = false
+
+  // "/" only. Any other mount point would be measured through the same directory, and be wrong.
+  filesystem {
+    mount_points_exclude = "^/.+"
+  }
+
+  netdev {
+    device_exclude = "^(lo|veth.*|cni.*|podman.*)$"
+  }
+}
+
+// job and instance as Grafana's Linux dashboards expect them.
+discovery.relabel "box" {
+  targets = prometheus.exporter.unix.box.targets
+
+  rule {
+    target_label = "instance"
+    replacement  = "{{ loki_labels.host }}"
+  }
+
+  rule {
+    target_label = "job"
+    replacement  = "integrations/node_exporter"
+  }
+}
+
+prometheus.scrape "box" {
+  targets         = discovery.relabel.box.output
+  scrape_interval = "{{ metrics_scrape_interval }}"
+  // No longer than the shortest interval used (the rehearsal's); the default 10s would be refused.
+  scrape_timeout  = "5s"
+  forward_to      = [prometheus.relabel.keep.receiver]
+}
+
+// Only what the dashboards chart. The free tier counts active series, and the exporter's
+// defaults produce many more than these.
+prometheus.relabel "keep" {
+  rule {
+    source_labels = ["__name__"]
+    regex         = "up|node_(cpu_seconds_total|load(1|5|15)|memory_(MemTotal|MemAvailable|MemFree|Buffers|Cached|SwapTotal|SwapFree)_bytes|filesystem_(size|avail)_bytes|disk_(read|written)_bytes_total|disk_io_time_seconds_total|network_(receive|transmit)_(bytes|errs|drop)_total|pressure_(cpu|memory|io)_(waiting|stalled)_seconds_total|vmstat_oom_kill|boot_time_seconds|uname_info)"
+    action        = "keep"
+  }
+
+  forward_to = [prometheus.remote_write.grafana_cloud.receiver]
+}
+
+prometheus.remote_write "grafana_cloud" {
+  external_labels = {env = "{{ loki_labels.env }}"}
+
+  endpoint {
+    url = "{{ prom_remote_write_url }}"
+
+    basic_auth {
+      username = "{{ prom_user }}"
+      password = sys.env("GRAFANA_CLOUD_TOKEN")
     }
   }
 }

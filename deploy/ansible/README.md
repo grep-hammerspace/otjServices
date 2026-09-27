@@ -14,7 +14,7 @@ Nobody changes the box by hand; they change this directory and merge. The *why* 
 | `roles/tailscale` | Install, join the tailnet (first run only), and `serve` 8443 → admin-api, 8444 → hours-api |
 | `roles/edge` | HAProxy on 443, with `../haproxy/haproxy.cfg` checked before it goes live |
 | `roles/app` | `otj-render-env`, the two Quadlets, the image in `otjapp`'s storage |
-| `roles/observability` | Grafana Alloy, a rootful system Quadlet: the journal's three trails to Grafana Cloud, with full client addresses cut first |
+| `roles/observability` | Grafana Alloy, a rootful system Quadlet: the journal's three trails to Grafana Cloud Loki, with full client addresses cut first, and the host's CPU, memory, disk and network to Grafana Cloud Prometheus |
 | `roles/verify` | Health, Alloy ready, HAProxy, cert expiry, **no wildcard listener but 443**, the tailnet mappings |
 | `ci-vars.yml` | The PR rehearsal's overrides only |
 | `../bin/otj-converge` | The script that runs all of this on the box |
@@ -52,7 +52,7 @@ job, can't contain a secret, because no file Ansible manages holds one.
 | `/otj/prod/anthropic-api-key` | hours-api |
 | `/otj/prod/admin-allowed-logins` (`String`) | admin-api |
 | `/otj/prod/tailscale-authkey` | the `tailscale` role, first run only |
-| `/otj/prod/grafana-cloud-logs-token` | Alloy, write-only (`logs:write`, this stack). A system unit, so its file is `/run/otj/alloy.env`, `0600 root` |
+| `/otj/prod/grafana-cloud-logs-token` | Alloy, for logs **and** metrics despite the name: write-only (`logs:write`, `metrics:write`, this stack). A system unit, so its file is `/run/otj/alloy.env`, `0600 root` |
 
 A missing parameter fails that unit's start, and the error names it. To rotate one, run
 `aws ssm put-parameter --overwrite …` and restart the unit: the restart renders the file again.
@@ -253,6 +253,27 @@ sudo journalctl -u alloy -f                      # Alloy itself, when lines stop
 
 No workflow prints these, on purpose: GitHub job logs are readable by any signed-in GitHub user,
 and these lines carry client addresses and `userId`s.
+
+## Reading the metrics
+
+Alloy also pushes the host's own figures to the stack's Prometheus every 60 s, labelled
+`job="integrations/node_exporter"`, `instance="hours-api"`, `env="prod"`: CPU by mode (including
+`steal`, which on a burstable t3 is the first sign of running out of CPU credits), memory, load,
+the root filesystem, disk and network I/O, pressure stall information, and OOM kills. Only that
+list is sent (`prometheus.relabel "keep"` in `config.alloy.j2`), about 50 series, well inside the
+free tier. Grafana's "Node Exporter Full" dashboard (ID 1860) reads them as they are.
+
+```promql
+100 * (1 - avg(rate(node_cpu_seconds_total{mode="idle"}[5m])))              # CPU busy %
+node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes                  # memory headroom
+1 - node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes # disk used
+increase(node_vmstat_oom_kill[1h])                                           # OOM kills
+```
+
+These are the box as a whole, not per container: `sudo podman stats --no-stream` in an SSM
+session splits it by container. Alloy mounts only the host's `/proc`, `/sys` and udev database
+for this, all read-only, and never the host's `/`: disk usage is read through `/var/lib/alloy`,
+which is on the root filesystem.
 
 ## Running it by hand
 
