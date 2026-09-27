@@ -79,6 +79,11 @@ jobs:
           echo "RUNNER_IP=$ip" >> "$GITHUB_ENV"
           docker run -d --name mongo -p "$ip:27017:27017" docker.io/library/mongo:8
 
+      # Where Alloy pushes in the rehearsal, in place of Grafana Cloud (ci-vars.yml), so the job can
+      # read the lines back. Loopback only, so verify's wildcard-listener check doesn't see it.
+      - name: A throwaway Loki
+        run: docker run -d --name loki -p 127.0.0.1:3100:3100 docker.io/grafana/loki:3.7.8
+
       # The box's certificate is installed by hand, so the rehearsal does the same, with a
       # self-signed one. Valid for more than verify's 90-day expiry check.
       - name: A throwaway origin certificate
@@ -162,6 +167,42 @@ jobs:
             || { echo "::error::no HAProxy access log in the journal"; exit 1; }
           echo "journal: ok"
 
+      # The whole Alloy path: journal → relabel → scrub → push. All three trails arrive with their
+      # labels, the edge lines carry the truncated client address, and no full address reaches
+      # Loki, while the local journal keeps it. The addresses are the ones the rate-limit step sent.
+      - name: Logs reach Loki, and no full client address does
+        run: |
+          set -euo pipefail
+          lines() {
+            curl -sfG http://127.0.0.1:3100/loki/api/v1/query_range \
+              --data-urlencode "query=$1" --data-urlencode limit=5000 \
+              --data-urlencode "start=$(( $(date +%s) - 3600 ))000000000" \
+              | jq -r '.data.result[].values[][1]'
+          }
+          edge=""; api=""; admin=""
+          for _ in $(seq 1 45); do
+            edge=$(lines '{service="edge", proxy="haproxy", env="prod", host="hours-api"}' || true)
+            api=$(lines '{service="hours-api", env="prod"}' || true)
+            admin=$(lines '{service="admin-api", env="prod"}' || true)
+            if [ -n "$api" ] && [ -n "$admin" ] && grep -q '^198\.51\.100\.0 ' <<<"$edge"; then break; fi
+            sleep 2
+          done
+          [ -n "$api" ] || { echo "::error::no hours-api lines in Loki"; exit 1; }
+          [ -n "$admin" ] || { echo "::error::no admin-api lines in Loki"; exit 1; }
+          grep -q '^198\.51\.100\.0 ' <<<"$edge" \
+            || { echo "::error::no edge line with the truncated client address in Loki"; exit 1; }
+          if grep -qE 'full_src=|198\.51\.100\.[12]\b|203\.0\.113\.[12]\b' <<<"$edge" \
+             || grep -qwF "$RUNNER_IP" <<<"$edge"; then
+            echo "::error::a full client address reached Loki"; exit 1
+          fi
+          # Nothing else from the journal is shipped. No `|| true`: a failed query must not pass as
+          # an empty one. (Loki refuses a selector with only a negative matcher, hence env="prod".)
+          others=$(lines '{env="prod", service!~"edge|hours-api|admin-api"}')
+          [ -z "$others" ] || { echo "::error::lines other than the three trails reached Loki"; exit 1; }
+          sudo journalctl -u haproxy -q --no-pager | grep -q 'full_src=198\.51\.100\.1:' \
+            || { echo "::error::the local journal lost the full client address"; exit 1; }
+          echo "loki: ok ($(wc -l <<<"$edge") edge, $(wc -l <<<"$api") hours-api, $(wc -l <<<"$admin") admin-api lines)"
+
       - name: Diagnostics
         if: failure()
         run: |
@@ -172,3 +213,5 @@ jobs:
             systemctl --user --no-pager status hours-api admin-api || true
           sudo journalctl "_UID=$uid" -n 80 --no-pager || true
           sudo journalctl -u haproxy -n 30 --no-pager || true
+          sudo journalctl -u alloy -n 60 --no-pager || true
+          docker logs --tail 30 loki || true

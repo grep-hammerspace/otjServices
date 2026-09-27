@@ -97,7 +97,7 @@ docker/                   otjService.Dockerfile, start.sh
 deploy/                   self-host path: podman-compose.yaml, bootstrap.sh, shell.nix,
                           README.md (Tailscale trust model)
   ansible/                the AWS box as code: site.yml, roles (base, otjapp, tailscale, edge,
-                          app, verify), group_vars (nothing secret), ci-vars.yml (rehearsal
+                          app, observability, verify), group_vars (nothing secret), ci-vars.yml (rehearsal
                           only). README.md: how it runs, secrets, the edge, rate-limit rationale,
                           the shared-IP problem, Cloudflare ranges, reading logs
   haproxy/                haproxy.cfg (the public edge) and cloudflare-ips.lst
@@ -364,6 +364,12 @@ on the prod box):
   - `ServerHooks` captures every log event at TRACE and fails any scenario in which a sentinel
     credential appears — in the message, the arguments, or the throwable chain. Adding a leak
     breaks the suite.
+  - **The app's and the edge's logs are copied to Grafana Cloud** by Alloy
+    (`deploy/ansible/roles/observability`), so a leak now reaches a third party, not just the box.
+    Client addresses leave the box only truncated: HAProxy's `log-format` puts the /24 or /48
+    first and the full address last as `full_src=`, which Alloy deletes (and drops any line still
+    carrying it). Keep that field's name and position, and never capture the `Authorization`
+    header. Where to read the logs: `deploy/ansible/README.md`, "Reading the logs".
 - Error bodies are `ApiError` records, never hand-built JSON strings, and never carry a driver's
   `e.getMessage()`. One fixed constant per failure, in the `AuthResource` style.
 - `AuthResource` verifies against a dummy bcrypt hash on unknown usernames so that

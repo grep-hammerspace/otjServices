@@ -9,7 +9,7 @@
 #   check    <sha>    otj-converge <sha> --check     show what would change; change nothing
 #   rollback <sha>    otj-converge <sha>, but with the otj-converge taken from <sha>'s image,
 #                     so a broken copy on the box can't block the way back (plan R4)
-#   restart  <unit>   restart one of hours-api, admin-api, haproxy, then check it's healthy
+#   restart  <unit>   restart one of hours-api, admin-api, haproxy, alloy, then check it's healthy
 #
 # Arguments come from workflow inputs, so each one is validated here before it goes near a
 # command line: a full hex SHA, or a unit from a fixed list. Nothing else reaches the box.
@@ -38,7 +38,7 @@ case "$action" in
     [[ "$arg" =~ ^[0-9a-f]{40}$ ]] || die "'$arg' is not a full 40-character commit SHA"
     ;;
   restart)
-    [[ "$arg" =~ ^(hours-api|admin-api|haproxy)$ ]] || die "unknown unit '$arg'"
+    [[ "$arg" =~ ^(hours-api|admin-api|haproxy|alloy)$ ]] || die "unknown unit '$arg'"
     ;;
   *) die "unknown action '$action'" ;;
 esac
@@ -62,6 +62,15 @@ EOF
   restart)
     if [[ "$arg" == haproxy ]]; then
       remote="set -euo pipefail; systemctl restart haproxy; sleep 2; systemctl is-active haproxy"
+    elif [[ "$arg" == alloy ]]; then
+      # A system unit, like HAProxy. Ready means its config loaded and its components are healthy.
+      remote=$(cat <<EOF
+set -euo pipefail
+systemctl restart alloy
+for _ in \$(seq 1 45); do curl -sf http://127.0.0.1:12345/-/ready >/dev/null && { echo "alloy ready"; exit 0; }; sleep 2; done
+echo "alloy did not become ready" >&2; exit 1
+EOF
+)
     else
       port=$([[ "$arg" == hours-api ]] && echo 8945 || echo 8946)
       remote=$(cat <<EOF

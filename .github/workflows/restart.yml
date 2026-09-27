@@ -9,7 +9,7 @@ on:
         description: Which unit
         required: true
         type: choice
-        options: [hours-api, admin-api, haproxy]
+        options: [hours-api, admin-api, haproxy, alloy]
 
 permissions:
   id-token: write # OIDC, for the deploy role

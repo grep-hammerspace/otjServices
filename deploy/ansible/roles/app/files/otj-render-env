@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # otj-render-env <service>
 #
-# Runs as each app unit's ExecStartPre (ansible-migration-plan.md §7). Fetches that service's
+# Runs as each app unit's ExecStartPre (ansible-migration-plan.md §7), and as Alloy's, which the
+# observability role installs as /usr/local/lib/otj/otj-render-env. Fetches that service's
 # secrets from Parameter Store with the instance role and writes them as KEY=value lines to a
 # tmpfs file only its user can read, which the container then loads with --env-file. A restart
 # re-renders it, so rotating a secret is `put-parameter --overwrite` plus a restart.
@@ -12,14 +13,17 @@
 # Config, all written by the app role, none of it secret:
 #   ~/.config/otj/<service>.params   one "ENV_VAR /parameter/name" per line
 #   ~/.config/otj/render-env.conf    SOURCE=ssm|fixture and REGION=<aws region>
+# Output goes to $XDG_RUNTIME_DIR/otj/<service>.env. A system unit has neither a user config
+# directory nor XDG_RUNTIME_DIR, so it sets OTJ_CONF_DIR and OTJ_RUN_DIR instead (Alloy: /etc/otj
+# and /run/otj).
 # SOURCE=fixture is the PR rehearsal's (plan §8.3): values come from ~/.config/otj/fixture/<basename
 # of the parameter name> instead of AWS.
 set -euo pipefail
 
 svc="${1:?usage: otj-render-env <service>}"
-conf_dir="${HOME:?}/.config/otj"
+conf_dir="${OTJ_CONF_DIR:-${HOME:?}/.config/otj}"
 params_file="$conf_dir/$svc.params"
-out_dir="${XDG_RUNTIME_DIR:?XDG_RUNTIME_DIR is not set}/otj"
+out_dir="${OTJ_RUN_DIR:-${XDG_RUNTIME_DIR:?XDG_RUNTIME_DIR is not set}/otj}"
 out_file="$out_dir/$svc.env"
 
 # shellcheck source=/dev/null

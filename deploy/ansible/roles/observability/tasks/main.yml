@@ -1,0 +1,129 @@
+# Log shipping to Grafana Cloud (ansible-migration-plan.md §4.5): Grafana Alloy, a rootful system
+# Quadlet, reads the journal and pushes three trails to Loki. Root throughout, because Alloy is a
+# system unit.
+
+- name: Where Grafana Cloud is
+  ansible.builtin.assert:
+    that:
+      - loki_push_url is match('^https?://')
+      - loki_user | string | length > 0
+    fail_msg: "Set loki_push_url and loki_user in group_vars/all.yml, from the stack's Loki details page."
+    quiet: true
+
+- name: Alloy's directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: /usr/local/lib/otj, mode: "0755" }
+    - { path: /etc/otj, mode: "0755" }
+    - { path: /etc/alloy, mode: "0755" }
+    - { path: /etc/containers/systemd, mode: "0755" }
+    - { path: /var/lib/alloy, mode: "0700" }
+  loop_control:
+    label: "{{ item.path }}"
+
+# ── The token, by the same mechanism as the apps' secrets (plan §7) ───────────────────────────
+- name: otj-render-env, the app role's script, for system units
+  ansible.builtin.copy:
+    src: "{{ role_path }}/../app/files/otj-render-env"
+    dest: /usr/local/lib/otj/otj-render-env
+    owner: root
+    group: root
+    mode: "0755"
+  notify: Restart alloy
+
+- name: Where otj-render-env gets Alloy's token from
+  ansible.builtin.copy:
+    dest: /etc/otj/render-env.conf
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      # Written by the observability role. Read by otj-render-env for system units.
+      SOURCE={{ render_env_source }}
+      REGION={{ aws_region }}
+  notify: Restart alloy
+
+- name: Which parameter Alloy gets
+  ansible.builtin.copy:
+    dest: /etc/otj/alloy.params
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      # Written by the observability role. Not secret: the parameter NAME, and the variable it becomes.
+      GRAFANA_CLOUD_LOGS_TOKEN {{ alloy_token_param }}
+  notify: Restart alloy
+
+# PR rehearsal only (render_env_source: fixture, from ci-vars.yml). Never set on the box.
+- name: CI only, the fixture token otj-render-env reads instead of Parameter Store
+  when: render_env_source == 'fixture'
+  block:
+    - name: Fixture directory
+      ansible.builtin.file:
+        path: /etc/otj/fixture
+        state: directory
+        owner: root
+        group: root
+        mode: "0700"
+
+    - name: Fixture token
+      ansible.builtin.copy:
+        content: "{{ render_env_fixture[alloy_token_param | basename] }}"
+        dest: "/etc/otj/fixture/{{ alloy_token_param | basename }}"
+        owner: root
+        group: root
+        mode: "0600"
+
+# ── The image, then the config checked with it ───────────────────────────────────────────────
+- name: The Alloy image is present
+  ansible.builtin.command: podman image exists {{ alloy_image }}
+  register: observability_image_present
+  changed_when: false
+  failed_when: observability_image_present.rc not in [0, 1]
+  check_mode: false
+
+- name: Pull it
+  when:
+    - observability_image_present.rc == 1
+    - not ansible_check_mode
+  ansible.builtin.command: podman pull --quiet {{ alloy_image }}
+  changed_when: true
+
+# `alloy validate` with the pinned Alloy, before the file replaces the live one, so a bad config
+# never reaches a running Alloy.
+- name: config.alloy
+  ansible.builtin.template:
+    src: config.alloy.j2
+    dest: /etc/alloy/config.alloy
+    owner: root
+    group: root
+    mode: "0644"
+    validate: podman run --rm --network=none --volume=%s:/tmp/config.alloy:ro {{ alloy_image }} validate /tmp/config.alloy
+  notify: Reload alloy
+
+- name: The Alloy Quadlet
+  ansible.builtin.template:
+    src: alloy.container.j2
+    dest: /etc/containers/systemd/alloy.container
+    owner: root
+    group: root
+    mode: "0644"
+  register: observability_quadlet
+  notify: [Regenerate Alloy's unit, Restart alloy]
+
+# The daemon-reload has to happen before the first start, or the unit doesn't exist yet.
+- name: Apply unit changes now
+  ansible.builtin.meta: flush_handlers
+
+# A Quadlet unit is generated, so it can't be `enabled`; its [Install] section starts it at boot.
+# In --check before the first apply the unit doesn't exist yet, and there is nothing to ask about.
+- name: Alloy running
+  ansible.builtin.systemd_service:
+    name: alloy.service
+    state: started
+  when: not (ansible_check_mode and observability_quadlet is changed)

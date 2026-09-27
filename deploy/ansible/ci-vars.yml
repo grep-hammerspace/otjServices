@@ -13,6 +13,12 @@ render_env_fixture:
   mongo-uri: "{{ ci_mongo_uri }}" # passed with -e by the job
   anthropic-api-key: dummy-not-a-key # the app needs one to boot; the rehearsal never calls the LLM
   admin-allowed-logins: ci@example.invalid
+  grafana-cloud-logs-token: dummy-not-a-token # the rehearsal's Loki doesn't check it
+
+# Alloy pushes to a Loki the job starts on the runner's loopback, and the job reads the lines back
+# to check the labels and that no full client address got through.
+loki_push_url: http://127.0.0.1:3100/loki/api/v1/push
+loki_user: ci
 
 # 127.0.0.1 joins Cloudflare's ranges so the job can send CF-Connecting-IP from loopback and prove
 # each client gets its own bucket. Requests from the runner's own address stay untrusted, which is

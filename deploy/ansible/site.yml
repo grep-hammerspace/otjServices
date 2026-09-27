@@ -5,6 +5,7 @@
 #   - tailscale before edge, so a `serve` mapping that wrongly claims 443 is caught before HAProxy
 #     fails to bind it.
 #   - app after edge only for readability; nothing in app depends on the proxy.
+#   - observability after edge and app, so the units whose logs it ships already exist.
 #   - verify last. It is skipped in --check mode, where nothing was restarted.
 #   - otj-converge is replaced after verify, so a broken script only ever affects the NEXT run
 #     (plan R4).
@@ -29,6 +30,7 @@
       tags: [tailnet]
     - edge
     - app
+    - observability
     - verify
 
   post_tasks:

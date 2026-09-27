@@ -14,7 +14,8 @@ Nobody changes the box by hand; they change this directory and merge. The *why* 
 | `roles/tailscale` | Install, join the tailnet (first run only), and `serve` 8443 → admin-api, 8444 → hours-api |
 | `roles/edge` | HAProxy on 443, with `../haproxy/haproxy.cfg` checked before it goes live |
 | `roles/app` | `otj-render-env`, the two Quadlets, the image in `otjapp`'s storage |
-| `roles/verify` | Health, HAProxy, cert expiry, **no wildcard listener but 443**, the tailnet mappings |
+| `roles/observability` | Grafana Alloy, a rootful system Quadlet: the journal's three trails to Grafana Cloud, with full client addresses cut first |
+| `roles/verify` | Health, Alloy ready, HAProxy, cert expiry, **no wildcard listener but 443**, the tailnet mappings |
 | `ci-vars.yml` | The PR rehearsal's overrides only |
 | `../bin/otj-converge` | The script that runs all of this on the box |
 | `../haproxy/` | `haproxy.cfg` and `cloudflare-ips.lst` |
@@ -51,6 +52,7 @@ job, can't contain a secret, because no file Ansible manages holds one.
 | `/otj/prod/anthropic-api-key` | hours-api |
 | `/otj/prod/admin-allowed-logins` (`String`) | admin-api |
 | `/otj/prod/tailscale-authkey` | the `tailscale` role, first run only |
+| `/otj/prod/grafana-cloud-logs-token` | Alloy, write-only (`logs:write`, this stack). A system unit, so its file is `/run/otj/alloy.env`, `0600 root` |
 
 A missing parameter fails that unit's start, and the error names it. To rotate one, run
 `aws ssm put-parameter --overwrite …` and restart the unit: the restart renders the file again.
@@ -216,16 +218,41 @@ Any one alone breaks the site. Grey cloud without step 2 blocks every visitor. S
 
 ## Reading the logs
 
-Until log shipping lands (plan §10 step 7), from an SSM session:
+**In Grafana Cloud**, first. Alloy (`roles/observability`) reads the journal and ships three
+streams, each labelled `env="prod"` and `host="hours-api"`:
+
+| Stream | From |
+|---|---|
+| `{service="edge"}` (also `proxy="haproxy"`) | HAProxy's access log |
+| `{service="hours-api"}` | the main API |
+| `{service="admin-api"}` | the admin API |
+
+Nothing else in the journal leaves the box. Labels stay low-cardinality, so a user, a path or an
+address is a line filter, not a label:
+
+```logql
+{service="edge"} |= " 429 "                      # rate-limited requests
+{service="hours-api"} |= "<userId>"              # one user's requests
+sum(count_over_time({service="edge"} |~ "/-?[0-9]+ 5[0-9][0-9] " [5m]))   # 5xx per 5 minutes
+```
+
+**Edge lines in Grafana carry only the truncated client address**, IPv4 /24 and IPv6 /48, at the
+start of the line. HAProxy writes it that way (`log-format` in `haproxy.cfg`) and appends the full
+address as `full_src=`. Alloy deletes that field before shipping, and drops any line that still
+has one. The rehearsal checks all of this on every PR.
+
+**On the box**, from an SSM session, for the full addresses or if Grafana is unavailable. The
+journal is persistent and capped at 500 MB:
 
 ```bash
-sudo journalctl -u haproxy -f                    # the edge's access log, with real client IPs
+sudo journalctl -u haproxy -f                    # the edge's access log, with full_src= addresses
 sudo journalctl CONTAINER_NAME=hours-api -f      # the main API
 sudo journalctl CONTAINER_NAME=admin-api -f      # the admin API
+sudo journalctl -u alloy -f                      # Alloy itself, when lines stop arriving
 ```
 
 No workflow prints these, on purpose: GitHub job logs are readable by any signed-in GitHub user,
-and these lines carry client IPs and `userId`s.
+and these lines carry client addresses and `userId`s.
 
 ## Running it by hand
 

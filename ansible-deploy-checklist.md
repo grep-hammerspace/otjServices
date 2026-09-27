@@ -7,8 +7,8 @@ match the plan's §10.
 **Where things stand (2026-09-27).** The hand-provisioned box was destroyed when a merge replaced
 the instance (plan, top). The new one, `i-0d937e3a7abb82ebb`, was bootstrapped by hand (step 4) and
 converged by Ansible to #49's merge commit (step 5). **The public API is back.** The stack policy
-is set, so a merge can no longer replace the instance. Next: the `deploy.yml` PR (step 6), so that
-merges deploy again without pressing `converge`.
+is set, so a merge can no longer replace the instance. Since #50, every merge to `master` deploys
+(step 6). Next: logs to Grafana Cloud (step 7).
 
 **Who does what.** Items marked 🧑 are yours: settings, a laptop command, a dashboard, a button, or
 a check that needs your judgement or your devices. The rest is repo work that comes to you as a PR.
@@ -186,10 +186,12 @@ would be recorded in CloudWatch (plan §7 has the method to use then).
 
 ## Step 6 — Merges deploy through Ansible
 
-- [ ] Merge the **`deploy.yml` PR**, which replaces `ci-cd.yml` (plan §9.1).
-- [ ] 🧑 Watch the next **two ordinary merges** deploy: green, the PLAY RECAP in the job, and
-      `/health` 200 afterwards.
-- [ ] 🧑 Try **`rollback`** once, to the previous SHA and forward again.
+- [x] Merge the **`deploy.yml` PR** (#50), which replaces `ci-cd.yml` (plan §9.1).
+- [x] 🧑 Watch the next **two ordinary merges** deploy (#50, #51): green, the PLAY RECAP in the job,
+      and `/health` 200 afterwards.
+- [x] 🧑 Try **`rollback`** once, to the previous SHA and forward again. Use a merge commit on
+      `master`: a PR branch's SHA has no image in ECR, and the rollback fails at the pull, before it
+      touches anything.
 
 ## Step 7 — Logs to Grafana Cloud
 
@@ -198,8 +200,11 @@ would be recorded in CloudWatch (plan §7 has the method to use then).
       hardware key; the `otj-alloy-prod` access policy has **`logs:write` only**, for this stack;
       there are no public dashboards or snapshots; there are no other tokens.
 - [ ] 🧑 `put /otj/prod/grafana-cloud-logs-token SecureString` (the helper from step 3).
-- [ ] Merge the **observability PR** (the `observability` role, `LogDriver=journald`, the journald
-      drop-in). Run `converge-check` first.
+- [ ] 🧑 From the stack's Loki details page, the push URL and the user ID (neither is secret) into
+      `loki_push_url` and `loki_user` in `group_vars/all.yml`, on the observability PR.
+- [ ] Merge the **observability PR** (the `observability` role, the edge's truncated-address
+      `log-format`). The merge deploys it. `converge-check` can't look first, because only `master`
+      commits have images; the PR's rehearsal runs the same role against a local Loki instead.
 - [ ] 🧑 Lines appear for `service="edge"`, `service="hours-api"` and `service="admin-api"`. Edge
       lines show **truncated** IPs. A private browser window on the stack URL asks for a login.
 - [ ] 🧑 Build the dashboard (plan §4.5), and check `podman stats` shows room for Alloy.
