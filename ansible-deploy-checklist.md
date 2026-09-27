@@ -208,7 +208,7 @@ would be recorded in CloudWatch (plan §7 has the method to use then).
 - [ ] 🧑 Lines appear for `service="edge"`, `service="hours-api"` and `service="admin-api"`. Edge
       lines show **truncated** IPs. A private browser window on the stack URL asks for a login.
 - [ ] 🧑 Build the dashboard (plan §4.5), and check `podman stats` shows room for Alloy.
-- [ ] 🧑 Host metrics: add `metrics:write` to the `otj-alloy-prod` access policy (the same token then
+- [x] 🧑 Host metrics: add `metrics:write` to the `otj-alloy-prod` access policy (the same token then
       covers both), and put the stack's Prometheus remote-write URL and user ID (Prometheus details
       page; a different user ID from Loki's) into `prom_remote_write_url` and `prom_user`.
 - [ ] Merge the **host-metrics PR**. Then `node_memory_MemAvailable_bytes{instance="hours-api"}`
