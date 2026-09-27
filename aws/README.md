@@ -8,7 +8,7 @@ Two stacks:
   the "more permanent than podman-compose" deployment. Local dev keeps using
   `deploy/podman-compose.yaml` — unrelated to this. The instance is tagged
   `otj:role=app-host` so `GithubOidcStack`'s SSM permissions can scope to it.
-- **`GithubOidcStack`** — lets `.github/workflows/ci-cd.yml` deploy
+- **`GithubOidcStack`** — lets `.github/workflows/deploy.yml` deploy
   `OtjServicesStack`, push the app image to ECR, and trigger a deploy on the
   box via SSM, all without any AWS credentials stored in GitHub. Deployed
   once, by hand, before CI can work (see below) — and redeployed by hand any
@@ -118,13 +118,12 @@ Variables → New repository variable:
 AWS_DEPLOY_ROLE_ARN = <the DeployRoleArn output above>
 ```
 
-After that, `.github/workflows/ci-cd.yml` runs `mvn test` on every push/PR to
-`master`, and on push to `master` (after tests pass) assumes that role via
-OIDC and: runs `cdk deploy OtjServicesStack --require-approval never`, builds
-the app image and pushes it to ECR tagged with the commit SHA — no static AWS
-keys anywhere in GitHub. It no longer rolls the image out to the box: that went
-with the instance replacement above, and comes back with the Ansible deploy
-(`ansible-migration-plan.md`).
+After that, `.github/workflows/deploy.yml` runs `mvn test` on every PR to
+`master`. On push to `master` it runs every check again (tests and `box.yml`),
+then assumes that role via OIDC and: builds the app image and pushes it to ECR
+tagged with the commit SHA, runs `cdk deploy OtjServicesStack --require-approval
+never`, and runs `otj-converge <sha>` on the box through SSM
+(`.github/scripts/box-run.sh`) — no static AWS keys anywhere in GitHub.
 
 `GithubActionsDeployRole`'s permissions, beyond assuming the CDK bootstrap
 roles:

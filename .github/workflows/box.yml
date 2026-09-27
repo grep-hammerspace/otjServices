@@ -1,13 +1,13 @@
 # Checks for the box's configuration (deploy/ansible, deploy/haproxy, deploy/bin) on every PR:
 # static checks, then the box rehearsal, which applies the real playbook to a GitHub runner, twice
-# (ansible-migration-plan.md §8). Java's tests stay in ci-cd.yml.
+# (ansible-migration-plan.md §8). Java's tests are in deploy.yml, which also calls this workflow on a
+# merge to master and deploys only if it passes, so there's no push trigger here.
 name: Box
 
 on:
   pull_request:
     branches: [master]
-  push:
-    branches: [master]
+  workflow_call:
 
 permissions:
   contents: read

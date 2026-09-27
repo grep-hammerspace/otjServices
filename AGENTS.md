@@ -84,11 +84,15 @@ src/test/resources/features/  Cucumber .feature files
 aws/                      CDK (TypeScript): OtjServicesStack (VPC + EC2 + ECR),
                           GithubOidcStack (CI deploy role). node_modules/ is committed-ish noise —
                           ignore it when searching.
-.github/workflows/ci-cd.yml  test on PR; on push to master, deploy CDK + build/push
-                          image to ECR (the rollout to the box comes back with deploy.yml)
+.github/workflows/deploy.yml  build-and-test on PR; on push to master, every check again
+                          (calls box.yml), then image → ECR, cdk deploy, and otj-converge on the
+                          box through .github/scripts/box-run.sh
 .github/workflows/box.yml    box-static (ansible-lint, syntax, shellcheck, haproxy -c) and
                           box-rehearsal: applies the playbook to a runner twice, then tests
                           rate limits, loopback-only ports and logs through HAProxy
+.github/workflows/{converge,converge-check,rollback,restart}.yml
+                          the ops buttons (workflow_dispatch); all share the `box` concurrency
+                          group with deploy.yml's deploy job
 docker/                   otjService.Dockerfile, start.sh
 deploy/                   self-host path: podman-compose.yaml, bootstrap.sh, shell.nix,
                           README.md (Tailscale trust model)
@@ -219,15 +223,15 @@ Notes:
 
 Two **protected** branches, both deployment targets:
 
-- **`master`** — the AWS deployment. Pushes here run CI and then deploy: CDK
-  (`OtjServicesStack`) and image build → ECR. This is the hosted instance backing the
-  mobile app.
-  **It is down, by choice, since 2026-09-25.** A merge replaced the EC2 instance
-  (the AMI was re-resolved on every deploy) and terminated the hand-provisioned box.
-  The instance running now is blank, and CI no longer rolls out to it. The box comes
-  back through `ansible-migration-plan.md`. The AMI is now pinned and a stack policy
-  refuses instance replacement (`aws/README.md`). Don't unpin it or loosen the policy
-  as a side effect of other work.
+- **`master`** — the AWS deployment. Pushes here run every check again, then deploy
+  (`deploy.yml`): image build → ECR, CDK (`OtjServicesStack`), and `otj-converge <sha>` on
+  the box, which applies that release's app image and box config together. This is the
+  hosted instance backing the mobile app. Only master's newest commit deploys; an older
+  run that finishes second skips its converge rather than rolling the box back.
+  On 2026-09-25 a merge replaced the EC2 instance (the AMI was re-resolved on every
+  deploy) and terminated the hand-provisioned box; it was rebuilt with Ansible and back
+  on 2026-09-27. The AMI is now pinned and a stack policy refuses instance replacement
+  (`aws/README.md`). Don't unpin it or loosen the policy as a side effect of other work.
 - **`tailscale`** — reserved for **self-hosters**. Tracks `master` closely (today it is
   `master` plus `scripts/otj`, the hand-testing CLI). The intent recorded in
   `notes.md` is that this branch stays runnable purely via `deploy/bootstrap.sh` +
