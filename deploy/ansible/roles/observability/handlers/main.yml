@@ -1,0 +1,19 @@
+- name: Regenerate Alloy's unit
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+
+- name: Restart alloy
+  ansible.builtin.systemd_service:
+    name: alloy.service
+    state: restarted
+
+# A config change only: Alloy re-reads it in place and keeps its journal position. Retried because
+# on a first run it follows the restart above, while Alloy is still starting.
+- name: Reload alloy
+  ansible.builtin.uri:
+    url: http://127.0.0.1:12345/-/reload
+    method: POST
+  register: observability_reload
+  until: observability_reload.status == 200
+  retries: 15
+  delay: 2

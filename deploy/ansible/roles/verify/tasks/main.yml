@@ -15,6 +15,17 @@
       loop_control:
         label: "{{ item.key }}"
 
+    # Ready means its components are healthy. Whether Grafana Cloud accepted the lines can only be
+    # seen there (ansible-deploy-checklist.md step 7); the rehearsal reads them back from its Loki.
+    - name: Alloy answers /-/ready on loopback
+      ansible.builtin.uri:
+        url: http://127.0.0.1:12345/-/ready
+        status_code: 200
+      register: verify_alloy
+      until: verify_alloy.status == 200
+      retries: 30
+      delay: 2
+
     - name: HAProxy unit state
       ansible.builtin.systemd_service:
         name: haproxy

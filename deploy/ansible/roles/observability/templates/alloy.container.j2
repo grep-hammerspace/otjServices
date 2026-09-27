@@ -1,0 +1,46 @@
+# Written by the observability role for release {{ image_tag }}. Don't edit on the box: the next
+# converge puts it back, and the nightly drift check reports the change.
+#
+# ROOTFUL, unlike the apps, because it reads both the system journal (HAProxy) and otjapp's user
+# journal (the apps), and a rootless container can read neither. Locked down to make up for it:
+# read-only mounts, a read-only root, no capabilities, Podman's AppArmor profile, and no inbound
+# port (plan §4.5).
+[Unit]
+Description=Grafana Alloy: the box's journal to Grafana Cloud
+After=network-online.target
+Wants=network-online.target
+
+[Container]
+Image={{ alloy_image }}
+ContainerName=alloy
+# It only pushes out. Host networking keeps its UI on the host's loopback, where verify and the
+# reload handler reach it; nothing is published.
+Network=host
+Exec=run /etc/alloy/config.alloy --storage.path=/var/lib/alloy/data --server.http.listen-addr=127.0.0.1:12345 --disable-reporting
+Volume=/etc/alloy:/etc/alloy:ro
+# Its journal read positions, on the host, so a restart neither resends lines nor skips them.
+# Mounted over the WHOLE of /var/lib/alloy, not just data/: the image's copy is 0770 uid 473, and
+# root with every capability dropped can't traverse it to reach a mount inside.
+Volume=/var/lib/alloy:/var/lib/alloy
+Volume=/var/log/journal:/var/log/journal:ro
+Volume=/etc/machine-id:/etc/machine-id:ro
+# Rendered from Parameter Store by ExecStartPre below, onto tmpfs, 0600 root.
+EnvironmentFile=/run/otj/alloy.env
+ReadOnly=true
+DropCapability=all
+# No NoNewPrivileges=, deliberately. On Ubuntu 24.04 it stops the container from entering Podman's
+# containers-default AppArmor profile, so Alloy is left under Ubuntu's `crun` profile, which has
+# no network rule: every socket() is denied ("listen tcp …: socket: permission denied"). It would
+# add little anyway: with every capability out of the bounding set, a setuid or file-capability
+# binary has nothing to gain.
+
+[Service]
+# otj-render-env is per-user by default; these point it at the system unit's files instead.
+Environment=HOME=/root OTJ_CONF_DIR=/etc/otj OTJ_RUN_DIR=/run/otj
+ExecStartPre=/usr/local/lib/otj/otj-render-env alloy
+Restart=always
+RestartSec=5
+TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target

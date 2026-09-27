@@ -1,0 +1,78 @@
+// Written by the observability role for release {{ image_tag }}. Don't edit on the box: the next
+// converge puts it back. The design, and why, is ansible-migration-plan.md §4.5.
+//
+// Three trails, all read from the journal, and nothing else from it leaves the box:
+//   _SYSTEMD_UNIT=haproxy.service   service="edge", proxy="haproxy"
+//   CONTAINER_NAME=hours-api        service="hours-api"
+//   CONTAINER_NAME=admin-api        service="admin-api"
+// Labels stay low-cardinality. userId, path and IP stay in the line, for LogQL line filters.
+
+loki.relabel "journal" {
+  forward_to = []
+
+  rule {
+    source_labels = ["__journal__systemd_unit"]
+    regex         = "haproxy\\.service"
+    target_label  = "service"
+    replacement   = "edge"
+  }
+
+  rule {
+    source_labels = ["__journal__systemd_unit"]
+    regex         = "haproxy\\.service"
+    target_label  = "proxy"
+    replacement   = "haproxy"
+  }
+
+  rule {
+    source_labels = ["__journal_container_name"]
+    regex         = "(hours-api|admin-api)"
+    target_label  = "service"
+  }
+
+  // Everything else in the journal stays on the box.
+  rule {
+    source_labels = ["service"]
+    regex         = "edge|hours-api|admin-api"
+    action        = "keep"
+  }
+}
+
+// The system journal and otjapp's user journal, both under this one directory.
+loki.source.journal "box" {
+  path          = "/var/log/journal"
+  relabel_rules = loki.relabel.journal.rules
+  labels        = {env = "{{ loki_labels.env }}", host = "{{ loki_labels.host }}"}
+  forward_to    = [loki.process.scrub.receiver]
+}
+
+// HAProxy writes the client address already truncated (IPv4 /24, IPv6 /48) at the start of each
+// access-log line, and the full address as a trailing full_src= field for the local journal only
+// (deploy/haproxy/haproxy.cfg). That field is cut here. Any line still carrying one afterwards is
+// dropped, not sent, so a change to the format fails closed.
+loki.process "scrub" {
+  stage.replace {
+    expression = "( full_src=\\S+)$"
+    replace    = ""
+  }
+
+  stage.drop {
+    expression          = "full_src="
+    drop_counter_reason = "full_client_address"
+  }
+
+  forward_to = [loki.write.grafana_cloud.receiver]
+}
+
+loki.write "grafana_cloud" {
+  endpoint {
+    url = "{{ loki_push_url }}"
+
+    basic_auth {
+      username = "{{ loki_user }}"
+      // Write-only (logs:write, this stack). Rendered from Parameter Store into /run/otj/alloy.env
+      // at unit start by otj-render-env; no file Ansible writes ever holds it.
+      password = sys.env("GRAFANA_CLOUD_LOGS_TOKEN")
+    }
+  }
+}
