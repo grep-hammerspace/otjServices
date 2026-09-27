@@ -153,7 +153,7 @@ In normal use you won't run these by hand at all. CI runs them on the box for yo
 
 ## 3. What the old box had
 
-The destroyed box was provisioned by hand through SSM sessions, following `deployment-checklist.md`
+The destroyed box was provisioned by hand through SSM sessions, following `deployment-checklist.md` (since deleted; git history has it)
 §6 and `deploy/prod/README.md`. This table is the list of what the new box needs, and every row is
 now code. The right-hand column is the lesson learned the hard way that each row's task has to
 encode. The runbook's warnings become comments next to the task that prevents the problem.
@@ -807,6 +807,6 @@ playbook puts there.
 |---|---|
 | `AGENTS.md` | Directory structure (`deploy/ansible/`, `deploy/haproxy/`); "Build, run, test" (`mvn verify`, `ansible-lint`, the rehearsal); Caddy → HAProxy wherever it is named (the "Two processes" table, the signup rate-limit note, the inbound-ports note); Conventions: *"don't change the box by hand; change the playbook"*. The no-credentials-in-logs convention gains a line: logs are copied to Grafana Cloud, so a leak reaches a third party, not just the box. Add where logs are read (Grafana, and `journalctl` over SSM as the fallback). |
 | `deploy/prod/README.md` → `deploy/ansible/README.md` | Rewritten around roles and workflows. The edge/rate-limit reasoning moves across in HAProxy terms. "The two rate limits, and why there are two" and the shared-IP section stand as written. A "Reading the logs" section: the dashboard, the three `service` labels, useful LogQL (429s by path, a user's requests by `userId`), and the local `journalctl` fallback for full IPs. |
-| `deployment-checklist.md` | §6 becomes "follow `ansible-deploy-checklist.md`"; delete the manual steps. |
+| `deployment-checklist.md` | Deleted once the Ansible box was up; `ansible-deploy-checklist.md` replaced it. |
 | `aws/README.md` | Parameter Store IAM, `/otj/prod/image-tag`, Session Manager logging. (#45 already adds the stack policy and the rebuild procedure.) |
 | `staging-to-master-cutover.md` | Describes the old box's edge bring-up. Delete it with `deploy/prod/` in step 2; git history keeps it. |

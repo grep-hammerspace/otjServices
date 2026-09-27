@@ -105,11 +105,10 @@ deploy/                   self-host path: podman-compose.yaml, bootstrap.sh, she
 scripts/                  (tailscale branch only) `otj` CLI for hand-testing the API
 ```
 
-Docs worth knowing about (root): `README.md` (the architecture diagrams), `deployment-checklist.md` (AWS bring-up),
-`steps-04-08-implementation-plan.md` (the multi-user rollout plan; step 08 still open),
+Docs worth knowing about (root): `README.md` (the architecture diagrams),
 `ansible-migration-plan.md` (building the box with Ansible) and `ansible-deploy-checklist.md`
-(its order of operations), `notes.md` (idea backlog). Finished plans and API specs are deleted once they land; git
-history has them.
+(its order of operations), `notes.md` (idea backlog, including the multi-user rollout's unfinished
+test sweep). Finished plans and API specs are deleted once they land; git history has them.
 
 ## Two processes, one image
 
@@ -239,13 +238,10 @@ Two **protected** branches, both deployment targets:
 
 Do not push directly to either; open a PR.
 
-`staging` was the working integration branch for the multi-user auth rollout
-(steps 01–08). **That rollout has landed:** `staging` was merged into `master` by
-PR #21 on 2026-08-16, so session tokens, bcrypt users, invite-gated signup and
-`SessionRepository` are all on `master` now, and the old
-`tailscale/TailscaleIdentity*` classes are gone from it. `master` is the branch that
-deploys and is currently *ahead* of `staging` — reverse of the old advice. Treat
-`master` as the source of truth unless you have a reason not to.
+The multi-user auth rollout (steps 01–07) landed on `master` through the old `staging`
+branch (PR #21, 2026-08-16), which has since been deleted: session tokens, bcrypt users,
+invite-gated signup and `SessionRepository` are all on `master`, and the old
+`tailscale/TailscaleIdentity*` classes are gone. `master` is the source of truth.
 
 The one place `Tailscale-User-Login` is still trusted is `admin/AdminIdentityFilter`,
 for the admin API on 8946, and that rests entirely on nothing but loopback and
@@ -298,9 +294,6 @@ on the prod box):
 - `ANTHROPIC_API_KEY` — **required to boot**: `AnthropicOkHttpClient.fromEnv()`
   throws at construction, so the server will not start without it, even for flows
   that never touch the LLM. `dummy` is fine for auth work.
-- `LLM_API_KEY` / `LLM_BASE_URL` / `LLM_MODEL` — for the in-progress move to an
-  OpenAI-compatible provider (OpenRouter/Groq/NIM) on the `use-free-ai` branch; not
-  yet read by `AppModule` on `master`.
 - `APP_ROLE` — `api` (default) or `admin`; selects the entrypoint.
 - `ADMIN_ALLOWED_LOGINS` — comma-separated tailnet logins allowed to mint/revoke invite
   codes. Admin process only. Unset means nobody.
@@ -391,4 +384,5 @@ on the prod box):
   at unit start), and the origin certificate is the one thing installed by hand and only
   `stat`ed. Any new task that could print a secret needs `no_log: true`: the deploy output
   goes to CloudWatch and the Actions job.
-- `dependency-reduced-pom.xml` is a shade-plugin artifact, not a file to edit.
+- `dependency-reduced-pom.xml` is a shade-plugin artifact, rewritten by every `mvn package`
+  and gitignored. Don't edit or commit it.
