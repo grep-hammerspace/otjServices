@@ -1,0 +1,38 @@
+# Put an older release back: its app image AND its box config together
+# (ansible-migration-plan.md §9.2). Uses the otj-converge from THAT release's image, not the copy on
+# the box, so a broken script can't block the way back (plan R4).
+name: rollback
+
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: Full commit SHA to roll back to (ECR keeps the last 20)
+        required: true
+        type: string
+
+permissions:
+  id-token: write # OIDC, for the deploy role
+  contents: read
+
+# One thing touches the box at a time: every box workflow, and deploy.yml, share this group.
+concurrency:
+  group: box
+  cancel-in-progress: false
+
+jobs:
+  rollback:
+    runs-on: ubuntu-24.04
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: eu-west-2
+
+      - name: otj-converge <sha>, with that release's script
+        run: .github/scripts/box-run.sh rollback "$SHA"
+        env:
+          SHA: ${{ inputs.sha }}

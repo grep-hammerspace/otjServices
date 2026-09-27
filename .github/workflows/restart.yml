@@ -1,0 +1,38 @@
+# Restart one unit and check it comes back healthy (ansible-migration-plan.md §9.2). For rotating a
+# secret: `put-parameter --overwrite`, then restart, which renders the env file again.
+name: restart
+
+on:
+  workflow_dispatch:
+    inputs:
+      unit:
+        description: Which unit
+        required: true
+        type: choice
+        options: [hours-api, admin-api, haproxy]
+
+permissions:
+  id-token: write # OIDC, for the deploy role
+  contents: read
+
+# One thing touches the box at a time: every box workflow, and deploy.yml, share this group.
+concurrency:
+  group: box
+  cancel-in-progress: false
+
+jobs:
+  restart:
+    runs-on: ubuntu-24.04
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: eu-west-2
+
+      - name: Restart it
+        run: .github/scripts/box-run.sh restart "$UNIT"
+        env:
+          UNIT: ${{ inputs.unit }}

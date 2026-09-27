@@ -9,7 +9,7 @@ the instance (plan, top). The instance now running, `i-0d937e3a7abb82ebb`, is bl
 public API returns 521 and stays down, by choice, until step 5. User data in Atlas, the images in
 ECR and the Elastic IP are all intact. The stack policy is set, so a merge can no longer replace
 the instance. Step 3's manual prep is done: all four parameters are in Parameter Store, and the
-new origin certificate is waiting for step 4. Next: merge #48, then #49.
+new origin certificate is waiting for step 4. #48 is merged. Next: #49, then step 4.
 
 **Who does what.** Items marked 🧑 are yours: settings, a laptop command, a dashboard, a button, or
 a check that needs your judgement or your devices. The rest is repo work that comes to you as a PR.
@@ -39,7 +39,7 @@ Session Manager plugin. Check first that `aws sts get-caller-identity` works.
 - [x] **Runner spike:** a throwaway workflow proving rootless Podman, linger and `systemctl --user`
       work on GitHub's `ubuntu-24.04` runner. The rehearsal depends on it, and the fallback (a systemd
       container) is much more work, so find out first.
-- [ ] **Playbook PR (#48):** `deploy/ansible/` (roles `base`, `otjapp`, `tailscale`, `edge`, `app`,
+- [x] **Playbook PR (#48):** `deploy/ansible/` (roles `base`, `otjapp`, `tailscale`, `edge`, `app`,
       `verify`), `deploy/bin/otj-converge`, `deploy/haproxy/haproxy.cfg` ported from the Caddyfile,
       `COPY deploy/{ansible,bin,haproxy}/` into `/deploy/` in the Dockerfile, and
       `.github/workflows/box.yml`: `box-static` (lint, syntax check, shellcheck, `haproxy -c`) and
@@ -86,7 +86,7 @@ put() { read -rsp "$1: " v; echo; printf %s "$v" | aws ssm put-parameter --regio
 - [x] Anthropic console: create a new key, then `put /otj/prod/anthropic-api-key SecureString`.
 - [x] `put /otj/prod/admin-allowed-logins String`, with the comma-separated tailnet logins allowed
       to mint invite codes.
-- [ ] Revoke the old Atlas password and the old Anthropic key, once you've checked nothing else
+- [x] Revoke the old Atlas password and the old Anthropic key, once you've checked nothing else
       uses them (your local `.env`, for instance).
 - [ ] `/otj/prod/credential-identity-seed` is only needed once **PR #43** lands. When it does, mint a
       pair with `IdentityKeyTool generate` and put the public half in `otj-mobile/.env` at the same
