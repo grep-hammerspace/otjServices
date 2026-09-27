@@ -18,7 +18,9 @@ Network=host
 Exec=run /etc/alloy/config.alloy --storage.path=/var/lib/alloy/data --server.http.listen-addr=127.0.0.1:12345 --disable-reporting
 Volume=/etc/alloy:/etc/alloy:ro
 # Its journal read positions, on the host, so a restart neither resends lines nor skips them.
-Volume=/var/lib/alloy:/var/lib/alloy/data
+# Mounted over the WHOLE of /var/lib/alloy, not just data/: the image's copy is 0770 uid 473, and
+# root with every capability dropped can't traverse it to reach a mount inside.
+Volume=/var/lib/alloy:/var/lib/alloy
 Volume=/var/log/journal:/var/log/journal:ro
 Volume=/etc/machine-id:/etc/machine-id:ro
 # Rendered from Parameter Store by ExecStartPre below, onto tmpfs, 0600 root.
