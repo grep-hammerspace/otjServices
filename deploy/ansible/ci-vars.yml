@@ -7,6 +7,8 @@ render_env_source: fixture
 render_env_fixture:
   mongo-uri: "{{ ci_mongo_uri }}"
   anthropic-api-key: dummy-not-a-key
+  # 32 zero bytes: the api role won't start without a well-formed seed.
+  credential-identity-seed: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
   admin-allowed-logins: ci@example.invalid
   grafana-cloud-logs-token: dummy-not-a-token
 

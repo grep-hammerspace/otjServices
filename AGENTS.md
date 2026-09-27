@@ -48,6 +48,7 @@ src/main/java/com/github/grepHammerspace/
     AuthResource            /auth  — signup, login, logout (anonymous by design)
     OtjServicesResource     /otj-services — all automation endpoints (@Authenticated)
     HealthResource          /health
+    CryptoResource          /otj-services/crypto/public-key, the key to seal credentials to
     dto/                    request/response records
   admin/                  the SECOND server — see "Two processes" below
     AdminMain.java          entry point, port 8946
@@ -58,6 +59,7 @@ src/main/java/com/github/grepHammerspace/
   auth/                   @Authenticated annotation + AuthenticationFilter (401 gate,
                           puts userId in the SecurityContext principal),
                           SessionTokenService (opaque bearer tokens), PasswordHasher
+  crypto/                 sealed OneAdvanced credentials (credential-encryption-spec.md)
   db/                     repositories (User, Session, ActivityLog, InviteCode)
     model/                  User, Session, ActivityLog, InviteCode documents
   llm/                    LlmService/LlmServiceImpl, LlmResult / LlmParseError,
@@ -150,8 +152,9 @@ Authenticated (`Authorization: Bearer …`, all under `/otj-services`):
 
 | Method | Path | Body → Result |
 |---|---|---|
-| POST | `/prepare-browser` | `{username, password}` → 200 `{status, message}` |
-| POST | `/azure-id/prepare` | `{username, password}` → 200 `{status, message, challengeNumber?}` |
+| GET | `/crypto/public-key` | → 200 `{algorithm, keyId, publicKey, expiresAt, signature}` |
+| POST | `/prepare-browser` | `SealedEnvelope` → 200 `{status, message}` |
+| POST | `/azure-id/prepare` | `SealedEnvelope` → 200 `{status, message, challengeNumber?}` |
 | POST | `/submit-with-mfa` | `{mfaCode}` → 200/207/502 `{status, posted, failed}` |
 | GET | `/azure-id/complete` | → 200/207/408/502 `{status, posted, failed}` |
 | POST | `/log-activities` | `{content}` → 200 `ActivityLogResponse`, or 429 + `Retry-After` |
@@ -159,16 +162,17 @@ Authenticated (`Authorization: Bearer …`, all under `/otj-services`):
 | PUT | `/pending/{id}` | `UpdateActivityRequest` → 200 `PendingActivity`, or 404 |
 | DELETE | `/pending/{id}` | → 204 |
 
-The `username`/`password` on the two prepare endpoints are the user's **OneAdvanced**
-credentials. They are **not stored** — the multi-user rollout deleted the encrypted-at-rest copy,
-so they have to arrive per request. They exist as a local for the length of the call, go straight
-into `Driver.prepare`, and never reach a log line or a response body. Do not add a field, a cache,
-or a "remember me" for them.
+The two prepare endpoints carry the user's **OneAdvanced** credentials, **sealed to this
+process** (see "Sealed credentials" below). They are **not stored**: the multi-user rollout
+deleted the encrypted-at-rest copy, so they have to arrive per request. They exist as a
+local for the length of the call, go straight into `Driver.prepare`, and never reach a log line or
+a response body. Do not add a field, a cache, or a "remember me" for them.
 
 `prepare*` answers `status` of `login_complete`, `otp_required` or `push_sent`; `challengeNumber`
 is present only for a Microsoft number match. The learner ID is **server-side** and is never
-accepted on these bodies — Jackson rejects the unknown property with a 400, and
-`prepare_and_submit.feature` pins that.
+accepted on these bodies: Jackson rejects the unknown property with a 400 on the envelope and on
+the JSON sealed inside it, and `prepare_and_submit.feature` pins both. The MFA code is not sealed:
+it dies in ~30 s, and sealing it would put a key fetch in front of the most time-critical call.
 
 Authenticated, outside `/otj-services` — the account itself, on `AccountResource`:
 
@@ -188,6 +192,26 @@ Admin API (separate process/port, tailnet identity instead of bearer tokens):
 | POST | `/admin/invites` | `{note?, expiresInDays?}` → 201 `{code, status, expiresAt, …}` |
 | GET | `/admin/invites` | 200, newest first, `status` ∈ ACTIVE/USED/REVOKED/EXPIRED |
 | DELETE | `/admin/invites/{code}` | 204; 404 unknown; 409 already claimed |
+
+## Sealed credentials
+
+Cloudflare terminates TLS, so a request body is plaintext inside it. The OneAdvanced password is
+the user's institutional credential, so the prepare endpoints take a `SealedEnvelope` that only
+this process can open. Wire format and key handling: `credential-encryption-spec.md`. Code:
+`crypto/` (`CredentialKeyRing`, `Hkdf`, `RawKeys`, `IdentityKeyTool`) and `api/CryptoResource`.
+
+Things not to undo:
+
+- **The pinned identity key is the point.** The key announcement crosses the same Cloudflare hop,
+  so it is signed with an Ed25519 key whose public half is built into the app. Never add that
+  public key to the response: verifying against a key from the same channel proves nothing.
+- **No plaintext fallback, and no flag for one.** A server that still accepted the old body would
+  leave the plaintext path open to the party being defended against.
+- **The api role won't boot without `CREDENTIAL_IDENTITY_SEED`.** It fails closed, like
+  `AdminAllowlist`: a generated key would sign announcements no released app can verify.
+- **Every decryption failure is `undecryptable`**, and no reason quotes the envelope; telling them
+  apart is an oracle. `unknown_key` is the one code the client acts on, by re-sealing once.
+- **`iat` is not a replay defence.** It bounds how long a captured envelope is useful.
 
 Notes:
 - Tokens are 32 random bytes, base64url; only the SHA-256 hash is stored. Sliding
@@ -252,10 +276,14 @@ stacked PRs use a regular merge or rebase, **not squash**.
 
 ```bash
 mvn -q package -DskipTests           # build target/app.jar
-MONGO_URI=mongodb://localhost:27017 ANTHROPIC_API_KEY=dummy java -jar target/app.jar
+MONGO_URI=mongodb://localhost:27017 ANTHROPIC_API_KEY=dummy \
+CREDENTIAL_IDENTITY_SEED=$(openssl rand -base64 32) java -jar target/app.jar
 
 mvn -B clean test                    # unit tests only
 ```
+
+A random seed is fine for curl. Pointing the Expo app at the server needs the pair from
+`IdentityKeyTool generate`, since the app pins the public half.
 
 Integration tests are `*IT` classes and Surefire's default includes **skip** them —
 they must be named explicitly, and they need a container runtime:
@@ -292,6 +320,10 @@ on the prod box):
 - `ANTHROPIC_API_KEY` — **required to boot**: `AnthropicOkHttpClient.fromEnv()`
   throws at construction, so the server will not start without it, even for flows
   that never touch the LLM. `dummy` is fine for auth work.
+- `CREDENTIAL_IDENTITY_SEED` — **required to boot the api role**: the 32-byte Ed25519 seed that
+  signs the credential key announcement. `IdentityKeyTool generate` prints it together with the
+  public key the Expo app pins; a mismatch fails every submit. Parameter Store:
+  `/otj/prod/credential-identity-seed`. The admin role doesn't need it.
 - `APP_ROLE` — `api` (default) or `admin`; selects the entrypoint.
 - `ADMIN_ALLOWED_LOGINS` — comma-separated tailnet logins allowed to mint/revoke invite
   codes. Admin process only. Unset means nobody.

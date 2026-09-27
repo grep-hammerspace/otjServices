@@ -2,6 +2,7 @@ package com.github.grepHammerspace.bind;
 
 import com.anthropic.client.AnthropicClient;
 import com.anthropic.client.okhttp.AnthropicOkHttpClient;
+import com.github.grepHammerspace.crypto.CredentialKeyRing;
 import com.github.grepHammerspace.llm.LlmService;
 import com.github.grepHammerspace.llm.LlmServiceImpl;
 import com.github.grepHammerspace.stateStore.UserStateStore;
@@ -26,6 +27,13 @@ public class AppModule {
     @Singleton
     UserStateStore provideUserStateStore() {
         return new UserStateStore();
+    }
+
+    // Singleton: its keys live in memory, so a second ring couldn't open the first one's envelopes.
+    @Provides
+    @Singleton
+    CredentialKeyRing provideCredentialKeyRing() {
+        return new CredentialKeyRing();
     }
 
     @Provides

@@ -1,6 +1,9 @@
 package integration;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.github.grepHammerspace.api.dto.CredentialKeyResponse;
+import com.github.grepHammerspace.api.dto.SealedEnvelope;
+import com.github.grepHammerspace.crypto.TestSealer;
 import com.github.grepHammerspace.web.PrepareResult;
 import io.cucumber.java.en.And;
 import io.cucumber.java.en.Given;
@@ -13,6 +16,7 @@ import okhttp3.RequestBody;
 import okhttp3.Response;
 
 import java.io.IOException;
+import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -53,24 +57,67 @@ public class PrepareSteps {
 
     @When("I POST {string} with the OneAdvanced credentials using the signup token")
     public void postWithCredentials(String path) throws Exception {
-        post(path, credentials(ServerHooks.OA_USERNAME, ServerHooks.OA_PASSWORD));
+        postJson(path, MAPPER.writeValueAsString(sealed(ServerHooks.OA_USERNAME, ServerHooks.OA_PASSWORD)));
     }
 
     @When("I POST {string} with a blank OneAdvanced password using the signup token")
     public void postWithBlankPassword(String path) throws Exception {
-        post(path, credentials(ServerHooks.OA_USERNAME, ""));
+        postJson(path, MAPPER.writeValueAsString(sealed(ServerHooks.OA_USERNAME, "")));
+    }
+
+    // Pins the cutover: the old plaintext shape must be refused.
+    @When("I POST {string} with plaintext OneAdvanced credentials using the signup token")
+    public void postPlaintextCredentials(String path) throws Exception {
+        postJson(path, MAPPER.writeValueAsString(
+                credentials(ServerHooks.OA_USERNAME, ServerHooks.OA_PASSWORD)));
+    }
+
+    @When("I POST {string} with credentials sealed to an unknown key using the signup token")
+    public void postSealedToUnknownKey(String path) throws Exception {
+        SealedEnvelope real = sealed(ServerHooks.OA_USERNAME, ServerHooks.OA_PASSWORD);
+        postJson(path, MAPPER.writeValueAsString(new SealedEnvelope(real.v(), "AAAAAAAAAAA",
+                real.epk(), real.nonce(), real.ciphertext())));
+    }
+
+    @When("I POST {string} with a tampered credential envelope using the signup token")
+    public void postTamperedEnvelope(String path) throws Exception {
+        SealedEnvelope real = sealed(ServerHooks.OA_USERNAME, ServerHooks.OA_PASSWORD);
+        byte[] ciphertext = Base64.getUrlDecoder().decode(real.ciphertext());
+        ciphertext[0] ^= 0x01;
+        postJson(path, MAPPER.writeValueAsString(new SealedEnvelope(real.v(), real.keyId(),
+                real.epk(), real.nonce(),
+                Base64.getUrlEncoder().withoutPadding().encodeToString(ciphertext))));
+    }
+
+    @When("I POST {string} with credentials sealed {int} minutes ago using the signup token")
+    public void postStaleEnvelope(String path, int minutes) throws Exception {
+        CredentialKeyResponse key = fetchKey();
+        postJson(path, MAPPER.writeValueAsString(TestSealer.seal(key.publicKey(), key.keyId(),
+                ServerHooks.OA_USERNAME, ServerHooks.OA_PASSWORD,
+                java.time.Instant.now().minusSeconds(minutes * 60L).getEpochSecond())));
+    }
+
+    @When("I POST {string} with a learnerId sealed into the credentials using the signup token")
+    public void postSealedLearnerId(String path) throws Exception {
+        CredentialKeyResponse key = fetchKey();
+        postJson(path, MAPPER.writeValueAsString(TestSealer.sealRaw(key.publicKey(), key.keyId(),
+                "{\"username\":\"" + ServerHooks.OA_USERNAME + "\",\"password\":\""
+                        + ServerHooks.OA_PASSWORD + "\",\"learnerId\":\"L-INJECTED\",\"iat\":"
+                        + java.time.Instant.now().getEpochSecond() + "}")));
     }
 
     @When("I POST {string} with the OneAdvanced credentials and learnerId {string} using the signup token")
     public void postWithCredentialsAndLearnerId(String path, String learnerId) throws Exception {
-        Map<String, Object> body = credentials(ServerHooks.OA_USERNAME, ServerHooks.OA_PASSWORD);
+        SealedEnvelope real = sealed(ServerHooks.OA_USERNAME, ServerHooks.OA_PASSWORD);
+        Map<String, Object> body = MAPPER.convertValue(real, Map.class);
         body.put("learnerId", learnerId);
-        post(path, body);
+        postJson(path, MAPPER.writeValueAsString(body));
     }
 
     @When("I POST {string} with the MFA code using the signup token")
     public void postMfaCode(String path) throws Exception {
-        post(path, Map.of("mfaCode", ServerHooks.OA_MFA_CODE));
+        // Not sealed: a ~30 s code isn't worth a key fetch on the most time-critical call.
+        postJson(path, MAPPER.writeValueAsString(Map.of("mfaCode", ServerHooks.OA_MFA_CODE)));
     }
 
     @Then("the {string} driver received the OneAdvanced credentials")
@@ -101,12 +148,36 @@ public class PrepareSteps {
         return body;
     }
 
-    private void post(String path, Map<String, Object> body) throws Exception {
+    private static SealedEnvelope sealed(String username, String password) throws Exception {
+        CredentialKeyResponse key = fetchKey();
+        return TestSealer.seal(key.publicKey(), key.keyId(), username, password);
+    }
+
+    // Cached per scenario, so preparing twice seals to the same key.
+    static CredentialKeyResponse fetchKey() throws Exception {
+        CredentialKeyResponse cached = (CredentialKeyResponse) ScenarioContext.get("credentialKey");
+        if (cached != null) return cached;
+
+        Request request = new Request.Builder()
+                .url(ScenarioContext.get("baseUrl") + "/otj-services/crypto/public-key")
+                .header("Authorization", "Bearer " + ScenarioContext.get("signupToken"))
+                .get()
+                .build();
+        try (Response response = HTTP.newCall(request).execute()) {
+            assertEquals(200, response.code(), "the credential key endpoint should answer 200");
+            CredentialKeyResponse key = MAPPER.readValue(response.body().string(),
+                    CredentialKeyResponse.class);
+            ScenarioContext.put("credentialKey", key);
+            return key;
+        }
+    }
+
+    private void postJson(String path, String json) throws Exception {
         String base = (String) ScenarioContext.get("baseUrl");
         Request request = new Request.Builder()
                 .url(base + path)
                 .header("Authorization", "Bearer " + ScenarioContext.get("signupToken"))
-                .post(RequestBody.create(MAPPER.writeValueAsString(body), JSON))
+                .post(RequestBody.create(json, JSON))
                 .build();
         try (Response response = HTTP.newCall(request).execute()) {
             ScenarioContext.put("lastResponseCode", response.code());

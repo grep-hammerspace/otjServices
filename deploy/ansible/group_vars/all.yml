@@ -16,6 +16,7 @@ app_services:
     params:
       MONGO_URI: /otj/prod/mongo-uri
       ANTHROPIC_API_KEY: /otj/prod/anthropic-api-key
+      CREDENTIAL_IDENTITY_SEED: /otj/prod/credential-identity-seed
   admin-api:
     port: 8946
     params:

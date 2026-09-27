@@ -48,6 +48,7 @@ job, can't contain a secret, because no file Ansible manages holds one.
 |---|---|
 | `/otj/prod/mongo-uri` | both |
 | `/otj/prod/anthropic-api-key` | hours-api |
+| `/otj/prod/credential-identity-seed` | hours-api. Pair of the app's pinned key: `credential-encryption-spec.md` |
 | `/otj/prod/admin-allowed-logins` (`String`) | admin-api |
 | `/otj/prod/tailscale-authkey` | the `tailscale` role, first run only |
 | `/otj/prod/grafana-cloud-logs-token` | Alloy, for logs **and** metrics despite the name: write-only (`logs:write`, `metrics:write`, this stack). A system unit, so its file is `/run/otj/alloy.env`, `0600 root` |
