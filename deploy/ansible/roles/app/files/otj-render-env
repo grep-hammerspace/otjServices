@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # otj-render-env <service>
 #
-# Runs as each app unit's ExecStartPre (ansible-migration-plan.md §7), and as Alloy's, which the
+# Runs as each app unit's ExecStartPre, and as Alloy's, which the
 # observability role installs as /usr/local/lib/otj/otj-render-env. Fetches that service's
 # secrets from Parameter Store with the instance role and writes them as KEY=value lines to a
 # tmpfs file only its user can read, which the container then loads with --env-file. A restart
@@ -16,7 +16,7 @@
 # Output goes to $XDG_RUNTIME_DIR/otj/<service>.env. A system unit has neither a user config
 # directory nor XDG_RUNTIME_DIR, so it sets OTJ_CONF_DIR and OTJ_RUN_DIR instead (Alloy: /etc/otj
 # and /run/otj).
-# SOURCE=fixture is the PR rehearsal's (plan §8.3): values come from ~/.config/otj/fixture/<basename
+# SOURCE=fixture is the PR rehearsal's: values come from ~/.config/otj/fixture/<basename
 # of the parameter name> instead of AWS.
 set -euo pipefail
 

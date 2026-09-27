@@ -1,7 +1,7 @@
 # What a converge WOULD change, changing nothing: `otj-converge <sha> --check`
-# (ansible-migration-plan.md §9.2). The job summary lists the tasks that would change; the full
+# The job summary lists the tasks that would change; the full
 # diff is in CloudWatch. Also the review step before the first converge (checklist step 5), and the
-# nightly drift check once that's on (plan §9.3).
+# nightly drift check once that's on.
 name: converge-check
 
 on:

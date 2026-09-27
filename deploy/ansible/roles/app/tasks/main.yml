@@ -110,7 +110,7 @@
 
 # ── The units ────────────────────────────────────────────────────────────────────────────────
 # A new SHA changes Image=, which changes the file, which restarts that unit. The same SHA
-# converged again changes nothing, so nothing restarts (plan §4.3).
+# converged again changes nothing, so nothing restarts.
 - name: Quadlets
   become: true
   become_user: "{{ otjapp_user }}"

@@ -1,4 +1,4 @@
-# One play, run on the box against itself by otj-converge (ansible-migration-plan.md §4.2), and on
+# One play, run on the box against itself by otj-converge, and on
 # a GitHub runner by the PR rehearsal (§8.3).
 #
 # Role order matters:
@@ -8,7 +8,6 @@
 #   - observability after edge and app, so the units whose logs it ships already exist.
 #   - verify last. It is skipped in --check mode, where nothing was restarted.
 #   - otj-converge is replaced after verify, so a broken script only ever affects the NEXT run
-#     (plan R4).
 - name: otjServices box
   hosts: localhost
   gather_facts: true

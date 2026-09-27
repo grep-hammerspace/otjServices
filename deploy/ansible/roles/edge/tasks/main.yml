@@ -1,12 +1,12 @@
-# The public listener on 443: HAProxy from Ubuntu main (plan D3). Config from deploy/haproxy/.
+# The public listener on 443: HAProxy from Ubuntu main. Config from deploy/haproxy/.
 - name: HAProxy
   ansible.builtin.apt:
     name: haproxy
     state: present
 
-# The origin certificate is installed BY HAND (ansible-deploy-checklist.md step 4) and never copied,
+# The origin certificate is installed BY HAND (README.md, "Building a new box") and never copied,
 # templated or read here: any task that did would print the private key under --diff, and that
-# output reaches CloudWatch and the Actions job (plan §7). `stat` sees only its metadata.
+# output reaches CloudWatch and the Actions job. `stat` sees only its metadata.
 - name: The origin certificate is in place
   ansible.builtin.stat:
     path: "{{ origin_cert_path }}"
@@ -21,8 +21,8 @@
       - edge_origin_cert.stat.mode == '0600'
     fail_msg: >-
       {{ origin_cert_path }} must exist as root 0600, cert then key in one file. Issue one in the
-      Cloudflare dashboard and install it over SSM: ansible-deploy-checklist.md step 4, and
-      ansible-migration-plan.md §7. Stopping here so HAProxy isn't left unable to start.
+      Cloudflare dashboard and install it over SSM: deploy/ansible/README.md, "Building a new
+      box". Stopping here so HAProxy isn't left unable to start.
     quiet: true
 
 - name: Cloudflare's ranges, the only sources whose CF-Connecting-IP is believed

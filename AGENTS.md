@@ -105,10 +105,10 @@ deploy/                   self-host path: podman-compose.yaml, bootstrap.sh, she
 scripts/                  (tailscale branch only) `otj` CLI for hand-testing the API
 ```
 
-Docs worth knowing about (root): `README.md` (the architecture diagrams),
-`ansible-migration-plan.md` (building the box with Ansible) and `ansible-deploy-checklist.md`
-(its order of operations), `notes.md` (idea backlog, including the multi-user rollout's unfinished
-test sweep). Finished plans and API specs are deleted once they land; git history has them.
+Docs worth knowing about: `README.md` (the architecture diagrams), `deploy/ansible/README.md`
+(the box: how it runs, secrets, the edge, building a new one, reading logs and metrics),
+`aws/README.md` (the stack), `notes.md` (idea backlog and open work). Finished plans and API specs
+are deleted once they land; git history has them.
 
 ## Two processes, one image
 
@@ -382,5 +382,3 @@ on the prod box):
   at unit start), and the origin certificate is the one thing installed by hand and only
   `stat`ed. Any new task that could print a secret needs `no_log: true`: the deploy output
   goes to CloudWatch and the Actions job.
-- `dependency-reduced-pom.xml` is a shade-plugin artifact, rewritten by every `mvn package`
-  and gitignored. Don't edit or commit it.

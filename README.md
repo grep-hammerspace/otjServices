@@ -9,10 +9,9 @@ posts the entries. Everything a contributor needs to know is in [`AGENTS.md`](AG
 
 The production box on AWS: HAProxy at the edge behind Cloudflare, the two apps on loopback in
 rootless Podman, the admin API reachable only over the tailnet, secrets from Parameter Store, and
-every change applied by Ansible. Grafana Alloy and Grafana Cloud are not live yet; they arrive with
-step 7 of [`ansible-deploy-checklist.md`](ansible-deploy-checklist.md). The reasoning, and a table
-of every hop and where its TLS ends, are in [`ansible-migration-plan.md`](ansible-migration-plan.md)
-§4. There are two diagrams, because all of it in one Mermaid chart doesn't lay out legibly.
+every change applied by Ansible, and Grafana Alloy shipping logs and host metrics to Grafana Cloud.
+How it runs, and how to operate it, is in [`deploy/ansible/README.md`](deploy/ansible/README.md).
+There are two diagrams, because all of it in one Mermaid chart doesn't lay out legibly.
 
 **Traffic and logs**
 

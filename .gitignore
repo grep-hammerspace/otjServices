@@ -43,8 +43,5 @@ build/
 .env
 .claude/*.tmp.*
 
-# Written by the shade plugin on every `mvn package`
-dependency-reduced-pom.xml
-
 # ansible-lint and ansible-playbook caches
 deploy/ansible/.ansible/

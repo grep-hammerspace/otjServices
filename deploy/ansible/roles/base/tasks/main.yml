@@ -35,7 +35,7 @@
 - name: AWS CLI v2
   ansible.builtin.import_tasks: awscli.yml
 
-# Two settings, both for the logs (plan §4.5). The cap, because nothing else stops the journal
+# Two settings, both for the logs. The cap, because nothing else stops the journal
 # filling the 20 GB disk. Persistent storage, so the local copy of the logs (the fallback when
 # Grafana isn't enough, and the only place full client IPs are kept) survives a reboot.
 - name: journald drop-in directory
