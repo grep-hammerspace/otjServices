@@ -9,9 +9,7 @@ import com.anthropic.models.messages.StopReason;
 import com.anthropic.models.messages.StructuredMessage;
 import com.anthropic.models.messages.StructuredMessageCreateParams;
 import com.github.grepHammerspace.db.model.ActivityLog;
-import com.github.grepHammerspace.llm.exception.LlmAuthException;
 import com.github.grepHammerspace.llm.exception.LlmException;
-import com.github.grepHammerspace.llm.exception.LlmJsonParseException;
 import com.github.grepHammerspace.llm.exception.LlmRateLimitException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -70,7 +68,7 @@ public class LlmServiceImpl implements LlmService {
                     "Got: " + e.getMessage() + ". " +
                     "Check that ANTHROPIC_API_KEY is set correctly and the key is active.";
             log.error(msg);
-            throw new LlmAuthException(msg, e);
+            throw new LlmException(msg, e);
         } catch (RateLimitException e) {
             String msg = "Anthropic API rate limit hit. " +
                     "The API rejected the request because too many requests were made in a short period. " +
@@ -105,7 +103,7 @@ public class LlmServiceImpl implements LlmService {
                             "Expected: one structured text block matching ParsedActivities. " +
                             "Got a response with " + message.content().size() + " block(s).";
                     log.error(msg);
-                    return new LlmJsonParseException(msg, null);
+                    return new LlmException(msg, null);
                 });
 
         return toResult(parsed, userId, learnerId);
@@ -118,17 +116,15 @@ public class LlmServiceImpl implements LlmService {
         List<ActivityLog> ok = new ArrayList<>();
         for (ParsedActivities.Entry entry : parsed.entries()) {
             log.debug("  Entry: {}", entry);
-            ok.add(new ActivityLog(userId, learnerId, entry.comments(), "", entry.date(),
-                    entry.startTime(), 0, entry.hours(), entry.minutes(), false, null));
+            ok.add(new ActivityLog(userId, learnerId, entry.comments(), entry.date(),
+                    entry.startTime(), entry.hours(), entry.minutes(), false, null));
         }
 
-        List<LlmParseError> errors = new ArrayList<>();
         for (ParsedActivities.ParseError error : parsed.errors()) {
             log.warn("LLM could not parse input line — {}: {}", error.error(), error.raw());
-            errors.add(new LlmParseError(error.error().name(), error.message(), error.raw()));
         }
 
-        return new LlmResult(ok, errors);
+        return new LlmResult(ok, parsed.errors());
     }
 
     private static String loadPrompt() {

@@ -37,12 +37,12 @@ public class PrepareSteps {
 
     @Given("the {string} driver will require a number match of {int}")
     public void driverWillRequireNumberMatch(String which, int number) {
-        driver(which).willReturn(PrepareResult.mfaNumberMatch(number));
+        driver(which).willReturn(PrepareResult.pushSent(number));
     }
 
     @Given("the {string} driver will complete the login without MFA")
     public void driverWillCompleteWithoutMfa(String which) {
-        driver(which).willReturn(PrepareResult.loginComplete());
+        driver(which).willReturn(PrepareResult.loggedIn());
     }
 
     @Given("the {string} driver will reject the credentials")

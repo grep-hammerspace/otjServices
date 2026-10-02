@@ -19,7 +19,8 @@ public class AdminMain {
         int port = port();
         ServerBootstrap.start(port, component.adminInviteResource(), component.adminIdentityFilter());
 
-        log.info("Admin API started at http://0.0.0.0:{} — expose it only via tailscale serve", port);
+        log.info("Admin API listening on :{} (published to loopback only); operators reach it through "
+                + "tailscale serve, :8443 on the AWS box", port);
         Thread.currentThread().join();
     }
 
