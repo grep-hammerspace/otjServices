@@ -10,7 +10,7 @@ import java.util.List;
 // The one place in the suite that keeps a password on purpose. ServerHooks' log guard hunts for
 // these sentinel values.
 public class FakeDriver implements Driver {
-    private PrepareResult nextResult = PrepareResult.mfaPushSent();
+    private PrepareResult nextResult;
     private IOException nextFailure = null;
 
     private volatile String preparedUsername;
@@ -19,6 +19,10 @@ public class FakeDriver implements Driver {
     private volatile String submittedUserId;
     private volatile String submittedLearnerId;
     private volatile int prepareCalls = 0;
+
+    public FakeDriver(PrepareResult defaultResult) {
+        this.nextResult = defaultResult;
+    }
 
     public void willReturn(PrepareResult result) {
         this.nextResult = result;

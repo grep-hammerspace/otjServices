@@ -1,5 +1,6 @@
 package com.github.grepHammerspace.llm;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.grepHammerspace.db.model.ActivityLog;
 import com.github.grepHammerspace.llm.ParsedActivities.Entry;
 import com.github.grepHammerspace.llm.ParsedActivities.ErrorCode;
@@ -47,7 +48,7 @@ class LlmServiceTest {
     }
 
     @Test
-    void errorMapsToLlmParseError() {
+    void errorsPassThroughUnchanged() {
         ParsedActivities parsed = of(
                 List.of(),
                 List.of(new ParseError(ErrorCode.missing_duration,
@@ -58,8 +59,8 @@ class LlmServiceTest {
         assertEquals(0, result.ok().size());
         assertEquals(1, result.errors().size());
 
-        LlmParseError err = result.errors().get(0);
-        assertEquals("missing_duration", err.error());
+        ParseError err = result.errors().get(0);
+        assertEquals(ErrorCode.missing_duration, err.error());
         assertEquals("No duration found", err.message());
         assertEquals("did some work today", err.raw());
     }
@@ -122,7 +123,7 @@ class LlmServiceTest {
     }
 
     @Test
-    void allErrorCodesMapToTheirWireStrings() {
+    void allErrorCodesSerialiseToTheirWireStrings() throws Exception {
         ParsedActivities parsed = of(
                 List.of(),
                 List.of(new ParseError(ErrorCode.missing_duration, "m", "a"),
@@ -132,9 +133,11 @@ class LlmServiceTest {
 
         LlmResult result = service.toResult(parsed, "u", "l");
 
-        assertEquals(List.of("missing_duration", "missing_description", "missing_start_time",
-                        "outside_working_hours"),
-                result.errors().stream().map(LlmParseError::error).toList());
+        String json = new ObjectMapper().writeValueAsString(result.errors());
+        for (String code : List.of("missing_duration", "missing_description", "missing_start_time",
+                "outside_working_hours")) {
+            assertTrue(json.contains("\"error\":\"" + code + "\""), json);
+        }
     }
 
     @Test
@@ -143,17 +146,5 @@ class LlmServiceTest {
 
         assertEquals(0, result.ok().size());
         assertEquals(0, result.errors().size());
-    }
-
-    @Test
-    void unitIdAndActivityTypeAreLeftAtDefaults() {
-        ParsedActivities parsed = of(
-                List.of(new Entry("2026/05/30", 1, 0, "09:00", "Work")),
-                List.of());
-
-        ActivityLog log = service.toResult(parsed, "u", "l").ok().get(0);
-
-        assertEquals("", log.unitId());
-        assertEquals(0, log.activityType());
     }
 }

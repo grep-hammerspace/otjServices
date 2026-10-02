@@ -48,8 +48,6 @@ Feature: Editing a pending activity
     Then the response status is 200
     And the edited activity in the database has fields:
       | learnerId    | L001         |
-      | unitId       |              |
-      | activityType | 0            |
       | posted       | false        |
     And the edited activity keeps the id and createdAt it was returned with
 

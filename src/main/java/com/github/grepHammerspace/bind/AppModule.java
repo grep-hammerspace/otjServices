@@ -5,7 +5,6 @@ import com.anthropic.client.okhttp.AnthropicOkHttpClient;
 import com.github.grepHammerspace.crypto.CredentialKeyRing;
 import com.github.grepHammerspace.llm.LlmService;
 import com.github.grepHammerspace.llm.LlmServiceImpl;
-import com.github.grepHammerspace.stateStore.UserStateStore;
 import com.github.grepHammerspace.web.AzureIdDriver;
 import com.github.grepHammerspace.web.AzurePush;
 import com.github.grepHammerspace.web.Driver;
@@ -22,12 +21,6 @@ import javax.inject.Singleton;
 @Module
 public class AppModule {
     private static final String DB_NAME = "otjdb";
-
-    @Provides
-    @Singleton
-    UserStateStore provideUserStateStore() {
-        return new UserStateStore();
-    }
 
     // Singleton: its keys live in memory, so a second ring couldn't open the first one's envelopes.
     @Provides

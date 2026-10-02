@@ -1,6 +1,7 @@
 package com.github.grepHammerspace.api;
 
 import com.github.grepHammerspace.api.dto.AccountResponse;
+import com.github.grepHammerspace.api.dto.ApiError;
 import com.github.grepHammerspace.api.dto.UpdateLearnerIdRequest;
 import com.github.grepHammerspace.auth.Authenticated;
 import com.github.grepHammerspace.db.UserRepository;
@@ -32,7 +33,9 @@ public class AccountResource {
     // either.
     private static final int MAX_LEARNER_ID_LENGTH = 64;
 
-    private static final String NO_ACCOUNT = "{\"error\": \"No account found.\"}";
+    private static final ApiError NO_ACCOUNT = new ApiError("No account found.");
+    private static final ApiError LEARNER_ID_BLANK = new ApiError("Learner ID cannot be blank.");
+    private static final ApiError LEARNER_ID_TOO_LONG = new ApiError("Learner ID is too long.");
 
     private final UserRepository userRepository;
 
@@ -63,11 +66,11 @@ public class AccountResource {
         String learnerId = body == null || body.learnerId() == null ? "" : body.learnerId().strip();
         if (learnerId.isEmpty()) {
             return Response.status(Response.Status.BAD_REQUEST)
-                    .entity("{\"error\": \"Learner ID cannot be blank.\"}").build();
+                    .entity(LEARNER_ID_BLANK).build();
         }
         if (learnerId.length() > MAX_LEARNER_ID_LENGTH) {
             return Response.status(Response.Status.BAD_REQUEST)
-                    .entity("{\"error\": \"Learner ID is too long.\"}").build();
+                    .entity(LEARNER_ID_TOO_LONG).build();
         }
 
         User updated = userRepository.updateLearnerId(userId, learnerId);

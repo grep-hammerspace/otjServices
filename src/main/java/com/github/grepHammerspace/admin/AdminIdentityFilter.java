@@ -1,5 +1,6 @@
 package com.github.grepHammerspace.admin;
 
+import com.github.grepHammerspace.api.dto.ApiError;
 import jakarta.annotation.Priority;
 import jakarta.ws.rs.Priorities;
 import jakarta.ws.rs.container.ContainerRequestContext;
@@ -29,7 +30,7 @@ public class AdminIdentityFilter implements ContainerRequestFilter {
     private static final Logger log = LoggerFactory.getLogger(AdminIdentityFilter.class);
 
     static final String IDENTITY_HEADER = "Tailscale-User-Login";
-    private static final String FORBIDDEN = "{\"error\": \"Not an admin identity\"}";
+    private static final ApiError FORBIDDEN = new ApiError("Not an admin identity");
 
     private final AdminAllowlist allowlist;
 

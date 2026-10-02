@@ -1,33 +1,22 @@
 package com.github.grepHammerspace.web;
 
-public record PrepareResult(Status status, int challengeNumber) {
+// challengeNumber is set only for a Microsoft number match.
+public record PrepareResult(Status status, Integer challengeNumber) {
     public enum Status {
-        LOGIN_COMPLETE,
-        MFA_PUSH_SENT,
-        MFA_NUMBER_MATCH
+        LOGGED_IN,
+        OTP_REQUIRED,
+        PUSH_SENT
     }
 
-    public static PrepareResult loginComplete() {
-        return new PrepareResult(Status.LOGIN_COMPLETE, -1);
+    public static PrepareResult loggedIn() {
+        return new PrepareResult(Status.LOGGED_IN, null);
     }
 
-    public static PrepareResult mfaPushSent() {
-        return new PrepareResult(Status.MFA_PUSH_SENT, -1);
+    public static PrepareResult otpRequired() {
+        return new PrepareResult(Status.OTP_REQUIRED, null);
     }
 
-    public static PrepareResult mfaNumberMatch(int number) {
-        return new PrepareResult(Status.MFA_NUMBER_MATCH, number);
-    }
-
-    public boolean requiresMfa() {
-        return status != Status.LOGIN_COMPLETE;
-    }
-
-    public String userMessage() {
-        return switch (status) {
-            case LOGIN_COMPLETE   -> "Logged in via existing SSO session — no MFA required.";
-            case MFA_PUSH_SENT    -> "Push notification sent to your Microsoft Authenticator app. Please approve it.";
-            case MFA_NUMBER_MATCH -> "Push notification sent. In Microsoft Authenticator, select: " + challengeNumber;
-        };
+    public static PrepareResult pushSent(Integer challengeNumber) {
+        return new PrepareResult(Status.PUSH_SENT, challengeNumber);
     }
 }

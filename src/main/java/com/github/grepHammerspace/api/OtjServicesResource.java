@@ -20,15 +20,13 @@ import com.github.grepHammerspace.db.ActivityLogRepository;
 import com.github.grepHammerspace.db.UserRepository;
 import com.github.grepHammerspace.db.model.ActivityLog;
 import com.github.grepHammerspace.db.model.User;
-import com.github.grepHammerspace.llm.exception.LlmException;
-import com.github.grepHammerspace.llm.exception.LlmRateLimitException;
 import com.github.grepHammerspace.llm.LlmResult;
 import com.github.grepHammerspace.llm.LlmService;
+import com.github.grepHammerspace.llm.exception.LlmRateLimitException;
 import com.github.grepHammerspace.quota.LlmQuotaService;
 import com.github.grepHammerspace.stateStore.LoginFlow;
 import com.github.grepHammerspace.stateStore.LoginSession;
-import com.github.grepHammerspace.stateStore.UserState;
-import com.github.grepHammerspace.stateStore.UserStateStore;
+import com.github.grepHammerspace.stateStore.LoginSessions;
 import com.github.grepHammerspace.web.AzurePush;
 import com.github.grepHammerspace.web.Driver;
 import com.github.grepHammerspace.web.Keycloak;
@@ -43,17 +41,19 @@ import org.bson.types.ObjectId;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import jakarta.validation.Valid;
 import javax.inject.Inject;
 import javax.inject.Provider;
 import java.io.IOException;
 import java.time.Instant;
 import java.time.LocalDate;
-import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
@@ -66,8 +66,11 @@ public class OtjServicesResource {
 
     private static final ObjectMapper CREDENTIALS_JSON = new ObjectMapper();
 
-    // A driver's own message is never forwarded: it carries login-chain URLs with the username in
-    // them.
+    // Its futures interrupt on cancel, so replacing or dropping a session stops the Microsoft poll.
+    private static final ExecutorService LOGIN_POLLS = Executors.newVirtualThreadPerTaskExecutor();
+
+    // Fixed messages only: a driver's or the LLM's own message can carry login-chain URLs with the
+    // username in them, or upstream detail.
     private static final ApiError LOGIN_FAILED = new ApiError(
             "Could not sign in to OneAdvanced. Check the username and password and try again.");
     private static final ApiError CREDENTIALS_MISSING = new ApiError(
@@ -86,11 +89,23 @@ public class OtjServicesResource {
             "This session expects a typed code — call POST /otj-services/submit-with-mfa instead.");
     private static final ApiError NO_LEARNER_ID = new ApiError(
             "No learner ID on this account. Set one via PATCH /auth/me before submitting.");
+    private static final ApiError NO_ACCOUNT = new ApiError(
+            "No account found for this session. Sign up again.");
+    private static final ApiError CONTENT_MISSING = new ApiError(
+            "The 'content' field is missing or empty.");
     private static final ApiError QUOTA_EXHAUSTED = new ApiError(
             "Daily limit of " + LlmQuotaService.DAILY_LIMIT
                     + " AI requests reached. It resets at midnight UTC.");
+    private static final ApiError LLM_BUSY = new ApiError(
+            "The AI service is busy. Wait a minute and try again.");
+    private static final ApiError LLM_FAILED = new ApiError(
+            "The AI could not process that. Try again, or send fewer lines at once.");
+    private static final ApiError BODY_MISSING = new ApiError("A JSON body is required.");
+    // One body for all three misses, so a caller can't confirm that an id it doesn't own exists.
+    private static final ApiError NO_SUCH_PENDING = new ApiError(
+            "No unposted activity log with that id for this user.");
 
-    private final UserStateStore userStateStore;
+    private final LoginSessions loginSessions;
     private final UserRepository userRepository;
     private final ActivityLogRepository activityLogRepository;
     private final LlmService llmService;
@@ -100,14 +115,14 @@ public class OtjServicesResource {
     private final Provider<Driver> azurePushDriverProvider;
 
     @Inject
-    public OtjServicesResource(UserStateStore userStateStore, UserRepository userRepository,
+    public OtjServicesResource(LoginSessions loginSessions, UserRepository userRepository,
                                ActivityLogRepository activityLogRepository,
                                LlmService llmService,
                                LlmQuotaService llmQuotaService,
                                CredentialKeyRing credentialKeyRing,
                                @Keycloak Provider<Driver> keycloakDriverProvider,
                                @AzurePush Provider<Driver> azurePushDriverProvider) {
-        this.userStateStore = userStateStore;
+        this.loginSessions = loginSessions;
         this.userRepository = userRepository;
         this.activityLogRepository = activityLogRepository;
         this.llmService = llmService;
@@ -120,34 +135,23 @@ public class OtjServicesResource {
     @POST
     @Path("/prepare-browser")
     public Response prepareBrowser(SealedEnvelope body, @Context SecurityContext sc) {
-        String userId = resolveUserState(sc);
-        log.info("Received request from user {} to do {}", userId, "prepare-browser");
-        return prepare(userId, body, LoginFlow.KEYCLOAK_TOTP);
+        return prepare(userId(sc), body, LoginFlow.KEYCLOAK_TOTP);
     }
 
     @POST
     @Path("/log-activities")
-    public Response logActivtiesWithLlmHelp(@Valid ActivityLogRequest body, @Context SecurityContext sc) {
-        String userId = resolveUserState(sc);
-        log.info("Received request from user {} to do {}", userId, "log-activities");
+    public Response logActivtiesWithLlmHelp(ActivityLogRequest body, @Context SecurityContext sc) {
+        String userId = userId(sc);
 
-        String content = body.content() == null ? "" : body.content().strip();
-        if (content.isBlank()) {
-            String msg = "The 'content' field is missing or empty. " +
-                    "Expected a non-empty string in the 'content' key of the JSON body. " +
-                    "Got: content=" + body.content() + ". " +
-                    "This field must contain the activity text to be logged.";
-            log.warn(msg);
-            return Response.status(Response.Status.BAD_REQUEST)
-                    .entity("{\"error\": \"" + msg + "\"}").build();
+        String content = body == null || body.content() == null ? "" : body.content().strip();
+        if (content.isEmpty()) {
+            return error(Response.Status.BAD_REQUEST, CONTENT_MISSING);
         }
 
         User user = userRepository.findByUserId(userId);
         if (user == null) {
-            String msg = "No account found for this session. Sign up again.";
             log.warn("User {} not found in repository", userId);
-            return Response.status(Response.Status.BAD_REQUEST)
-                    .entity("{\"error\": \"" + msg + "\"}").build();
+            return error(Response.Status.BAD_REQUEST, NO_ACCOUNT);
         }
 
         // After the 400s so a malformed request never spends quota; before the call so a refused
@@ -166,61 +170,43 @@ public class OtjServicesResource {
         try {
             result = llmService.parseActivities(content, LocalDate.now().toString(), userId, user.learnerId());
         } catch (LlmRateLimitException e) {
-            return Response.status(429)
-                    .entity("{\"error\": \"" + e.getMessage() + "\"}").build();
-        } catch (LlmException e) {
-            return Response.status(Response.Status.INTERNAL_SERVER_ERROR)
-                    .entity("{\"error\": \"" + e.getMessage() + "\"}").build();
-        } catch (Exception e) {
-            String msg = "Unexpected error calling LLM: " + e.getClass().getSimpleName() + ": " + e.getMessage();
-            log.error(msg, e);
-            return Response.status(Response.Status.INTERNAL_SERVER_ERROR)
-                    .entity("{\"error\": \"" + msg + "\"}").build();
+            // No Retry-After: its absence is how a client tells this 429 from the quota one.
+            return Response.status(429).entity(LLM_BUSY).build();
+        } catch (RuntimeException e) {
+            // LlmServiceImpl has already logged the detail.
+            log.warn("LLM call failed for user {} — {}", userId, e.getClass().getSimpleName());
+            return error(Response.Status.INTERNAL_SERVER_ERROR, LLM_FAILED);
         }
 
-        List<PendingActivity> saved = new ArrayList<>();
-        for (ActivityLog entry : result.ok()) {
-            saved.add(PendingActivity.from(activityLogRepository.saveActivityLog(entry)));
-        }
+        List<PendingActivity> saved = result.ok().stream()
+                .map(entry -> PendingActivity.from(activityLogRepository.saveActivityLog(entry)))
+                .toList();
 
         log.info("Request complete — {} row(s) written, {} error(s)", saved.size(), result.errors().size());
 
-        ActivityLogResponse responseBody = new ActivityLogResponse(
+        return Response.ok(new ActivityLogResponse(
                 "ok",
                 saved.size(),
                 saved,
                 result.errors().isEmpty() ? null : result.errors()
-        );
-
-        return Response.ok(responseBody).build();
+        )).build();
     }
 
     @GET
     @Path("/pending")
     public Response getPending(@Context SecurityContext sc) {
-        String userId = resolveUserState(sc);
-        log.info("Received request from user {} to do {}", userId, "pending");
-
-        List<ActivityLog> rows = activityLogRepository.findUnpostedNewestFirst(userId);
+        List<ActivityLog> rows = activityLogRepository.findUnpostedNewestFirst(userId(sc));
         return Response.ok(PendingResponse.from(rows)).build();
     }
 
     @DELETE
     @Path("/pending/{id}")
     public Response deletePending(@PathParam("id") String id, @Context SecurityContext sc) {
-        String userId = resolveUserState(sc);
-        log.info("Received request from user {} to do {} for {}", userId, "delete-pending", id);
-
         if (!ObjectId.isValid(id)) {
-            return Response.status(Response.Status.BAD_REQUEST)
-                    .entity("{\"error\": \"'" + id + "' is not a valid activity id.\"}").build();
+            return error(Response.Status.BAD_REQUEST, invalidId(id));
         }
-
-        if (!activityLogRepository.deleteUnpostedById(userId, new ObjectId(id))) {
-            // One body for all three misses, so a caller can't confirm that an id it doesn't own
-            // exists.
-            return Response.status(Response.Status.NOT_FOUND)
-                    .entity("{\"error\": \"No unposted activity log with that id for this user.\"}").build();
+        if (!activityLogRepository.deleteUnpostedById(userId(sc), new ObjectId(id))) {
+            return error(Response.Status.NOT_FOUND, NO_SUCH_PENDING);
         }
         return Response.noContent().build();
     }
@@ -229,30 +215,27 @@ public class OtjServicesResource {
     @Path("/pending/{id}")
     public Response updatePending(@PathParam("id") String id, UpdateActivityRequest body,
                                   @Context SecurityContext sc) {
-        String userId = resolveUserState(sc);
-        log.info("Received request from user {} to do {} for {}", userId, "update-pending", id);
+        String userId = userId(sc);
 
         if (!ObjectId.isValid(id)) {
-            return jsonError(Response.Status.BAD_REQUEST, "'" + id + "' is not a valid activity id.");
+            return error(Response.Status.BAD_REQUEST, invalidId(id));
         }
         if (body == null) {
-            return jsonError(Response.Status.BAD_REQUEST, "A JSON body is required.");
+            return error(Response.Status.BAD_REQUEST, BODY_MISSING);
         }
 
         UpdateActivityRequest edit = body.normalised();
         String problem = edit.validationError();
         if (problem != null) {
             log.warn("Rejected edit of {} for user {}: {}", id, userId, problem);
-            return jsonError(Response.Status.BAD_REQUEST, problem);
+            return error(Response.Status.BAD_REQUEST, new ApiError(problem));
         }
 
         ActivityLog updated = activityLogRepository.updateUnpostedById(userId, new ObjectId(id),
                 edit.activityDate(), edit.activityTime(), edit.hours(), edit.minutes(),
                 edit.activityImpact());
         if (updated == null) {
-            // Same body as deletePending's: the three misses must stay indistinguishable.
-            return jsonError(Response.Status.NOT_FOUND,
-                    "No unposted activity log with that id for this user.");
+            return error(Response.Status.NOT_FOUND, NO_SUCH_PENDING);
         }
         return Response.ok(PendingActivity.from(updated)).build();
     }
@@ -260,28 +243,27 @@ public class OtjServicesResource {
     @POST
     @Path("/submit-with-mfa")
     public Response useMfaCodeToSubmitUnSubmittedOTJs(SubmitWithMfaRequest body, @Context SecurityContext sc) {
-        String userId = resolveUserState(sc);
-        log.info("Received request from user {} to do {}", userId, "submit-with-mfa");
-        // The code itself stays out of this log: it is a live credential.
+        String userId = userId(sc);
+        // The code itself stays out of every log: it is a live credential.
 
         if (body == null || isBlank(body.mfaCode())) {
-            return Response.status(Response.Status.BAD_REQUEST).entity(MFA_CODE_MISSING).build();
+            return error(Response.Status.BAD_REQUEST, MFA_CODE_MISSING);
         }
 
-        LoginSession session = userStateStore.getStateForUser(userId).getSession();
+        LoginSession session = loginSessions.get(userId);
         if (session == null) {
-            return Response.status(Response.Status.CONFLICT).entity(NO_SESSION).build();
+            return error(Response.Status.CONFLICT, NO_SESSION);
         }
         // Without this, an Azure session would be accepted here and start a second Microsoft poll.
         if (session.flow() != LoginFlow.KEYCLOAK_TOTP) {
-            return Response.status(Response.Status.CONFLICT).entity(WRONG_FLOW_AZURE).build();
+            return error(Response.Status.CONFLICT, WRONG_FLOW_AZURE);
         }
 
         try {
             session.driver().completeMfa(body.mfaCode());
         } catch (IllegalStateException | IOException e) {
             log.warn("MFA completion failed for user {} — {}", userId, e.getClass().getSimpleName());
-            return Response.status(Response.Status.BAD_REQUEST).entity(MFA_REJECTED).build();
+            return error(Response.Status.BAD_REQUEST, MFA_REJECTED);
         }
 
         return submitPending(userId, session);
@@ -290,9 +272,7 @@ public class OtjServicesResource {
     @POST
     @Path("/azure-id/prepare")
     public Response azureIdPrepare(SealedEnvelope body, @Context SecurityContext sc) {
-        String userId = resolveUserState(sc);
-        log.info("Received request from user {} to do {}", userId, "azure-id/prepare");
-        return prepare(userId, body, LoginFlow.AZURE_PUSH);
+        return prepare(userId(sc), body, LoginFlow.AZURE_PUSH);
     }
 
     private Response prepare(String userId, SealedEnvelope envelope, LoginFlow flow) {
@@ -308,14 +288,14 @@ public class OtjServicesResource {
         }
 
         if (isBlank(body.username()) || isBlank(body.password())) {
-            return Response.status(Response.Status.BAD_REQUEST).entity(CREDENTIALS_MISSING).build();
+            return error(Response.Status.BAD_REQUEST, CREDENTIALS_MISSING);
         }
 
         // Before the login, so an Azure user isn't made to approve a push with nothing to post
         // under.
         User user = userRepository.findByUserId(userId);
         if (user == null || isBlank(user.learnerId())) {
-            return Response.status(Response.Status.CONFLICT).entity(NO_LEARNER_ID).build();
+            return error(Response.Status.CONFLICT, NO_LEARNER_ID);
         }
 
         Driver driver = flow == LoginFlow.KEYCLOAK_TOTP
@@ -328,70 +308,47 @@ public class OtjServicesResource {
         } catch (IOException | RuntimeException e) {
             // Type only. The message is the leak channel.
             log.warn("Prepare failed for user {} on {} — {}", userId, flow, e.getClass().getSimpleName());
-            return Response.status(Response.Status.UNAUTHORIZED).entity(LOGIN_FAILED).build();
+            return error(Response.Status.UNAUTHORIZED, LOGIN_FAILED);
         }
 
-        UserState userState = userStateStore.getStateForUser(userId);
+        // A push is approved on the phone, not here: a background poll finishes the login, and
+        // azure-id/complete waits on it.
+        Future<?> login = result.status() == PrepareResult.Status.PUSH_SENT
+                ? LOGIN_POLLS.submit(() -> { driver.completeMfa(""); return null; })
+                : CompletableFuture.completedFuture(null);
+        loginSessions.put(userId, new LoginSession(flow, driver, login, Instant.now()));
 
-        if (!result.requiresMfa()) {
-            userState.setSession(new LoginSession(
-                    flow, driver, CompletableFuture.completedFuture(null), Instant.now()));
-            return Response.ok(PrepareResponse.loginComplete(result.userMessage())).build();
-        }
-
-        if (flow == LoginFlow.KEYCLOAK_TOTP) {
-            userState.setSession(new LoginSession(
-                    flow, driver, CompletableFuture.completedFuture(null), Instant.now()));
-            return Response.ok(PrepareResponse.otpRequired(
-                    "Enter the current code from your authenticator app.")).build();
-        }
-
-        CompletableFuture<Void> loginFuture = new CompletableFuture<>();
-        Thread.ofVirtual().start(() -> {
-            try {
-                driver.completeMfa("");
-                loginFuture.complete(null);
-            } catch (Exception e) {
-                loginFuture.completeExceptionally(e);
-            }
-        });
-        userState.setSession(new LoginSession(flow, driver, loginFuture, Instant.now()));
-
-        Integer challengeNumber = result.status() == PrepareResult.Status.MFA_NUMBER_MATCH
-                ? result.challengeNumber()
-                : null;
-        return Response.ok(PrepareResponse.pushSent(result.userMessage(), challengeNumber)).build();
+        return Response.ok(PrepareResponse.from(result)).build();
     }
 
     @GET
     @Path("/azure-id/complete")
     public Response azureIdComplete(@Context SecurityContext sc) {
-        String userId = resolveUserState(sc);
-        log.info("Received request from user {} to do {}", userId, "azure-id/complete");
+        String userId = userId(sc);
 
-        LoginSession session = userStateStore.getStateForUser(userId).getSession();
+        LoginSession session = loginSessions.get(userId);
         if (session == null) {
-            return Response.status(Response.Status.CONFLICT).entity(NO_SESSION).build();
+            return error(Response.Status.CONFLICT, NO_SESSION);
         }
         if (session.flow() != LoginFlow.AZURE_PUSH) {
-            return Response.status(Response.Status.CONFLICT).entity(WRONG_FLOW_OTP).build();
+            return error(Response.Status.CONFLICT, WRONG_FLOW_OTP);
         }
 
         try {
             // Past the driver's 40 x 3 s poll budget, so the poller reports its own timeout.
-            session.future().get(125, TimeUnit.SECONDS);
+            session.login().get(125, TimeUnit.SECONDS);
         } catch (TimeoutException e) {
             return Response.status(408).entity(MFA_TIMED_OUT).build();
         } catch (ExecutionException e) {
             log.warn("Azure ID complete failed for user {} — {}", userId,
                     e.getCause() == null ? "unknown" : e.getCause().getClass().getSimpleName());
-            return Response.status(Response.Status.BAD_REQUEST).entity(LOGIN_FAILED).build();
+            return error(Response.Status.BAD_REQUEST, LOGIN_FAILED);
         } catch (CancellationException e) {
-            return Response.status(Response.Status.CONFLICT).entity(NO_SESSION).build();
+            return error(Response.Status.CONFLICT, NO_SESSION);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            return Response.status(Response.Status.INTERNAL_SERVER_ERROR)
-                    .entity(new ApiError("Interrupted while waiting for approval.")).build();
+            return error(Response.Status.INTERNAL_SERVER_ERROR,
+                    new ApiError("Interrupted while waiting for approval."));
         }
 
         return submitPending(userId, session);
@@ -402,7 +359,7 @@ public class OtjServicesResource {
     private Response submitPending(String userId, LoginSession session) {
         User user = userRepository.findByUserId(userId);
         if (user == null || isBlank(user.learnerId())) {
-            return Response.status(Response.Status.CONFLICT).entity(NO_LEARNER_ID).build();
+            return error(Response.Status.CONFLICT, NO_LEARNER_ID);
         }
 
         OtjSubmitResult result;
@@ -410,21 +367,18 @@ public class OtjServicesResource {
             result = session.driver().submitPendingOtjs(userId, user.learnerId());
         } finally {
             // Dropped once spent: it holds live OneAdvanced cookies.
-            userStateStore.getStateForUser(userId).clearSession();
+            loginSessions.remove(userId, session);
         }
 
-        if (result.nothingToPost()) {
-            return Response.ok(new SubmitResponse("nothing_to_post", 0, 0)).build();
+        int posted = result.posted().size();
+        int failed = result.failed().size();
+        if (failed == 0) {
+            return Response.ok(new SubmitResponse(posted == 0 ? "nothing_to_post" : "ok", posted, 0)).build();
         }
-        if (result.allPosted()) {
-            return Response.ok(new SubmitResponse("ok", result.posted().size(), 0)).build();
+        if (posted == 0) {
+            return Response.status(502).entity(new SubmitResponse("all_failed", 0, failed)).build();
         }
-        if (result.allFailed()) {
-            return Response.status(502)
-                    .entity(new SubmitResponse("all_failed", 0, result.failed().size())).build();
-        }
-        return Response.status(207)
-                .entity(new SubmitResponse("partial", result.posted().size(), result.failed().size())).build();
+        return Response.status(207).entity(new SubmitResponse("partial", posted, failed)).build();
     }
 
     // Unparseable plaintext reports as a malformed envelope: a distinct message would tell a prober
@@ -440,24 +394,23 @@ public class OtjServicesResource {
             throw new SealedCredentialsException(
                     SealedCredentialsException.Reason.MALFORMED_ENVELOPE);
         } finally {
-            java.util.Arrays.fill(plaintext, (byte) 0);
+            Arrays.fill(plaintext, (byte) 0);
         }
+    }
+
+    private static ApiError invalidId(String id) {
+        return new ApiError("'" + id + "' is not a valid activity id.");
+    }
+
+    private static Response error(Response.Status status, ApiError error) {
+        return Response.status(status).entity(error).build();
     }
 
     private static boolean isBlank(String value) {
         return value == null || value.isBlank();
     }
 
-    // Escaped: validation messages quote the caller's input back.
-    private static Response jsonError(Response.Status status, String message) {
-        String escaped = message.replace("\\", "\\\\").replace("\"", "\\\"")
-                .replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t");
-        return Response.status(status).entity("{\"error\": \"" + escaped + "\"}").build();
-    }
-
-    private String resolveUserState(SecurityContext sc) {
-        String userId = sc.getUserPrincipal().getName();
-        userStateStore.createUserState(userId);
-        return userId;
+    private static String userId(SecurityContext sc) {
+        return sc.getUserPrincipal().getName();
     }
 }

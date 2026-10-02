@@ -1,15 +1,16 @@
 package com.github.grepHammerspace.web;
 
 import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.grepHammerspace.db.ActivityLogRepository;
-import com.github.grepHammerspace.db.model.ActivityLog;
-import okhttp3.*;
+import okhttp3.Cookie;
+import okhttp3.FormBody;
+import okhttp3.HttpUrl;
+import okhttp3.Request;
+import okhttp3.RequestBody;
+import okhttp3.Response;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import javax.inject.Inject;
 import java.io.IOException;
@@ -17,7 +18,6 @@ import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.SecureRandom;
-import java.util.ArrayList;
 import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -28,11 +28,7 @@ import java.util.regex.Pattern;
 
 // QMUL's Azure AD federation. OneAdvanced discover only recognises se24.qmul.ac.uk emails, so the
 // PKCE cookies discover would set are generated here instead.
-public class AzureIdDriver implements Driver {
-    private static final Logger log = LoggerFactory.getLogger(AzureIdDriver.class);
-
-    private static final MediaType JSON_TYPE = MediaType.get("application/json; charset=UTF-8");
-
+public class AzureIdDriver extends OneAdvancedDriver {
     private static final String KEYCLOAK_AUTH_URL =
             "https://identity.oneadvanced.com/auth/realms/queen-mary-university-london"
             + "/protocol/openid-connect/auth";
@@ -59,19 +55,8 @@ public class AzureIdDriver implements Driver {
     private static final String PROCESS_AUTH_URL =
             "https://login.microsoftonline.com/common/SAS/ProcessAuth";
 
-    private static final String USER_AGENT =
-            "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:151.0) Gecko/20100101 Firefox/151.0";
-
     private static final int MAX_POLL_ATTEMPTS = 40; // 40 × 3 s = 2 min
     private static final long POLL_INTERVAL_MS = 3_000L;
-
-    private static final String ACTIVITY_LOG_API =
-            "https://education.oneadvanced.com/api/cloud-education/v1/learner/%s/activity-log";
-
-    private final InMemoryCookieJar cookieJar;
-    private final OkHttpClient httpClient;
-    private final ObjectMapper mapper;
-    private final ActivityLogRepository activityLogRepository;
 
     private String mfaCtx;
     private String mfaFlowToken;
@@ -84,45 +69,7 @@ public class AzureIdDriver implements Driver {
 
     @Inject
     public AzureIdDriver(ActivityLogRepository activityLogRepository) {
-        this.activityLogRepository = activityLogRepository;
-        this.mapper = new ObjectMapper();
-        this.cookieJar = new InMemoryCookieJar();
-        this.httpClient = new OkHttpClient.Builder()
-                .cookieJar(cookieJar)
-                .followRedirects(true)
-                .build();
-    }
-
-    // Names only: a cookie value here is a replayable credential.
-    List<String> cookieNamesFor(String domain) {
-        return cookieJar.allCookies().stream()
-                .filter(c -> c.domain().contains(domain))
-                .map(c -> "[" + c.domain() + "] " + c.name())
-                .toList();
-    }
-
-    private static final class InMemoryCookieJar implements CookieJar {
-        private final List<Cookie> store = new ArrayList<>();
-
-        @Override
-        public synchronized void saveFromResponse(HttpUrl url, List<Cookie> cookies) {
-            for (Cookie incoming : cookies) {
-                store.removeIf(existing ->
-                        existing.name().equals(incoming.name()) &&
-                        existing.domain().equals(incoming.domain()) &&
-                        existing.path().equals(incoming.path()));
-                store.add(incoming);
-            }
-        }
-
-        @Override
-        public synchronized List<Cookie> loadForRequest(HttpUrl url) {
-            return store.stream().filter(c -> c.matches(url)).toList();
-        }
-
-        synchronized List<Cookie> allCookies() {
-            return List.copyOf(store);
-        }
+        super(activityLogRepository);
     }
 
     private static String cfg(String html, String key) {
@@ -215,7 +162,7 @@ public class AzureIdDriver implements Driver {
             log.info("Existing Microsoft SSO session detected — completing login without MFA");
             completeSamlChain(body, currentUrl);
             loginComplete = true;
-            return PrepareResult.loginComplete();
+            return PrepareResult.loggedIn();
         }
 
         // The sign-in page is JS-rendered with no <form>: POST to $Config's urlPost directly.
@@ -270,7 +217,7 @@ public class AzureIdDriver implements Driver {
             log.info("Microsoft returned SAMLResponse directly — completing login without MFA");
             completeSamlChain(body, currentUrl);
             loginComplete = true;
-            return PrepareResult.loginComplete();
+            return PrepareResult.loggedIn();
         }
 
         String mfaPgid = cfg(body, "pgid");
@@ -324,9 +271,7 @@ public class AzureIdDriver implements Driver {
             if (updated != null && !updated.isEmpty()) mfaFlowToken = updated;
 
             int entropy = json.path("Entropy").asInt(-1);
-            result = entropy >= 0
-                    ? PrepareResult.mfaNumberMatch(entropy)
-                    : PrepareResult.mfaPushSent();
+            result = PrepareResult.pushSent(entropy >= 0 ? entropy : null);
         }
         log.info("Phone push sent — waiting for user to approve on Microsoft Authenticator");
         return result;
@@ -348,7 +293,7 @@ public class AzureIdDriver implements Driver {
         for (int poll = 1; poll <= MAX_POLL_ATTEMPTS; poll++) {
             lastPollStart = System.currentTimeMillis();
 
-            java.util.Map<String, Object> endMap = new java.util.LinkedHashMap<>();
+            Map<String, Object> endMap = new LinkedHashMap<>();
             endMap.put("AuthMethodId", "PhoneAppNotification");
             endMap.put("Method",       "EndAuth");
             endMap.put("ctx",          mfaCtx);
@@ -433,73 +378,6 @@ public class AzureIdDriver implements Driver {
         completeSamlChain(processHtml, processUrl);
     }
 
-    @Override
-    public OtjSubmitResult submitPendingOtjs(String userId, String learnerId) {
-        List<ActivityLog> pending = activityLogRepository.getUnpostedActivityLogsFor(userId);
-
-        if (pending.isEmpty()) {
-            log.info("No unposted OTJs found for user {}", userId);
-            return new OtjSubmitResult(List.of(), List.of());
-        }
-
-        String postUrl = String.format(ACTIVITY_LOG_API, learnerId.strip());
-        // The URL is not logged: the learner ID is a path segment, and it identifies the student.
-        log.info("Submitting {} pending OTJ(s) for user {}", pending.size(), userId);
-
-        List<String> posted = new ArrayList<>();
-        List<String> failed = new ArrayList<>();
-
-        for (ActivityLog activityLog : pending) {
-            try {
-                String json = mapper.writeValueAsString(buildPayload(activityLog, learnerId));
-
-                Request request = new Request.Builder()
-                        .url(postUrl)
-                        .header("User-Agent", USER_AGENT)
-                        .post(RequestBody.create(json, JSON_TYPE))
-                        .build();
-
-                try (Response response = httpClient.newCall(request).execute()) {
-                    if (response.isSuccessful()) {
-                        activityLogRepository.markAsPosted(activityLog);
-                        posted.add(activityLog.id());
-                        log.info("Posted activity log {} ({})", activityLog.id(), activityLog.activityDate());
-                    } else {
-                        failed.add(activityLog.id());
-                        // Status only. The WWW-Authenticate challenge and the response body are
-                        // upstream material that can carry session and account detail.
-                        log.warn("Failed to post activity log {} — HTTP {}", activityLog.id(), response.code());
-                    }
-                }
-            } catch (Exception e) {
-                failed.add(activityLog.id());
-                // Type, not message: an OkHttp failure names the URL it was calling, and that URL
-                // has the learner ID in its path.
-                log.error("Exception posting activity log {}: {}", activityLog.id(), e.getClass().getSimpleName());
-            }
-        }
-
-        log.info("Done — {}/{} posted, {} failed", posted.size(), pending.size(), failed.size());
-        return new OtjSubmitResult(posted, failed);
-    }
-
-    private Map<String, Object> buildPayload(ActivityLog activityLog, String learnerId) {
-        Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("learnerId", learnerId.strip());
-        payload.put("activityImpact", activityLog.activityImpact());
-        payload.put("unitId", "ef974f73-5d9d-447e-8652-379ba9535229");
-        payload.put("activityDate", activityLog.activityDate().replace("/", "-"));
-        payload.put("activityTime", "T" + activityLog.activityTime() + ":00");
-        // The API expects 16 here; activityType is never set by the parser.
-        payload.put("activityType", 16);
-        payload.put("hours", activityLog.hours());
-        payload.put("minutes", String.format("%02d", activityLog.minutes()));
-        // Shape, not content: the payload carries the learner ID and the user's own notes.
-        log.debug("Posting activity log {} — {}h{}m on {}", activityLog.id(),
-                activityLog.hours(), activityLog.minutes(), activityLog.activityDate());
-        return payload;
-    }
-
     private void completeSamlChain(String html, String baseUrl) throws IOException {
         Document doc = Jsoup.parse(html, baseUrl);
         Element samlForm = doc.selectFirst("form");
@@ -532,22 +410,5 @@ public class AzureIdDriver implements Driver {
         // Some endpoints return base64-encoded JSON.
         byte[] bytes = Base64.getMimeDecoder().decode(trimmed);
         return mapper.readTree(bytes);
-    }
-
-    private Response get(String url) throws IOException {
-        return httpClient.newCall(new Request.Builder()
-                .url(url)
-                .header("User-Agent", USER_AGENT)
-                .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
-                .build()).execute();
-    }
-
-    private Response post(String url, FormBody body) throws IOException {
-        return httpClient.newCall(new Request.Builder()
-                .url(url)
-                .header("User-Agent", USER_AGENT)
-                .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
-                .post(body)
-                .build()).execute();
     }
 }

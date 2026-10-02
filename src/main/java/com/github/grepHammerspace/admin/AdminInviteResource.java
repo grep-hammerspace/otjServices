@@ -2,6 +2,7 @@ package com.github.grepHammerspace.admin;
 
 import com.github.grepHammerspace.admin.dto.CreateInviteRequest;
 import com.github.grepHammerspace.admin.dto.InviteResponse;
+import com.github.grepHammerspace.api.dto.ApiError;
 import com.github.grepHammerspace.db.InviteCodeRepository;
 import com.github.grepHammerspace.db.model.InviteCode;
 import jakarta.validation.Valid;
@@ -31,6 +32,10 @@ import java.util.List;
 @Singleton
 public class AdminInviteResource {
     private static final Logger log = LoggerFactory.getLogger(AdminInviteResource.class);
+
+    private static final ApiError NO_SUCH_CODE = new ApiError("No such invite code");
+    private static final ApiError ALREADY_CLAIMED = new ApiError(
+            "That code has already been claimed and cannot be revoked");
 
     private final InviteCodeRepository inviteCodeRepository;
     private final InviteCodeGenerator generator;
@@ -76,9 +81,9 @@ public class AdminInviteResource {
         return switch (inviteCodeRepository.revoke(code.strip(), admin)) {
             case REVOKED -> Response.noContent().build();
             case NOT_FOUND -> Response.status(Response.Status.NOT_FOUND)
-                    .entity("{\"error\": \"No such invite code\"}").build();
+                    .entity(NO_SUCH_CODE).build();
             case ALREADY_USED -> Response.status(Response.Status.CONFLICT)
-                    .entity("{\"error\": \"That code has already been claimed and cannot be revoked\"}").build();
+                    .entity(ALREADY_CLAIMED).build();
         };
     }
 }
