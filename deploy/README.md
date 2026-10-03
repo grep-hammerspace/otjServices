@@ -1,76 +1,65 @@
-# Deployment (rootless Podman, no sudo)
+# Self-hosting the OTJ backend
 
-The stack (`mongo`, `mongo-express`, `app`, `admin`) is orchestrated with `podman-compose` instead of Docker. Rootless Podman needs no `sudo` for build/run/stop.
+Run your own copy of the API on a machine you own, reachable only from your tailnet, and point the
+OTJ mobile app at it. One person, one account, no sign-up.
 
-```
-cd deploy && nix-shell   # provides podman, podman-compose, curl, jq
-bash bootstrap.sh        # build + start (debug mode by default)
-bash bootstrap.sh --stop # stop the stack (Mongo data preserved)
-clean-mongo              # stop + wipe Mongo data volume
-```
+## What you need
 
-## The two app containers
+- **Nix**, for the shell with Podman in it: <https://nixos.org/download>.
+- **Tailscale** on this machine and on your phone, both on the same tailnet:
+  <https://tailscale.com/download>.
+- In the Tailscale admin console, under **DNS**, turn on **MagicDNS** and **HTTPS Certificates**.
+  `tailscale serve` needs both to give the API an `https://….ts.net` address.
+- An **Anthropic API key**, which turns your notes into activity rows.
+- Rootless Podman needs subordinate IDs for your user. NixOS sets them up. On other distributions,
+  check that `/etc/subuid` and `/etc/subgid` have a line for you, and install `uidmap`
+  (Debian/Ubuntu) if `newuidmap` is missing.
 
-`app` and `admin` run from the **same image** with different entrypoints, selected by `APP_ROLE` in `docker/start.sh`. The shaded jar carries both main classes, so one build produces both roles and they can never drift apart.
-
-| Container | Role | Port | Reached via |
-|---|---|---|---|
-| `app` | main REST API, backs the mobile client | `127.0.0.1:8945` | `tailscale serve --https=443` |
-| `admin` | mint/revoke signup invite codes | `127.0.0.1:8946` | `tailscale serve --https=8443` |
-
-Those `Reached via` ports are the **self-host** ones, wired by `bootstrap.sh`. The AWS box
-differs: the main API is public on 443 through HAProxy and its tailnet listener is on 8444 to
-leave 443 free. See `deploy/ansible/README.md`.
-
-The admin API is a separate server rather than a path on the main API because the main API sits
-behind a public domain. That has now happened — `otj-services.com`, proxied by Cloudflare and
-terminated by the box's edge proxy (HAProxy) — and
-the decision paid off exactly as expected: a path under the main API would have inherited that
-exposure the moment the proxy landed, whereas a distinct port on a loopback binding could not.
-
-## Identity: header instead of in-container Tailscale
-
-The app containers do not run `tailscaled` themselves (that used to require `NET_ADMIN`/`NET_RAW`/`/dev/net/tun`, which rootless Podman can't grant anyway). Instead:
-
-- Every published port is bound to `127.0.0.1` only — nothing but this host can reach any of them.
-- `tailscaled` runs on **this host** (already tailnet-joined).
-- One-time manual step on the host, outside the compose workflow:
-  ```
-  tailscale serve --bg --https=443  http://127.0.0.1:8945   # main API
-  tailscale serve --bg --https=8443 http://127.0.0.1:8946   # admin API
-  ```
-  `bootstrap.sh` does both automatically if the Tailscale operator has been delegated to your user (`sudo tailscale set --operator=$USER`, once).
-- `tailscale serve` injects a `Tailscale-User-Login` header naming the authenticated tailnet user. `AdminIdentityFilter` (`src/main/java/com/github/grepHammerspace/admin/AdminIdentityFilter.java`) requires it and checks it against the `ADMIN_ALLOWED_LOGINS` allowlist.
-- Before relying on this in production, verify against current Tailscale docs: the exact header name/casing `tailscale serve` injects, **that `serve` strips a client-supplied header of that name rather than passing it through**, that MagicDNS + HTTPS Certificates are enabled on the tailnet, and whether the `serve` config needs re-applying after a host reboot.
-
-**Trust invariant:** the header is only trustworthy because the app is reachable exclusively via loopback — if the port binding or network topology ever changes, re-examine this assumption. `AdminIdentityFilter` stops being a security control the moment `8946` is published wider than `127.0.0.1`.
-
-**Being on the tailnet is not the same as being an operator.** Phones and laptops join the tailnet to *use* the app. That is why the allowlist exists on top of the loopback binding, and why an unset `ADMIN_ALLOWED_LOGINS` denies everyone rather than allowing anyone.
-
-## Using the admin API
+## Run it
 
 ```bash
-# mint (over the tailnet — serve injects the identity header for you)
-curl -s -X POST https://<host>.<tailnet>.ts.net:8443/admin/invites \
-  -H 'Content-Type: application/json' \
-  -d '{"note":"sam’s phone","expiresInDays":7}'
-# -> 201 {"code":"OTJ-K7QP-3XMN", "status":"ACTIVE", ...}
-
-# list
-curl -s https://<host>.<tailnet>.ts.net:8443/admin/invites
-
-# revoke an unclaimed code
-curl -s -X DELETE https://<host>.<tailnet>.ts.net:8443/admin/invites/OTJ-K7QP-3XMN
-# -> 204; 404 if unknown, 409 if it has already been claimed
+sudo tailscale set --operator=$USER   # once, so serve doesn't need root
+cp .env.example .env                  # from the repo root, then fill it in
+cd deploy && nix-shell
+./bootstrap.sh --prod
 ```
 
-Locally, where there is no `tailscale serve` in front, set the header yourself:
+`--prod` detaches, so the stack keeps running after you close the terminal, and prints the log
+file to follow. When it's done, it prints your server's address:
 
-```bash
-curl -s -X POST http://localhost:8946/admin/invites \
-  -H 'Content-Type: application/json' \
-  -H 'Tailscale-User-Login: you@example.com' \
-  -d '{"note":"dev"}'
+```
+https://<machine>.<tailnet>.ts.net
 ```
 
-That is not a bypass — reaching `127.0.0.1:8946` at all already means you are on the host, which is the same thing the trust model assumes in production.
+On the app's sign-up screen, tap **Hosting the backend yourself?**, enter that address, and you
+land on Log Activities. Set your learner ID on the Submit tab before your first submission.
+
+| Command | |
+|---|---|
+| `./bootstrap.sh` | the same, in the foreground |
+| `./bootstrap.sh --stop` | stop the stack, keeping the data |
+| `clean-mongo` | stop it and wipe the Mongo data volume |
+| `podman-compose -f podman-compose.yaml logs -f app` | the API's log |
+
+## How it fits together
+
+```
+phone ──tailnet (WireGuard + TLS)──▶ tailscale serve :443 ──▶ 127.0.0.1:8945  app
+                                                                     │
+                                                              127.0.0.1:27017 mongo
+```
+
+Both containers publish on loopback only, so `tailscale serve` is the only way in from outside the
+machine. TLS ends at `tailscale serve` on this machine, which is why the app sends your OneAdvanced
+password in the request body without the extra sealing the hosted service uses: nothing between
+the phone and your machine can read it. It is used for the login and then discarded, never stored.
+
+## Trust model
+
+**The API has no authentication.** Anyone who can reach it is treated as you. That is safe because
+of the loopback binding above plus your tailnet, and only while both hold:
+
+- Don't publish `8945` on anything but `127.0.0.1`.
+- Anyone on your tailnet can reach it. If you share the tailnet with other people, restrict this
+  machine's port 443 to your own devices with a Tailscale ACL.
+- Don't put it behind `tailscale funnel` or any other public proxy.
