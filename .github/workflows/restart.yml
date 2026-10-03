@@ -1,0 +1,37 @@
+# To rotate a secret: put-parameter --overwrite, then restart, which renders the env file again.
+name: restart
+
+on:
+  workflow_dispatch:
+    inputs:
+      unit:
+        description: Which unit
+        required: true
+        type: choice
+        options: [hours-api, admin-api, haproxy, alloy]
+
+permissions:
+  id-token: write
+  contents: read
+
+# Shared by every workflow that touches the box, so only one does at a time.
+concurrency:
+  group: box
+  cancel-in-progress: false
+
+jobs:
+  restart:
+    runs-on: ubuntu-24.04
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: eu-west-2
+
+      - name: Restart it
+        run: .github/scripts/box-run.sh restart "$UNIT"
+        env:
+          UNIT: ${{ inputs.unit }}

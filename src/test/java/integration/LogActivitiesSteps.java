@@ -14,15 +14,18 @@ public class LogActivitiesSteps {
     private static final MediaType JSON = MediaType.get("application/json");
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
+    // Upserted: the suite's Mongo isn't wiped between scenarios.
     @Given("a registered user with learnerId {string}")
-    public void registerUser(String learnerId) throws Exception {
-        String base = (String) ScenarioContext.get("baseUrl");
-        String body = "{\"username\":\"testuser\",\"password\":\"testpass\",\"learnerId\":\"" + learnerId + "\"}";
-        Request req = new Request.Builder()
-                .url(base + "/otj-services/register")
-                .post(RequestBody.create(body, JSON))
-                .build();
-        HTTP.newCall(req).execute().close();
+    public void registerUser(String learnerId) {
+        MongoDatabase db = (MongoDatabase) ScenarioContext.get("db");
+        db.getCollection("users").replaceOne(
+                new org.bson.Document("userId", ServerHooks.TEST_USER_ID),
+                new org.bson.Document("userId", ServerHooks.TEST_USER_ID)
+                        .append("appUsername", "testuser")
+                        .append("appPasswordHash", "$2a$12$fakehashfortesting")
+                        .append("learnerId", learnerId)
+                        .append("createdAt", new java.util.Date()),
+                new com.mongodb.client.model.ReplaceOptions().upsert(true));
     }
 
     @Given("I have already logged {string}")
@@ -34,8 +37,8 @@ public class LogActivitiesSteps {
     public void postLogActivitiesTo(String path, String content) throws Exception {
         String base = (String) ScenarioContext.get("baseUrl");
         String body = MAPPER.writeValueAsString(java.util.Map.of("content", content));
-        Request req = new Request.Builder()
-                .url(base + path)
+        Request req = HttpSteps.authenticated(new Request.Builder()
+                .url(base + path))
                 .post(RequestBody.create(body, JSON))
                 .build();
         Response response = HTTP.newCall(req).execute();
@@ -44,7 +47,7 @@ public class LogActivitiesSteps {
         ScenarioContext.put("lastResponseBody", responseBody);
     }
 
-    @And("there is {int} activity log in the database for user {string}")
+    @And("there is/are {int} activity log(s) in the database for user {string}")
     public void checkActivityLogCount(int expectedCount, String userId) {
         MongoDatabase db = (MongoDatabase) ScenarioContext.get("db");
         long count = db.getCollection("activitylogs")
@@ -56,8 +59,8 @@ public class LogActivitiesSteps {
     private void postLogActivities(String content) throws Exception {
         String base = (String) ScenarioContext.get("baseUrl");
         String body = MAPPER.writeValueAsString(java.util.Map.of("content", content));
-        Request req = new Request.Builder()
-                .url(base + "/otj-services/log-activities")
+        Request req = HttpSteps.authenticated(new Request.Builder()
+                .url(base + "/otj-services/log-activities"))
                 .post(RequestBody.create(body, JSON))
                 .build();
         Response response = HTTP.newCall(req).execute();

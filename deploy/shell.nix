@@ -1,7 +1,6 @@
 { pkgs ? import (builtins.fetchTarball {
     url = "https://channels.nixos.org/nixos-25.05/nixexprs.tar.xz";
   }) {} }:
-
 pkgs.mkShell {
   buildInputs = with pkgs; [
     podman-compose

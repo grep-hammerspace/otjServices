@@ -1,0 +1,37 @@
+# Rootful: it reads both the system journal and otjapp's. Hence read-only mounts, no capabilities,
+# and no port.
+[Unit]
+Description=Grafana Alloy: the box's logs and host metrics to Grafana Cloud
+After=network-online.target
+Wants=network-online.target
+
+[Container]
+Image={{ alloy_image }}
+ContainerName=alloy
+Network=host
+Exec=run /etc/alloy/config.alloy --storage.path=/var/lib/alloy/data --server.http.listen-addr=127.0.0.1:12345 --disable-reporting
+Volume=/etc/alloy:/etc/alloy:ro
+# Over the whole of /var/lib/alloy: the image's copy is 0770 uid 473, which root without
+# capabilities can't traverse.
+Volume=/var/lib/alloy:/var/lib/alloy
+Volume=/var/log/journal:/var/log/journal:ro
+Volume=/etc/machine-id:/etc/machine-id:ro
+# Never the host's /: that would put root-readable files like the origin key within reach.
+Volume=/proc:/host/proc:ro
+Volume=/sys:/host/sys:ro
+Volume=/run/udev/data:/run/udev/data:ro
+EnvironmentFile=/run/otj/alloy.env
+ReadOnly=true
+DropCapability=all
+# No NoNewPrivileges: on Ubuntu 24.04 it leaves the container under the crun AppArmor profile, which
+# denies every socket.
+
+[Service]
+Environment=HOME=/root OTJ_CONF_DIR=/etc/otj OTJ_RUN_DIR=/run/otj
+ExecStartPre=/usr/local/lib/otj/otj-render-env alloy
+Restart=always
+RestartSec=5
+TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target

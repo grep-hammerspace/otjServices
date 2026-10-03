@@ -1,9 +1,12 @@
 package com.github.grepHammerspace.db.model;
 
-/** Represents a registered user keyed by their Tailscale identity ({@code userId}). */
+import java.time.Instant;
+
+// This app's own login. OneAdvanced credentials are never stored.
 public record User(
         String userId,
-        String username,
-        String password,
-        String learnerId
+        String appUsername,
+        String appPasswordHash,
+        String learnerId,
+        Instant createdAt
 ) {}

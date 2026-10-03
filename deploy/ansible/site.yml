@@ -1,0 +1,31 @@
+# Role order: tailscale before edge, so a serve mapping on 443 is caught before HAProxy fails to
+# bind. otj-converge is replaced last, so a broken one only affects the next run.
+- name: otjServices box
+  hosts: localhost
+  gather_facts: true
+  become: true
+
+  pre_tasks:
+    - name: An image tag is given, and it is a full commit SHA or the CI placeholder
+      ansible.builtin.assert:
+        that:
+          - image_tag is defined
+          - image_tag is match('^([0-9a-f]{40}|ci)$')
+        fail_msg: "Run with -e image_tag=<40-char commit SHA>; otj-converge does this for you."
+        quiet: true
+
+  roles:
+    - base
+    - otjapp
+    - role: tailscale
+      tags: [tailnet]
+    - edge
+    - app
+    - observability
+    - verify
+
+  post_tasks:
+    - name: Install otj-converge last
+      ansible.builtin.include_role:
+        name: base
+        tasks_from: converge_script

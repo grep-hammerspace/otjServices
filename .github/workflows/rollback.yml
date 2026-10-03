@@ -1,0 +1,37 @@
+# Uses the otj-converge from that release's image, so a broken copy on the box can't block the way
+# back.
+name: rollback
+
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: Full commit SHA to roll back to (ECR keeps the last 20)
+        required: true
+        type: string
+
+permissions:
+  id-token: write
+  contents: read
+
+# Shared by every workflow that touches the box, so only one does at a time.
+concurrency:
+  group: box
+  cancel-in-progress: false
+
+jobs:
+  rollback:
+    runs-on: ubuntu-24.04
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: eu-west-2
+
+      - name: otj-converge <sha>, with that release's script
+        run: .github/scripts/box-run.sh rollback "$SHA"
+        env:
+          SHA: ${{ inputs.sha }}

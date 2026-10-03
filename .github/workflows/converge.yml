@@ -1,0 +1,36 @@
+name: converge
+
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: Full 40-character commit SHA whose image is in ECR
+        required: true
+        type: string
+
+permissions:
+  id-token: write
+  contents: read
+
+# Shared by every workflow that touches the box, so only one does at a time.
+concurrency:
+  group: box
+  cancel-in-progress: false
+
+jobs:
+  converge:
+    runs-on: ubuntu-24.04
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: eu-west-2
+
+      # Through the environment, never interpolated into the script.
+      - name: otj-converge on the box
+        run: .github/scripts/box-run.sh converge "$SHA"
+        env:
+          SHA: ${{ inputs.sha }}

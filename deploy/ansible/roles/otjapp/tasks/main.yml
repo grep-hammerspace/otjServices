@@ -1,0 +1,32 @@
+- name: The otjapp user
+  ansible.builtin.user:
+    name: "{{ otjapp_user }}"
+    home: "{{ otjapp_home }}"
+    shell: /bin/bash
+    create_home: true
+  register: otjapp_account
+
+- name: Rootless Podman has subordinate IDs to map
+  ansible.builtin.command: grep -q "^{{ otjapp_user }}:" /etc/subuid /etc/subgid
+  changed_when: false
+  when: not ansible_check_mode # on a blank box the user doesn't exist yet in --check
+
+# Linger keeps otjapp's systemd manager running without a login.
+- name: Linger for otjapp
+  ansible.builtin.command: loginctl enable-linger {{ otjapp_user }}
+  args:
+    creates: /var/lib/systemd/linger/{{ otjapp_user }}
+
+# `become_user` alone can't reach the user's service manager: every `systemctl --user` needs these.
+- name: Where otjapp's user manager lives
+  ansible.builtin.set_fact:
+    otjapp_uid: "{{ otjapp_account.uid | default('UNKNOWN') }}"
+    otjapp_env:
+      XDG_RUNTIME_DIR: "/run/user/{{ otjapp_account.uid | default('UNKNOWN') }}"
+      DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/{{ otjapp_account.uid | default('UNKNOWN') }}/bus"
+
+- name: otjapp's user manager is up
+  ansible.builtin.wait_for:
+    path: "/run/user/{{ otjapp_uid }}/bus"
+    timeout: 30
+  when: not ansible_check_mode

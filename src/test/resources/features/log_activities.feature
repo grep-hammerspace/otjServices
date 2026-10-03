@@ -1,7 +1,11 @@
 Feature: Log activities via LLM
 
+  # The quota reset is required: llm_quota.feature leaves the counter at its limit, and Mongo isn't
+  # reset between scenarios.
   Background:
     Given a registered user with learnerId "L001"
+    And there are no activity logs for the test user
+    And the test user has used no LLM calls today
 
   Scenario: Blank content returns 400
     When I POST "/otj-services/log-activities" with content ""
@@ -15,14 +19,15 @@ Feature: Log activities via LLM
     And the response body contains "\"rowsAdded\":1"
     And there is 1 activity log in the database for user "test-user-id"
 
-  Scenario: Identical content returns no new content
+  Scenario: Logged rows come back addressable and without the server-minted userId
+    When I POST "/otj-services/log-activities" with content "Worked 2 hours on assignment from 10:00"
+    Then the response status is 200
+    And the response body does not contain "tailscaleUserId"
+    And the response body does not contain "learnerId"
+
+  Scenario: Resubmitting identical content logs it again
     Given I have already logged "Worked 2 hours on assignment from 10:00"
     When I POST "/otj-services/log-activities" with content "Worked 2 hours on assignment from 10:00"
     Then the response status is 200
-    And the response body contains "no new content"
-
-  Scenario: Appended content processes only the new line
-    Given I have already logged "Worked 2 hours on assignment from 10:00"
-    When I POST "/otj-services/log-activities" with content "Worked 2 hours on assignment from 10:00\nDid reading for 1 hour"
-    Then the response status is 200
     And the response body contains "\"rowsAdded\":1"
+    And there are 2 activity logs in the database for user "test-user-id"

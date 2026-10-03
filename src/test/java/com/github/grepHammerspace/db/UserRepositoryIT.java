@@ -1,6 +1,5 @@
 package com.github.grepHammerspace.db;
 
-import com.github.grepHammerspace.crypto.PasswordCipher;
 import com.github.grepHammerspace.db.model.User;
 import com.mongodb.client.MongoClients;
 import com.mongodb.client.MongoDatabase;
@@ -9,45 +8,39 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.testcontainers.containers.MongoDBContainer;
 
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
+
 import static org.junit.jupiter.api.Assertions.*;
 
 class UserRepositoryIT {
-
     static final MongoDBContainer MONGO = new MongoDBContainer("mongo:8");
     static UserRepository repository;
     static MongoDatabase database;
+
+    static final Instant CREATED = Instant.parse("2026-01-01T00:00:00Z");
 
     @BeforeAll
     static void startMongo() {
         MONGO.start();
         database = MongoClients.create(MONGO.getConnectionString()).getDatabase("testdb");
-        PasswordCipher cipher = new PasswordCipher(testutil.TestKeys.PASSWORD_ENCRYPTION_KEY);
-        repository = new UserRepository(database, cipher);
+        repository = new UserRepository(database);
+    }
+
+    private static User user(String userId, String appUsername) {
+        return new User(userId, appUsername, "$2a$12$fakehashfortesting", "L-" + userId, CREATED);
     }
 
     @Test
-    void save_then_findByUserId_returnsUser() {
-        repository.save(new User("uid-1", "alice", "secret", "L001"));
+    void insert_then_findByUserId_returnsUser() {
+        repository.insert(user("uid-1", "alice"));
 
         User found = repository.findByUserId("uid-1");
         assertNotNull(found);
-        assertEquals("alice", found.username());
-        assertEquals("secret", found.password());
-        assertEquals("L001", found.learnerId());
-    }
-
-    @Test
-    void save_twice_upsertsNotDuplicates() {
-        repository.save(new User("uid-2", "bob", "pass1", "L002"));
-        repository.save(new User("uid-2", "bob", "pass2", "L003"));
-
-        User found = repository.findByUserId("uid-2");
-        assertNotNull(found);
-        assertEquals("pass2", found.password());
-        assertEquals("L003", found.learnerId());
-
-        long count = database.getCollection("users").countDocuments(Filters.eq("userId", "uid-2"));
-        assertEquals(1, count, "upsert should not create a duplicate document");
+        assertEquals("alice", found.appUsername());
+        assertEquals("$2a$12$fakehashfortesting", found.appPasswordHash());
+        assertEquals("L-uid-1", found.learnerId());
+        assertEquals(CREATED, found.createdAt().truncatedTo(ChronoUnit.SECONDS));
     }
 
     @Test
@@ -56,26 +49,72 @@ class UserRepositoryIT {
     }
 
     @Test
-    void saveLastContent_then_getLastContent_returnsValue() {
-        repository.save(new User("uid-3", "carol", "p", "L003"));
-        repository.saveLastContent("uid-3", "my notes");
+    void findByAppUsername_returnsUser() {
+        repository.insert(user("uid-login", "login-name"));
 
-        assertEquals("my notes", repository.getLastContent("uid-3"));
+        User found = repository.findByAppUsername("login-name");
+        assertNotNull(found);
+        assertEquals("uid-login", found.userId());
     }
 
     @Test
-    void clearLastContent_removesField() {
-        repository.save(new User("uid-4", "dave", "p", "L004"));
-        repository.saveLastContent("uid-4", "some content");
-        repository.clearLastContent("uid-4");
-
-        assertNull(repository.getLastContent("uid-4"), "getLastContent should return null after clear");
+    void findByAppUsername_unknown_returnsNull() {
+        assertNull(repository.findByAppUsername("nobody"));
     }
 
     @Test
-    void getLastContent_withNoContentSaved_returnsNull() {
-        repository.save(new User("uid-5", "eve", "p", "L005"));
+    void insert_newUser_returnsTrue() {
+        assertTrue(repository.insert(user("uid-new", "fresh-name")));
+        assertNotNull(repository.findByUserId("uid-new"));
+    }
 
-        assertNull(repository.getLastContent("uid-5"));
+    @Test
+    void insert_duplicateAppUsername_failsClosed() {
+        assertTrue(repository.insert(user("uid-first", "taken-name")));
+        assertFalse(repository.insert(user("uid-second", "taken-name")),
+                "second insert with the same appUsername must be rejected");
+
+        assertNull(repository.findByUserId("uid-second"), "rejected insert must not persist anything");
+    }
+
+    @Test
+    void updateLearnerId_returnsUpdatedUser() {
+        repository.insert(user("uid-learner", "learner-name"));
+
+        User updated = repository.updateLearnerId("uid-learner", "L-CORRECTED");
+        assertNotNull(updated);
+        assertEquals("L-CORRECTED", updated.learnerId());
+        assertEquals("L-CORRECTED", repository.findByUserId("uid-learner").learnerId());
+    }
+
+    @Test
+    void updateLearnerId_leavesEveryOtherFieldAlone() {
+        repository.insert(new User("uid-untouched", "untouched-name", "$2a$12$fakehashfortesting",
+                "L-OLD", CREATED));
+
+        repository.updateLearnerId("uid-untouched", "L-NEW");
+
+        User found = repository.findByUserId("uid-untouched");
+        assertEquals("untouched-name", found.appUsername());
+        assertEquals("$2a$12$fakehashfortesting", found.appPasswordHash());
+        assertEquals(CREATED, found.createdAt().truncatedTo(ChronoUnit.SECONDS));
+    }
+
+    @Test
+    void updateLearnerId_unknownUser_returnsNullAndInsertsNothing() {
+        assertNull(repository.updateLearnerId("uid-does-not-exist", "L-GHOST"));
+
+        assertEquals(0, database.getCollection("users")
+                .countDocuments(Filters.eq("userId", "uid-does-not-exist")));
+    }
+
+    @Test
+    void storedDocument_containsNoRecoverablePassword() {
+        repository.insert(user("uid-6", "frank"));
+
+        org.bson.Document doc = database.getCollection("users").find(Filters.eq("userId", "uid-6")).first();
+        assertNotNull(doc);
+        assertNull(doc.get("password"), "legacy recoverable password field must not exist");
+        assertTrue(doc.getString("appPasswordHash").startsWith("$2a$"), "only a bcrypt hash may be stored");
     }
 }

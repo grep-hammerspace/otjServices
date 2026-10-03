@@ -1,0 +1,113 @@
+name: Deploy
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "25"
+          cache: maven
+
+      - run: mvn -B test
+
+  # On the merge commit itself: it can differ from the PR head that passed.
+  box:
+    if: github.event_name == 'push'
+    uses: ./.github/workflows/box.yml
+
+  image:
+    needs: [build-and-test, box]
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: eu-west-2
+
+      - uses: aws-actions/amazon-ecr-login@v2
+        id: ecr-login
+
+      - name: Check if image already pushed
+        id: image-check
+        run: |
+          if aws ecr describe-images --repository-name otj-hours-api \
+               --image-ids imageTag=${{ github.sha }} --region eu-west-2 >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build and push image
+        if: steps.image-check.outputs.exists == 'false'
+        env:
+          ECR_REPO: ${{ steps.ecr-login.outputs.registry }}/otj-hours-api
+        run: |
+          docker build -f docker/otjService.Dockerfile -t "$ECR_REPO:${{ github.sha }}" .
+          docker push "$ECR_REPO:${{ github.sha }}"
+
+  deploy:
+    needs: image
+    runs-on: ubuntu-24.04
+    environment: production
+    permissions:
+      id-token: write
+      contents: read
+    # Shared by every workflow that touches the box, so only one does at a time.
+    concurrency:
+      group: box
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+
+      # Only master's head deploys: an older run finishing second would roll the box back.
+      - name: Still master's newest commit?
+        id: head
+        run: |
+          head=$(git ls-remote origin refs/heads/master | cut -f1)
+          if [ "$head" = "$GITHUB_SHA" ]; then
+            echo "deploy=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "deploy=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::master has moved on to $head; that run deploys instead of this one."
+          fi
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        if: steps.head.outputs.deploy == 'true'
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: eu-west-2
+
+      - uses: actions/setup-node@v4
+        if: steps.head.outputs.deploy == 'true'
+        with:
+          node-version: "22"
+
+      - name: cdk deploy
+        if: steps.head.outputs.deploy == 'true'
+        working-directory: aws
+        run: |
+          npm ci
+          npx cdk deploy OtjServicesStack --require-approval never
+
+      - name: otj-converge on the box
+        if: steps.head.outputs.deploy == 'true'
+        run: .github/scripts/box-run.sh converge "$GITHUB_SHA"
