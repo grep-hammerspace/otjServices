@@ -106,7 +106,6 @@ deploy/                   self-host path: podman-compose.yaml, bootstrap.sh, she
                           the shared-IP problem, Cloudflare ranges, reading logs
   haproxy/                haproxy.cfg (the public edge) and cloudflare-ips.lst
   bin/otj-converge        the one script on the box: pull a SHA's image, run its playbook
-scripts/                  (tailscale branch only) `otj` CLI for hand-testing the API
 ```
 
 Docs worth knowing about: `README.md` (the architecture diagrams), `deploy/ansible/README.md`
@@ -263,10 +262,14 @@ Two **protected** branches, both deployment targets:
   deploy) and terminated the hand-provisioned box; it was rebuilt with Ansible and back
   on 2026-09-27. The AMI is now pinned and a stack policy refuses instance replacement
   (`aws/README.md`). Don't unpin it or loosen the policy as a side effect of other work.
-- **`tailscale`** — reserved for **self-hosters**. Tracks `master` closely (today it is
-  `master` plus `scripts/otj`, the hand-testing CLI). The intent recorded in
-  `notes.md` is that this branch stays runnable purely via `deploy/bootstrap.sh` +
-  `podman-compose` on your own box, without the AWS infra path.
+- **`tailscale`** — the **self-hosted, single-user** copy, run with `deploy/bootstrap.sh` +
+  `podman-compose` on the owner's machine and reached only through `tailscale serve`. It is
+  `master` with everything multi-user and hosted removed: no auth (one constant account), no
+  admin API, no invites or sessions, no credential sealing (prepare takes plain
+  `{username, password}`), no LLM quota, and no `aws/`, Ansible or HAProxy. The paths and
+  response shapes match `master`'s, so the Expo app's self-hosted mode uses the same screens.
+  Sync it by merging `master` into a branch off `tailscale`; its own `AGENTS.md` says how to
+  resolve the conflicts that brings.
 
 Do not push directly to either; open a PR.
 
