@@ -27,7 +27,7 @@ class LlmServiceTest {
     @Test
     void entryMapsToActivityLog() {
         ParsedActivities parsed = of(
-                List.of(new Entry("2026/05/30", 2, 0, "10:00", "Worked on assignment")),
+                List.of(new Entry("2026/05/29", 2, 0, "10:00", "Worked on assignment")),
                 List.of());
 
         LlmResult result = service.toResult(parsed, "user1", "learner1");
@@ -36,7 +36,7 @@ class LlmServiceTest {
         assertEquals(0, result.errors().size());
 
         ActivityLog log = result.ok().get(0);
-        assertEquals("2026/05/30", log.activityDate());
+        assertEquals("2026/05/29", log.activityDate());
         assertEquals("10:00", log.activityTime());
         assertEquals("Worked on assignment", log.activityImpact());
         assertEquals(2, log.hours());
@@ -68,8 +68,8 @@ class LlmServiceTest {
     @Test
     void mixedEntriesAndErrorsBothMapped() {
         ParsedActivities parsed = of(
-                List.of(new Entry("2026/05/30", 1, 30, "09:00", "Reading"),
-                        new Entry("2026/05/30", 0, 45, "14:00", "Meeting")),
+                List.of(new Entry("2026/05/29", 1, 30, "09:00", "Reading"),
+                        new Entry("2026/05/29", 0, 45, "14:00", "Meeting")),
                 List.of(new ParseError(ErrorCode.missing_description, "No description", "1 hour")));
 
         LlmResult result = service.toResult(parsed, "u", "l");
@@ -81,9 +81,9 @@ class LlmServiceTest {
     @Test
     void entryOrderIsPreserved() {
         ParsedActivities parsed = of(
-                List.of(new Entry("2026/05/30", 1, 0, "09:00", "first"),
-                        new Entry("2026/05/30", 2, 0, "11:00", "second"),
-                        new Entry("2026/05/30", 3, 0, "14:00", "third")),
+                List.of(new Entry("2026/05/29", 1, 0, "09:00", "first"),
+                        new Entry("2026/05/29", 2, 0, "11:00", "second"),
+                        new Entry("2026/05/29", 3, 0, "14:00", "third")),
                 List.of());
 
         LlmResult result = service.toResult(parsed, "u", "l");
@@ -96,9 +96,9 @@ class LlmServiceTest {
     @Test
     void hoursAndMinutesCopiedVerbatim() {
         ParsedActivities parsed = of(
-                List.of(new Entry("2026/05/30", 4, 0, "09:30", "Work"),
-                        new Entry("2026/05/30", 0, 45, "11:15", "Quick task"),
-                        new Entry("2026/05/30", 1, 30, "13:00", "Task")),
+                List.of(new Entry("2026/05/29", 4, 0, "09:30", "Work"),
+                        new Entry("2026/05/29", 0, 45, "11:15", "Quick task"),
+                        new Entry("2026/05/29", 1, 30, "13:00", "Task")),
                 List.of());
 
         LlmResult result = service.toResult(parsed, "u", "l");
@@ -114,7 +114,7 @@ class LlmServiceTest {
     @Test
     void startTimeCopiedVerbatim() {
         ParsedActivities parsed = of(
-                List.of(new Entry("2026/05/30", 1, 0, "09:00", "Started at nine")),
+                List.of(new Entry("2026/05/29", 1, 0, "09:00", "Started at nine")),
                 List.of());
 
         LlmResult result = service.toResult(parsed, "u", "l");
@@ -130,13 +130,15 @@ class LlmServiceTest {
                         new ParseError(ErrorCode.missing_description, "m", "b"),
                         new ParseError(ErrorCode.missing_start_time, "m", "c"),
                         new ParseError(ErrorCode.outside_working_hours, "m", "d"),
-                        new ParseError(ErrorCode.invalid_date, "m", "e")));
+                        new ParseError(ErrorCode.invalid_date, "m", "e"),
+                        new ParseError(ErrorCode.weekend, "m", "f"),
+                        new ParseError(ErrorCode.description_too_long, "m", "g")));
 
         LlmResult result = service.toResult(parsed, "u", "l");
 
         String json = new ObjectMapper().writeValueAsString(result.errors());
         for (String code : List.of("missing_duration", "missing_description", "missing_start_time",
-                "outside_working_hours", "invalid_date")) {
+                "outside_working_hours", "invalid_date", "weekend", "description_too_long")) {
             assertTrue(json.contains("\"error\":\"" + code + "\""), json);
         }
     }
@@ -144,7 +146,7 @@ class LlmServiceTest {
     @Test
     void entryWithoutStartTimeIsDroppedWhenTheModelAlsoReportedIt() {
         ParsedActivities parsed = of(
-                List.of(new Entry("2026/05/30", 2, 0, "", "Worked on assignment")),
+                List.of(new Entry("2026/05/29", 2, 0, "", "Worked on assignment")),
                 List.of(new ParseError(ErrorCode.missing_start_time, "No start time",
                         "spent 2 hours on the assignment")));
 
@@ -158,8 +160,8 @@ class LlmServiceTest {
     @Test
     void entryWithoutStartTimeBecomesAnErrorWhenTheModelDidNotReportIt() {
         ParsedActivities parsed = of(
-                List.of(new Entry("2026/05/30", 2, 0, " ", "Worked on assignment"),
-                        new Entry("2026/05/30", 1, 0, null, "Reading")),
+                List.of(new Entry("2026/05/29", 2, 0, " ", "Worked on assignment"),
+                        new Entry("2026/05/29", 1, 0, null, "Reading")),
                 List.of());
 
         LlmResult result = service.toResult(parsed, "u", "l");
@@ -173,8 +175,8 @@ class LlmServiceTest {
     @Test
     void oneReportedErrorCoversOnlyOneDroppedEntry() {
         ParsedActivities parsed = of(
-                List.of(new Entry("2026/05/30", 2, 0, "", "first"),
-                        new Entry("2026/05/30", 1, 0, "", "second")),
+                List.of(new Entry("2026/05/29", 2, 0, "", "first"),
+                        new Entry("2026/05/29", 1, 0, "", "second")),
                 List.of(new ParseError(ErrorCode.missing_start_time, "m", "first line")));
 
         LlmResult result = service.toResult(parsed, "u", "l");
@@ -187,8 +189,8 @@ class LlmServiceTest {
     @Test
     void zeroDurationEntryIsDropped() {
         ParsedActivities parsed = of(
-                List.of(new Entry("2026/05/30", 0, 0, "10:00", "Did some work"),
-                        new Entry("2026/05/30", 1, 0, "11:00", "Reading")),
+                List.of(new Entry("2026/05/29", 0, 0, "10:00", "Did some work"),
+                        new Entry("2026/05/29", 1, 0, "11:00", "Reading")),
                 List.of(new ParseError(ErrorCode.missing_duration, "m", "did some work at 10")));
 
         LlmResult result = service.toResult(parsed, "u", "l");
@@ -200,11 +202,11 @@ class LlmServiceTest {
     @Test
     void everyIncompleteEntryIsDroppedWithTheMatchingCode() {
         ParsedActivities parsed = of(
-                List.of(new Entry("2026/05/30", 1, 0, "10:00", " "),
-                        new Entry("2026/05/30", 1, 0, "07:00", "Early start"),
+                List.of(new Entry("2026/05/29", 1, 0, "10:00", " "),
+                        new Entry("2026/05/29", 1, 0, "07:00", "Early start"),
                         new Entry("2099/01/01", 1, 0, "10:00", "Time travel"),
                         new Entry("30/05/2026", 1, 0, "10:00", "Wrong form"),
-                        new Entry("2026/05/30", 1, 0, "9:00", "Single-digit hour")),
+                        new Entry("2026/05/29", 1, 0, "9:00", "Single-digit hour")),
                 List.of());
 
         LlmResult result = service.toResult(parsed, "u", "l");
@@ -212,6 +214,22 @@ class LlmServiceTest {
         assertEquals(0, result.ok().size());
         assertEquals(List.of("missing_description", "outside_working_hours", "invalid_date",
                         "invalid_date", "missing_start_time"),
+                result.errors().stream().map(e -> e.error().name()).toList());
+    }
+
+    @Test
+    void weekendAndOverlongEntriesAreDropped() {
+        ParsedActivities parsed = of(
+                List.of(new Entry("2026/05/30", 1, 0, "10:00", "Saturday"),
+                        new Entry("2026/05/31", 1, 0, "10:00", "Sunday"),
+                        new Entry("2026/05/29", 1, 0, "10:00", "x".repeat(501)),
+                        new Entry("2026/05/29", 1, 0, "10:00", "Friday")),
+                List.of(new ParseError(ErrorCode.weekend, "m", "saturday line")));
+
+        LlmResult result = service.toResult(parsed, "u", "l");
+
+        assertEquals(List.of("Friday"), result.ok().stream().map(ActivityLog::activityImpact).toList());
+        assertEquals(List.of("weekend", "weekend", "description_too_long"),
                 result.errors().stream().map(e -> e.error().name()).toList());
     }
 

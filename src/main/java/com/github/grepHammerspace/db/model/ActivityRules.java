@@ -1,15 +1,18 @@
 package com.github.grepHammerspace.db.model;
 
+import java.time.DayOfWeek;
 import java.time.LocalDate;
 import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.time.format.ResolverStyle;
+import java.time.format.TextStyle;
+import java.util.Locale;
 import java.util.regex.Pattern;
 
 // What a row needs before it may be stored, whichever path writes it.
 public final class ActivityRules {
-    public enum Kind { DATE, START_TIME, WORKING_HOURS, DURATION, DESCRIPTION }
+    public enum Kind { DATE, WEEKEND, START_TIME, WORKING_HOURS, DURATION, DESCRIPTION, DESCRIPTION_TOO_LONG }
 
     public record Violation(Kind kind, String message) {}
 
@@ -22,6 +25,8 @@ public final class ActivityRules {
 
     private static final LocalTime EARLIEST = LocalTime.of(9, 0);
     private static final LocalTime LATEST = LocalTime.of(18, 0);
+
+    public static final int MAX_IMPACT_CHARS = 500;
 
     private ActivityRules() {}
 
@@ -41,6 +46,11 @@ public final class ActivityRules {
         }
         if (parsed.isAfter(LocalDate.now())) {
             return new Violation(Kind.DATE, "'activityDate' cannot be in the future. Got: " + date + ".");
+        }
+        DayOfWeek day = parsed.getDayOfWeek();
+        if (day == DayOfWeek.SATURDAY || day == DayOfWeek.SUNDAY) {
+            return new Violation(Kind.WEEKEND, "'activityDate' must be a weekday. Got: " + date + ", a "
+                    + day.getDisplayName(TextStyle.FULL, Locale.UK) + ".");
         }
 
         if (time == null || time.isBlank()) {
@@ -73,6 +83,10 @@ public final class ActivityRules {
         if (impact == null || impact.isBlank()) {
             return new Violation(Kind.DESCRIPTION,
                     "'activityImpact' is missing or empty. Expected a description of what you did.");
+        }
+        if (impact.length() > MAX_IMPACT_CHARS) {
+            return new Violation(Kind.DESCRIPTION_TOO_LONG, "'activityImpact' must be " + MAX_IMPACT_CHARS
+                    + " characters or fewer. Got: " + impact.length() + ".");
         }
         return null;
     }

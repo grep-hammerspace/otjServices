@@ -150,10 +150,12 @@ public class LlmServiceImpl implements LlmService {
     private static ParsedActivities.ErrorCode codeFor(ActivityRules.Kind kind) {
         return switch (kind) {
             case DATE -> ParsedActivities.ErrorCode.invalid_date;
+            case WEEKEND -> ParsedActivities.ErrorCode.weekend;
             case START_TIME -> ParsedActivities.ErrorCode.missing_start_time;
             case WORKING_HOURS -> ParsedActivities.ErrorCode.outside_working_hours;
             case DURATION -> ParsedActivities.ErrorCode.missing_duration;
             case DESCRIPTION -> ParsedActivities.ErrorCode.missing_description;
+            case DESCRIPTION_TOO_LONG -> ParsedActivities.ErrorCode.description_too_long;
         };
     }
 
@@ -164,6 +166,8 @@ public class LlmServiceImpl implements LlmService {
             case outside_working_hours -> "Start time is outside 09:00-18:00";
             case missing_duration -> "No duration found in input";
             case missing_description -> "No description found in input";
+            case weekend -> "Activities can only be logged on weekdays";
+            case description_too_long -> "Description is longer than " + ActivityRules.MAX_IMPACT_CHARS + " characters";
         };
     }
 

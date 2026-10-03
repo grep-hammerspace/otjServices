@@ -21,7 +21,7 @@ class ActivityLogRepositoryIT {
 
     private static ActivityLog logFor(String userId, String impact) {
         return new ActivityLog(userId, "learner-x", impact,
-                "2026/05/30", "09:00", 1, 0, false, null);
+                "2026/05/29", "09:00", 1, 0, false, null);
     }
 
     @BeforeAll
@@ -36,7 +36,7 @@ class ActivityLogRepositoryIT {
     void savedActivityLog_hasIdPopulatedOnRead() {
         ActivityLog saved = new ActivityLog(
                 "user-1", "learner-1", "Worked on assignment",
-                "2026/05/30", "10:00", 2, 0, false, null
+                "2026/05/29", "10:00", 2, 0, false, null
         );
         assertNull(saved.id(), "id should be null before saving");
 
@@ -56,7 +56,7 @@ class ActivityLogRepositoryIT {
     void markAsPosted_updatesDocumentInPlace_notDuplicated() {
         ActivityLog saved = new ActivityLog(
                 "user-2", "learner-2", "Reading session",
-                "2026/05/30", "14:00", 1, 30, false, null
+                "2026/05/29", "14:00", 1, 30, false, null
         );
         repository.saveActivityLog(saved);
 
@@ -165,10 +165,19 @@ class ActivityLogRepositoryIT {
     @Test
     void saveActivityLog_refusesARowWithNoStartTime() {
         ActivityLog incomplete = new ActivityLog("user-17", "learner-x", "No time given",
-                "2026/05/30", "", 1, 0, false, null);
+                "2026/05/29", "", 1, 0, false, null);
 
         assertThrows(IllegalArgumentException.class, () -> repository.saveActivityLog(incomplete));
         assertTrue(repository.findUnpostedNewestFirst("user-17").isEmpty());
+    }
+
+    @Test
+    void saveActivityLog_refusesAWeekendRow() {
+        ActivityLog saturday = new ActivityLog("user-19", "learner-x", "Weekend work",
+                "2026/05/30", "10:00", 1, 0, false, null);
+
+        assertThrows(IllegalArgumentException.class, () -> repository.saveActivityLog(saturday));
+        assertTrue(repository.findUnpostedNewestFirst("user-19").isEmpty());
     }
 
     @Test
