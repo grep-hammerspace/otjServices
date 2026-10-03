@@ -115,6 +115,8 @@ Feature: Editing a pending activity
       | A date in the future     | "2099/01/01"   | "09:00"   | 1     | 0       | "Some work"   | future               |
       | A time in the wrong form | "2026/06/01"   | "9:30"    | 1     | 0       | "Some work"   | activityTime         |
       | A blank start time       | "2026/06/01"   | ""        | 1     | 0       | "Some work"   | activityTime         |
+      | A Saturday               | "2026/05/30"   | "09:00"   | 1     | 0       | "Some work"   | weekday              |
+      | A Sunday                 | "2026/05/31"   | "09:00"   | 1     | 0       | "Some work"   | weekday              |
       | A time before 09:00      | "2026/06/01"   | "07:00"   | 1     | 0       | "Some work"   | 09:00 and 18:00      |
       | A time after 18:00       | "2026/06/01"   | "19:00"   | 1     | 0       | "Some work"   | 09:00 and 18:00      |
       | Sixty or more minutes    | "2026/06/01"   | "09:00"   | 1     | 60      | "Some work"   | minutes              |

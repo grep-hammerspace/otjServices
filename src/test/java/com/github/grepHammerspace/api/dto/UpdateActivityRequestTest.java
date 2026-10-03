@@ -2,18 +2,30 @@ package com.github.grepHammerspace.api.dto;
 
 import org.junit.jupiter.api.Test;
 
+import java.time.DayOfWeek;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 class UpdateActivityRequestTest {
     private static final DateTimeFormatter YYYY_MM_DD = DateTimeFormatter.ofPattern("uuuu/MM/dd");
-    private static final String YESTERDAY = LocalDate.now().minusDays(1).format(YYYY_MM_DD);
+    private static final String PAST_WEEKDAY = lastWeekdayBefore(LocalDate.now()).format(YYYY_MM_DD);
+
+    private static boolean isWeekend(LocalDate date) {
+        return date.getDayOfWeek() == DayOfWeek.SATURDAY || date.getDayOfWeek() == DayOfWeek.SUNDAY;
+    }
+
+    private static LocalDate lastWeekdayBefore(LocalDate date) {
+        LocalDate day = date.minusDays(1);
+        while (isWeekend(day)) day = day.minusDays(1);
+        return day;
+    }
 
     private static UpdateActivityRequest valid() {
-        return new UpdateActivityRequest(YESTERDAY, "09:30", 2, 30, "Paired on the auth filter");
+        return new UpdateActivityRequest(PAST_WEEKDAY, "09:30", 2, 30, "Paired on the auth filter");
     }
 
     private static String errorFor(UpdateActivityRequest request) {
@@ -25,15 +37,15 @@ class UpdateActivityRequestTest {
     }
 
     private static UpdateActivityRequest withTime(String time) {
-        return new UpdateActivityRequest(YESTERDAY, time, 1, 0, "Some work");
+        return new UpdateActivityRequest(PAST_WEEKDAY, time, 1, 0, "Some work");
     }
 
     private static UpdateActivityRequest withDuration(int hours, int minutes) {
-        return new UpdateActivityRequest(YESTERDAY, "09:00", hours, minutes, "Some work");
+        return new UpdateActivityRequest(PAST_WEEKDAY, "09:00", hours, minutes, "Some work");
     }
 
     private static UpdateActivityRequest withImpact(String impact) {
-        return new UpdateActivityRequest(YESTERDAY, "09:00", 1, 0, impact);
+        return new UpdateActivityRequest(PAST_WEEKDAY, "09:00", 1, 0, impact);
     }
 
     private static void allRejected(List<UpdateActivityRequest> requests, String expectedInMessage) {
@@ -57,6 +69,7 @@ class UpdateActivityRequestTest {
 
     @Test
     void todayIsNotInTheFuture() {
+        assumeTrue(!isWeekend(LocalDate.now()), "today is a weekend, which the weekday rule rejects");
         assertNull(errorFor(withDate(LocalDate.now().format(YYYY_MM_DD))));
     }
 
@@ -75,6 +88,18 @@ class UpdateActivityRequestTest {
     void aDateThatIsNotOnTheCalendarIsRejected() {
         allRejected(List.of(withDate("2026/02/30"), withDate("2026/13/01"), withDate("2025/02/29")),
                 "real calendar date");
+    }
+
+    @Test
+    void aWeekendDateIsRejected() {
+        allRejected(List.of(withDate("2026/05/30"), withDate("2026/05/31")), "weekday");
+    }
+
+    @Test
+    void everyWeekdayIsAccepted() {
+        for (String date : List.of("2026/05/25", "2026/05/26", "2026/05/27", "2026/05/28", "2026/05/29")) {
+            assertNull(errorFor(withDate(date)), date);
+        }
     }
 
     @Test
@@ -143,25 +168,25 @@ class UpdateActivityRequestTest {
     }
 
     @Test
-    void aDescriptionOverAThousandCharactersIsRejected() {
-        String error = errorFor(withImpact("x".repeat(1001)));
+    void aDescriptionOverFiveHundredCharactersIsRejected() {
+        String error = errorFor(withImpact("x".repeat(501)));
 
         assertNotNull(error);
-        assertTrue(error.contains("1000"), error);
+        assertTrue(error.contains("500"), error);
     }
 
     @Test
-    void aDescriptionOfExactlyAThousandCharactersIsAccepted() {
-        assertNull(errorFor(withImpact("x".repeat(1000))));
+    void aDescriptionOfExactlyFiveHundredCharactersIsAccepted() {
+        assertNull(errorFor(withImpact("x".repeat(500))));
     }
 
     @Test
     void normalisingCollapsesWhitespaceAndTrimsTheEdges() {
         UpdateActivityRequest normalised =
-                new UpdateActivityRequest("  " + YESTERDAY + " ", " 09:00 ", 1, 0,
+                new UpdateActivityRequest("  " + PAST_WEEKDAY + " ", " 09:00 ", 1, 0,
                         "  Read   the\n\nspec  ").normalised();
 
-        assertEquals(YESTERDAY, normalised.activityDate());
+        assertEquals(PAST_WEEKDAY, normalised.activityDate());
         assertEquals("09:00", normalised.activityTime());
         assertEquals("Read the spec", normalised.activityImpact(),
                 "what is stored is the tidied text, not what the caller happened to send");
@@ -179,7 +204,7 @@ class UpdateActivityRequestTest {
 
     @Test
     void aDescriptionThatIsOnlyOverTheLimitBeforeCollapsingIsAccepted() {
-        String padded = "word " + " ".repeat(200) + "x".repeat(900);
+        String padded = "word " + " ".repeat(200) + "x".repeat(400);
 
         assertNull(errorFor(withImpact(padded)),
                 "the length rule applies to what gets stored, which is the collapsed text");

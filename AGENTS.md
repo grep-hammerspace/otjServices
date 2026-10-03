@@ -120,8 +120,13 @@ differences:
     spent. It holds live OneAdvanced cookies.
 - **`PUT /pending/{id}`**: ownership and `posted: false` are in the Mongo filter, so unknown,
   another user's (old data) and already-posted all give the same 404 as the delete. Its rules are
-  hand-written in `UpdateActivityRequest`, not `@Valid`, so the app gets a real
-  `{"error": "..."}` message.
+  hand-written, not `@Valid`, so the app gets a real `{"error": "..."}` message.
+- **A row is stored only when complete**: a past weekday, a start time inside 09:00–18:00, a
+  non-zero duration and a description of at most 500 characters, all in `db/model/ActivityRules`.
+  The LLM path drops a failing entry as a parse error, PUT answers 400, `ActivityLogRepository`
+  throws as the backstop, and `OneAdvancedDriver` won't post a row stored before a rule existed.
+  `log-activities` refuses any line over 500 characters before calling the model. Test fixtures
+  need weekday dates; the suite must pass when run at a weekend.
 - **Error bodies are `ApiError` records,** one fixed constant per failure, never a driver's
   `e.getMessage()`: those carry login-chain URLs with the username in them.
 - **Unknown JSON properties are a 400.** `prepare_and_submit.feature` pins that a `learnerId` on

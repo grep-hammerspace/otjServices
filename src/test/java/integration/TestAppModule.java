@@ -39,7 +39,7 @@ public class TestAppModule {
         return (diff, today, userId, learnerId) -> {
             List<ActivityLog> ok = Arrays.stream(diff.split("\n"))
                     .filter(line -> !line.isBlank())
-                    .map(line -> new ActivityLog(userId, learnerId, line.trim(), today.replace('-', '/'), "10:00", 1, 0, false, null))
+                    .map(line -> new ActivityLog(userId, learnerId, line.trim(), "2026/06/01", "10:00", 1, 0, false, null))
                     .collect(Collectors.toList());
             return new LlmResult(ok, List.of());
         };

@@ -13,8 +13,6 @@ public record UpdateActivityRequest(
 ) {
     private static final Pattern WHITESPACE_RUN = Pattern.compile("\\s+");
 
-    private static final int MAX_IMPACT_CHARS = 1000;
-
     public UpdateActivityRequest normalised() {
         return new UpdateActivityRequest(
                 activityDate == null ? null : activityDate.strip(),
@@ -30,13 +28,6 @@ public record UpdateActivityRequest(
     public String validationError() {
         ActivityRules.Violation violation =
                 ActivityRules.check(activityDate, activityTime, hours, minutes, activityImpact);
-        if (violation != null) {
-            return violation.message();
-        }
-        if (activityImpact.length() > MAX_IMPACT_CHARS) {
-            return "'activityImpact' must be " + MAX_IMPACT_CHARS + " characters or fewer. " +
-                    "Got: " + activityImpact.length() + ".";
-        }
-        return null;
+        return violation == null ? null : violation.message();
     }
 }
