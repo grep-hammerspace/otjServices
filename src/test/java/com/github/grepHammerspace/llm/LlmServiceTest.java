@@ -95,7 +95,7 @@ class LlmServiceTest {
     @Test
     void hoursAndMinutesCopiedVerbatim() {
         ParsedActivities parsed = of(
-                List.of(new Entry("2026/05/30", 4, 0, "08:00", "Work"),
+                List.of(new Entry("2026/05/30", 4, 0, "09:30", "Work"),
                         new Entry("2026/05/30", 0, 45, "11:15", "Quick task"),
                         new Entry("2026/05/30", 1, 30, "13:00", "Task")),
                 List.of());
@@ -128,12 +128,87 @@ class LlmServiceTest {
                 List.of(new ParseError(ErrorCode.missing_duration, "m", "a"),
                         new ParseError(ErrorCode.missing_description, "m", "b"),
                         new ParseError(ErrorCode.missing_start_time, "m", "c"),
-                        new ParseError(ErrorCode.outside_working_hours, "m", "d")));
+                        new ParseError(ErrorCode.outside_working_hours, "m", "d"),
+                        new ParseError(ErrorCode.invalid_date, "m", "e")));
 
         LlmResult result = service.toResult(parsed, "u", "l");
 
         assertEquals(List.of("missing_duration", "missing_description", "missing_start_time",
-                        "outside_working_hours"),
+                        "outside_working_hours", "invalid_date"),
+                result.errors().stream().map(LlmParseError::error).toList());
+    }
+
+    @Test
+    void entryWithoutStartTimeIsDroppedWhenTheModelAlsoReportedIt() {
+        ParsedActivities parsed = of(
+                List.of(new Entry("2026/05/30", 2, 0, "", "Worked on assignment")),
+                List.of(new ParseError(ErrorCode.missing_start_time, "No start time",
+                        "spent 2 hours on the assignment")));
+
+        LlmResult result = service.toResult(parsed, "u", "l");
+
+        assertEquals(0, result.ok().size());
+        assertEquals(1, result.errors().size());
+        assertEquals("spent 2 hours on the assignment", result.errors().get(0).raw());
+    }
+
+    @Test
+    void entryWithoutStartTimeBecomesAnErrorWhenTheModelDidNotReportIt() {
+        ParsedActivities parsed = of(
+                List.of(new Entry("2026/05/30", 2, 0, " ", "Worked on assignment"),
+                        new Entry("2026/05/30", 1, 0, null, "Reading")),
+                List.of());
+
+        LlmResult result = service.toResult(parsed, "u", "l");
+
+        assertEquals(0, result.ok().size());
+        assertEquals(List.of("missing_start_time", "missing_start_time"),
+                result.errors().stream().map(LlmParseError::error).toList());
+        assertEquals("Worked on assignment", result.errors().get(0).raw());
+    }
+
+    @Test
+    void oneReportedErrorCoversOnlyOneDroppedEntry() {
+        ParsedActivities parsed = of(
+                List.of(new Entry("2026/05/30", 2, 0, "", "first"),
+                        new Entry("2026/05/30", 1, 0, "", "second")),
+                List.of(new ParseError(ErrorCode.missing_start_time, "m", "first line")));
+
+        LlmResult result = service.toResult(parsed, "u", "l");
+
+        assertEquals(0, result.ok().size());
+        assertEquals(List.of("first line", "second"),
+                result.errors().stream().map(LlmParseError::raw).toList());
+    }
+
+    @Test
+    void zeroDurationEntryIsDropped() {
+        ParsedActivities parsed = of(
+                List.of(new Entry("2026/05/30", 0, 0, "10:00", "Did some work"),
+                        new Entry("2026/05/30", 1, 0, "11:00", "Reading")),
+                List.of(new ParseError(ErrorCode.missing_duration, "m", "did some work at 10")));
+
+        LlmResult result = service.toResult(parsed, "u", "l");
+
+        assertEquals(List.of("Reading"), result.ok().stream().map(ActivityLog::activityImpact).toList());
+        assertEquals(1, result.errors().size());
+    }
+
+    @Test
+    void everyIncompleteEntryIsDroppedWithTheMatchingCode() {
+        ParsedActivities parsed = of(
+                List.of(new Entry("2026/05/30", 1, 0, "10:00", " "),
+                        new Entry("2026/05/30", 1, 0, "07:00", "Early start"),
+                        new Entry("2099/01/01", 1, 0, "10:00", "Time travel"),
+                        new Entry("30/05/2026", 1, 0, "10:00", "Wrong form"),
+                        new Entry("2026/05/30", 1, 0, "9:00", "Single-digit hour")),
+                List.of());
+
+        LlmResult result = service.toResult(parsed, "u", "l");
+
+        assertEquals(0, result.ok().size());
+        assertEquals(List.of("missing_description", "outside_working_hours", "invalid_date",
+                        "invalid_date", "missing_start_time"),
                 result.errors().stream().map(LlmParseError::error).toList());
     }
 

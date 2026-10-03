@@ -51,9 +51,8 @@ class UpdateActivityRequestTest {
     }
 
     @Test
-    void anEmptyStartTimeIsValid() {
-        assertNull(errorFor(withTime("")),
-                "empty is the existing convention for an entry that never mentioned a time");
+    void aBlankStartTimeIsRejected() {
+        allRejected(List.of(withTime(""), withTime("   ")), "activityTime");
     }
 
     @Test
