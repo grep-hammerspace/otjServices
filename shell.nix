@@ -8,10 +8,6 @@ pkgs.mkShell {
     maven
     podman
     podman-compose
-    nodejs
-    nodePackages.aws-cdk
-    awscli2
-    ssm-session-manager-plugin
   ];
 
   JAVA_HOME = pkgs.jdk25.home;
@@ -22,12 +18,10 @@ pkgs.mkShell {
     echo "  java   $(java -version 2>&1 | head -n1)"
     echo "  mvn    $(mvn -v | head -n1)"
     echo "  podman $(podman --version)"
-    echo "  cdk    $(cdk --version)"
-    echo "  aws    $(aws --version)"
     echo ""
     echo "  mvn package -DskipTests   build the jar"
     echo "  mvn test                  run unit tests"
-    echo "  cd deploy && nix-shell    local podman-compose stack (mongo, mongo-express, app)"
+    echo "  cd deploy && nix-shell    the self-hosted stack (mongo + app)"
     echo ""
   '';
 }

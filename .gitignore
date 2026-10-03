@@ -43,5 +43,5 @@ build/
 .env
 .claude/*.tmp.*
 
-# ansible-lint and ansible-playbook caches
-deploy/ansible/.ansible/
+# master's CDK app; its untracked build output lingers after switching branches
+aws/

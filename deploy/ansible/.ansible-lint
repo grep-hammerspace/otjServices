@@ -1,6 +1,0 @@
-profile: production
-skip_list:
-  # Task names often start with a lowercase name from the box (haproxy.cfg, otjapp).
-  - name[casing]
-exclude_paths:
-  - ci-vars.yml

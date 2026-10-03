@@ -1,8 +1,0 @@
-# Last task of every run, so a bad otj-converge only breaks the next deploy.
-- name: otj-converge, from this release
-  ansible.builtin.copy:
-    src: "{{ playbook_dir }}/../bin/otj-converge"
-    dest: /usr/local/sbin/otj-converge
-    owner: root
-    group: root
-    mode: "0755"
