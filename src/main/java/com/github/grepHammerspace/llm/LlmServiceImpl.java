@@ -9,6 +9,7 @@ import com.anthropic.models.messages.StopReason;
 import com.anthropic.models.messages.StructuredMessage;
 import com.anthropic.models.messages.StructuredMessageCreateParams;
 import com.github.grepHammerspace.db.model.ActivityLog;
+import com.github.grepHammerspace.db.model.ActivityRules;
 import com.github.grepHammerspace.llm.exception.LlmException;
 import com.github.grepHammerspace.llm.exception.LlmRateLimitException;
 import org.slf4j.Logger;
@@ -21,7 +22,9 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.EnumMap;
 import java.util.List;
+import java.util.Map;
 
 @Singleton
 public class LlmServiceImpl implements LlmService {
@@ -113,18 +116,55 @@ public class LlmServiceImpl implements LlmService {
         log.info("LLM returned {} entry/entries and {} error(s)",
                 parsed.entries().size(), parsed.errors().size());
 
+        List<ParsedActivities.ParseError> errors = new ArrayList<>();
+        Map<ParsedActivities.ErrorCode, Integer> reported = new EnumMap<>(ParsedActivities.ErrorCode.class);
+        for (ParsedActivities.ParseError error : parsed.errors()) {
+            log.warn("LLM could not parse input line — {}: {}", error.error(), error.raw());
+            errors.add(error);
+            reported.merge(error.error(), 1, Integer::sum);
+        }
+
+        // The prompt forbids incomplete entries, but the model sometimes emits one alongside the
+        // error for the same line, and saving it leaves a near-duplicate once the user fixes it.
         List<ActivityLog> ok = new ArrayList<>();
         for (ParsedActivities.Entry entry : parsed.entries()) {
             log.debug("  Entry: {}", entry);
-            ok.add(new ActivityLog(userId, learnerId, entry.comments(), entry.date(),
-                    entry.startTime(), entry.hours(), entry.minutes(), false, null));
+            ActivityLog row = new ActivityLog(userId, learnerId, entry.comments(), entry.date(),
+                    entry.startTime(), entry.hours(), entry.minutes(), false, null);
+            ActivityRules.Violation violation = ActivityRules.check(row);
+            if (violation == null) {
+                ok.add(row);
+                continue;
+            }
+            ParsedActivities.ErrorCode code = codeFor(violation.kind());
+            log.warn("Dropped an incomplete LLM entry as {}", code);
+            // Errors aren't linked to entries, so only synthesise one the model didn't report.
+            if (reported.merge(code, -1, Integer::sum) < 0) {
+                errors.add(new ParsedActivities.ParseError(code, messageFor(code), entry.comments()));
+            }
         }
 
-        for (ParsedActivities.ParseError error : parsed.errors()) {
-            log.warn("LLM could not parse input line — {}: {}", error.error(), error.raw());
-        }
+        return new LlmResult(ok, errors);
+    }
 
-        return new LlmResult(ok, parsed.errors());
+    private static ParsedActivities.ErrorCode codeFor(ActivityRules.Kind kind) {
+        return switch (kind) {
+            case DATE -> ParsedActivities.ErrorCode.invalid_date;
+            case START_TIME -> ParsedActivities.ErrorCode.missing_start_time;
+            case WORKING_HOURS -> ParsedActivities.ErrorCode.outside_working_hours;
+            case DURATION -> ParsedActivities.ErrorCode.missing_duration;
+            case DESCRIPTION -> ParsedActivities.ErrorCode.missing_description;
+        };
+    }
+
+    private static String messageFor(ParsedActivities.ErrorCode code) {
+        return switch (code) {
+            case invalid_date -> "Could not work out a valid date";
+            case missing_start_time -> "No start time found in input";
+            case outside_working_hours -> "Start time is outside 09:00-18:00";
+            case missing_duration -> "No duration found in input";
+            case missing_description -> "No description found in input";
+        };
     }
 
     private static String loadPrompt() {

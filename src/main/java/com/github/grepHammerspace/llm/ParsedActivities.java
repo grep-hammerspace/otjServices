@@ -49,6 +49,7 @@ public record ParsedActivities(
         missing_duration,
         missing_description,
         missing_start_time,
-        outside_working_hours
+        outside_working_hours,
+        invalid_date
     }
 }

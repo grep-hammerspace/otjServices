@@ -1,6 +1,7 @@
 package com.github.grepHammerspace.db;
 
 import com.github.grepHammerspace.db.model.ActivityLog;
+import com.github.grepHammerspace.db.model.ActivityRules;
 import com.mongodb.client.MongoCollection;
 import com.mongodb.client.MongoDatabase;
 import com.mongodb.client.model.Filters;
@@ -61,6 +62,7 @@ public class ActivityLogRepository {
     public ActivityLog updateUnpostedById(String userId, ObjectId id,
                                           String activityDate, String activityTime,
                                           int hours, int minutes, String activityImpact) {
+        requireComplete(ActivityRules.check(activityDate, activityTime, hours, minutes, activityImpact));
         Document updated = collection.findOneAndUpdate(
                 Filters.and(Filters.eq("_id", id), unposted(userId)),
                 Updates.combine(
@@ -80,6 +82,7 @@ public class ActivityLogRepository {
     }
 
     public ActivityLog saveActivityLog(ActivityLog activityLog){
+        requireComplete(ActivityRules.check(activityLog));
         Document doc = new Document()
                 .append("tailscaleUserId", activityLog.tailscaleUserId())
                 .append("learnerId", activityLog.learnerId())
@@ -104,6 +107,14 @@ public class ActivityLogRepository {
                 Updates.set("posted", true)
         );
         log.info("Marked activity log {} as posted for user {}", activityLog.id(), activityLog.tailscaleUserId());
+    }
+
+    // Callers validate first for a friendly message; this keeps any path from storing an
+    // incomplete row.
+    private static void requireComplete(ActivityRules.Violation violation) {
+        if (violation != null) {
+            throw new IllegalArgumentException("Refusing to store an incomplete activity log: " + violation.message());
+        }
     }
 
     private static Bson unposted(String userId) {

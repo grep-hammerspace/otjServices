@@ -163,12 +163,31 @@ class ActivityLogRepositoryIT {
     }
 
     @Test
+    void saveActivityLog_refusesARowWithNoStartTime() {
+        ActivityLog incomplete = new ActivityLog("user-17", "learner-x", "No time given",
+                "2026/05/30", "", 1, 0, false, null);
+
+        assertThrows(IllegalArgumentException.class, () -> repository.saveActivityLog(incomplete));
+        assertTrue(repository.findUnpostedNewestFirst("user-17").isEmpty());
+    }
+
+    @Test
+    void updateUnpostedById_refusesToBlankTheStartTime() {
+        repository.saveActivityLog(logFor("user-18", "Original"));
+        ActivityLog before = repository.findUnpostedNewestFirst("user-18").get(0);
+
+        assertThrows(IllegalArgumentException.class, () -> repository.updateUnpostedById("user-18",
+                new ObjectId(before.id()), "2026/06/02", "", 1, 0, "Edited"));
+        assertEquals("09:00", repository.findUnpostedNewestFirst("user-18").get(0).activityTime());
+    }
+
+    @Test
     void updateUnpostedById_leavesTheFieldsItDoesNotName() {
         repository.saveActivityLog(logFor("user-13", "Original"));
         ActivityLog before = repository.findUnpostedNewestFirst("user-13").get(0);
 
         ActivityLog updated = repository.updateUnpostedById("user-13", new ObjectId(before.id()),
-                "2026/06/02", "", 1, 0, "Edited");
+                "2026/06/02", "11:00", 1, 0, "Edited");
 
         assertEquals(before.tailscaleUserId(), updated.tailscaleUserId());
         assertEquals(before.learnerId(), updated.learnerId());

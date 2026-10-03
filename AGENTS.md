@@ -224,8 +224,13 @@ Notes:
 - `PUT /pending/{id}` replaces the five editable fields of one unposted row and answers with
   the updated `PendingActivity`. Ownership and `posted: false` are in the Mongo filter, not a
   check after the read, so unknown / someone else's / already-posted all give the same 404 as
-  the delete endpoint. Its rules are hand-written in `UpdateActivityRequest` rather than with
-  `@Valid`, because only an `{"error": "..."}` body reaches the mobile user as a real message.
+  the delete endpoint. Its rules are hand-written rather than with `@Valid`, because only an
+  `{"error": "..."}` body reaches the mobile user as a real message.
+- **A row is stored only when complete**: date, start time inside 09:00–18:00, a non-zero
+  duration and a description, all defined once in `db/model/ActivityRules`. The LLM path drops
+  an incomplete entry as a parse error, PUT answers 400, and `ActivityLogRepository` throws as
+  the backstop. There is no "no start time" row any more: one used to be saved beside the
+  model's warning, and fixing it in the app left a near-duplicate.
 - Revocation sets `revokedAt` *and* pulls `expiresAt` back to now, so a revoked code dies
   through the existing claim filter. `InviteCodeRepository.claim` is a single atomic
   `findOneAndUpdate` and deliberately knows nothing about revocation — leave it that way.
