@@ -153,8 +153,8 @@ public class PendingSteps {
 
     private static void sendPut(String id, String body) throws Exception {
         String base = (String) ScenarioContext.get("baseUrl");
-        Request req = HttpSteps.authenticated(new Request.Builder()
-                .url(base + "/otj-services/pending/" + id))
+        Request req = new Request.Builder()
+                .url(base + "/otj-services/pending/" + id)
                 .put(RequestBody.create(body, JSON))
                 .build();
         record(HTTP.newCall(req).execute());
@@ -162,8 +162,8 @@ public class PendingSteps {
 
     private static void sendDelete(String id) throws Exception {
         String base = (String) ScenarioContext.get("baseUrl");
-        Request req = HttpSteps.authenticated(new Request.Builder()
-                .url(base + "/otj-services/pending/" + id))
+        Request req = new Request.Builder()
+                .url(base + "/otj-services/pending/" + id)
                 .delete()
                 .build();
         record(HTTP.newCall(req).execute());

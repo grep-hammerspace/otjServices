@@ -1,7 +1,7 @@
 Feature: List and delete pending activities
 
   Background:
-    Given a registered user with learnerId "L001"
+    Given the account has learnerId "L001"
     And there are no activity logs for the test user
 
   Scenario: An empty queue is a 200, not a 404
@@ -9,10 +9,6 @@ Feature: List and delete pending activities
     Then the response status is 200
     And the response body contains "\"count\":0"
     And the response body contains "\"totalMinutes\":0"
-
-  Scenario: Listing without a token is rejected
-    When I GET "/otj-services/pending" without a token
-    Then the response status is 401
 
   Scenario: Pending rows carry an id, a createdAt and a total
     Given I have already logged "Worked 2 hours on assignment from 10:00"

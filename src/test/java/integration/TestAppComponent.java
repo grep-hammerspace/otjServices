@@ -1,14 +1,8 @@
 package integration;
 
-import com.github.grepHammerspace.admin.AdminIdentityFilter;
-import com.github.grepHammerspace.admin.AdminInviteResource;
 import com.github.grepHammerspace.api.AccountResource;
-import com.github.grepHammerspace.api.AuthResource;
-import com.github.grepHammerspace.api.CryptoResource;
 import com.github.grepHammerspace.api.OtjServicesResource;
-import com.github.grepHammerspace.auth.AuthenticationFilter;
-import com.github.grepHammerspace.auth.SessionTokenService;
-import com.github.grepHammerspace.db.InviteCodeRepository;
+import com.github.grepHammerspace.db.UserRepository;
 import com.github.grepHammerspace.web.AzurePush;
 import com.github.grepHammerspace.web.Keycloak;
 import com.mongodb.client.MongoDatabase;
@@ -24,13 +18,7 @@ public interface TestAppComponent {
     @Keycloak FakeDriver keycloakDriver();
     @AzurePush FakeDriver azurePushDriver();
 
-    AuthResource authResource();
     AccountResource accountResource();
-    CryptoResource cryptoResource();
-    AuthenticationFilter authenticationFilter();
-    AdminInviteResource adminInviteResource();
-    AdminIdentityFilter adminIdentityFilter();
-    SessionTokenService sessionTokenService();
-    InviteCodeRepository inviteCodeRepository();
+    UserRepository userRepository();
     MongoDatabase mongoDatabase();
 }

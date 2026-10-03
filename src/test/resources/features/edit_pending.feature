@@ -1,11 +1,8 @@
 Feature: Editing a pending activity
 
-  # The quota reset is required: seeding rows spends test-user-id's daily LLM calls, and Mongo isn't
-  # reset between scenarios.
   Background:
-    Given a registered user with learnerId "L001"
+    Given the account has learnerId "L001"
     And there are no activity logs for the test user
-    And the test user has used no LLM calls today
 
   Scenario: A valid edit returns the row in its new state
     Given I have already logged "Worked on the assignment"
@@ -99,14 +96,6 @@ Feature: Editing a pending activity
       """
     Then the response status is 400
     And the response body contains "is not a valid activity id."
-
-  Scenario: Editing without a token is rejected
-    When I PUT "/otj-services/pending/68f3c1a49b2e4d0012ab34cd" without a token with body:
-      """
-      {"activityDate": "2026/06/01", "activityTime": "09:00", "hours": 1, "minutes": 0,
-       "activityImpact": "Some work"}
-      """
-    Then the response status is 401
 
   Scenario Outline: <case> is rejected with a message naming the problem
     Given I have already logged "Worked on the assignment"

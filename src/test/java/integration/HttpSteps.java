@@ -10,12 +10,6 @@ public class HttpSteps {
     private static final OkHttpClient HTTP = new OkHttpClient();
     private static final MediaType JSON = MediaType.get("application/json");
 
-    static Request.Builder authenticated(Request.Builder builder) {
-        String token = (String) ScenarioContext.get("authToken");
-        if (token != null) builder.header("Authorization", "Bearer " + token);
-        return builder;
-    }
-
     private static void record(Response response) throws Exception {
         String responseBody = response.body() != null ? response.body().string() : "";
         ScenarioContext.put("lastResponseCode", response.code());
@@ -26,56 +20,22 @@ public class HttpSteps {
     @When("I DELETE {string}")
     public void sendDelete(String path) throws Exception {
         String base = (String) ScenarioContext.get("baseUrl");
-        Request req = authenticated(new Request.Builder().url(base + path)).delete().build();
+        Request req = new Request.Builder().url(base + path).delete().build();
         record(HTTP.newCall(req).execute());
     }
 
     @When("I GET {string}")
     public void sendGet(String path) throws Exception {
         String base = (String) ScenarioContext.get("baseUrl");
-        Request req = authenticated(new Request.Builder().url(base + path)).get().build();
-        record(HTTP.newCall(req).execute());
-    }
-
-    @When("I DELETE {string} without a token")
-    public void sendDeleteWithoutToken(String path) throws Exception {
-        String base = (String) ScenarioContext.get("baseUrl");
-        Request req = new Request.Builder().url(base + path).delete().build();
+        Request req = new Request.Builder().url(base + path).get().build();
         record(HTTP.newCall(req).execute());
     }
 
     @When("I PUT {string} with body:")
     public void sendPut(String path, String body) throws Exception {
         String base = (String) ScenarioContext.get("baseUrl");
-        Request req = authenticated(new Request.Builder().url(base + path))
-                .put(RequestBody.create(body, JSON))
-                .build();
-        record(HTTP.newCall(req).execute());
-    }
-
-    @When("I PUT {string} without a token with body:")
-    public void sendPutWithoutToken(String path, String body) throws Exception {
-        String base = (String) ScenarioContext.get("baseUrl");
         Request req = new Request.Builder().url(base + path)
                 .put(RequestBody.create(body, JSON))
-                .build();
-        record(HTTP.newCall(req).execute());
-    }
-
-    @When("I GET {string} without a token")
-    public void sendGetWithoutToken(String path) throws Exception {
-        String base = (String) ScenarioContext.get("baseUrl");
-        Request req = new Request.Builder().url(base + path).get().build();
-        record(HTTP.newCall(req).execute());
-    }
-
-    @When("I GET {string} with token {string}")
-    public void sendGetWithToken(String path, String token) throws Exception {
-        String base = (String) ScenarioContext.get("baseUrl");
-        Request req = new Request.Builder()
-                .url(base + path)
-                .header("Authorization", "Bearer " + token)
-                .get()
                 .build();
         record(HTTP.newCall(req).execute());
     }

@@ -14,18 +14,21 @@ public class LogActivitiesSteps {
     private static final MediaType JSON = MediaType.get("application/json");
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
-    // Upserted: the suite's Mongo isn't wiped between scenarios.
-    @Given("a registered user with learnerId {string}")
-    public void registerUser(String learnerId) {
+    // The hook has already created the account; the suite's Mongo isn't wiped between scenarios.
+    @Given("the account has learnerId {string}")
+    public void accountHasLearnerId(String learnerId) {
         MongoDatabase db = (MongoDatabase) ScenarioContext.get("db");
-        db.getCollection("users").replaceOne(
+        db.getCollection("users").updateOne(
                 new org.bson.Document("userId", ServerHooks.TEST_USER_ID),
-                new org.bson.Document("userId", ServerHooks.TEST_USER_ID)
-                        .append("appUsername", "testuser")
-                        .append("appPasswordHash", "$2a$12$fakehashfortesting")
-                        .append("learnerId", learnerId)
-                        .append("createdAt", new java.util.Date()),
-                new com.mongodb.client.model.ReplaceOptions().upsert(true));
+                new org.bson.Document("$set", new org.bson.Document("learnerId", learnerId)));
+    }
+
+    @Given("the account has no learner ID")
+    public void accountHasNoLearnerId() {
+        MongoDatabase db = (MongoDatabase) ScenarioContext.get("db");
+        db.getCollection("users").updateOne(
+                new org.bson.Document("userId", ServerHooks.TEST_USER_ID),
+                new org.bson.Document("$unset", new org.bson.Document("learnerId", "")));
     }
 
     @Given("I have already logged {string}")
@@ -37,8 +40,8 @@ public class LogActivitiesSteps {
     public void postLogActivitiesTo(String path, String content) throws Exception {
         String base = (String) ScenarioContext.get("baseUrl");
         String body = MAPPER.writeValueAsString(java.util.Map.of("content", content));
-        Request req = HttpSteps.authenticated(new Request.Builder()
-                .url(base + path))
+        Request req = new Request.Builder()
+                .url(base + path)
                 .post(RequestBody.create(body, JSON))
                 .build();
         Response response = HTTP.newCall(req).execute();
@@ -47,20 +50,20 @@ public class LogActivitiesSteps {
         ScenarioContext.put("lastResponseBody", responseBody);
     }
 
-    @And("there is/are {int} activity log(s) in the database for user {string}")
-    public void checkActivityLogCount(int expectedCount, String userId) {
+    @And("there is/are {int} activity log(s) in the database")
+    public void checkActivityLogCount(int expectedCount) {
         MongoDatabase db = (MongoDatabase) ScenarioContext.get("db");
         long count = db.getCollection("activitylogs")
-                .countDocuments(new org.bson.Document("tailscaleUserId", userId));
+                .countDocuments(new org.bson.Document("tailscaleUserId", ServerHooks.TEST_USER_ID));
         assertEquals(expectedCount, count,
-                "Expected " + expectedCount + " activity log(s) for user " + userId + " but found " + count);
+                "Expected " + expectedCount + " activity log(s) but found " + count);
     }
 
     private void postLogActivities(String content) throws Exception {
         String base = (String) ScenarioContext.get("baseUrl");
         String body = MAPPER.writeValueAsString(java.util.Map.of("content", content));
-        Request req = HttpSteps.authenticated(new Request.Builder()
-                .url(base + "/otj-services/log-activities"))
+        Request req = new Request.Builder()
+                .url(base + "/otj-services/log-activities")
                 .post(RequestBody.create(body, JSON))
                 .build();
         Response response = HTTP.newCall(req).execute();

@@ -5,6 +5,7 @@ import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.classic.spi.IThrowableProxy;
 import ch.qos.logback.core.read.ListAppender;
 import com.github.grepHammerspace.ServerBootstrap;
+import com.github.grepHammerspace.SingleUser;
 import io.cucumber.java.After;
 import io.cucumber.java.Before;
 import org.glassfish.grizzly.http.server.HttpServer;
@@ -21,26 +22,7 @@ import static org.junit.jupiter.api.Assertions.fail;
 // The Mongo container is shared and never wiped between scenarios.
 public class ServerHooks {
     static final MongoDBContainer MONGO = new MongoDBContainer("mongo:8");
-    static final String TEST_USER_ID = "test-user-id";
-    static final String ADMIN_LOGIN = "admin@test.tailnet";
-
-    // Generated, not hard-coded: crypto.feature needs the public half, which the JDK can't derive
-    // from a seed.
-    static final java.security.KeyPair IDENTITY = generateIdentity();
-    static final byte[] IDENTITY_SEED = seedOf(IDENTITY);
-
-    private static java.security.KeyPair generateIdentity() {
-        try {
-            return java.security.KeyPairGenerator.getInstance("Ed25519").generateKeyPair();
-        } catch (java.security.NoSuchAlgorithmException e) {
-            throw new IllegalStateException("this JDK has no Ed25519", e);
-        }
-    }
-
-    private static byte[] seedOf(java.security.KeyPair pair) {
-        byte[] encoded = pair.getPrivate().getEncoded();
-        return java.util.Arrays.copyOfRange(encoded, encoded.length - 32, encoded.length);
-    }
+    static final String TEST_USER_ID = SingleUser.USER_ID;
 
     // Distinctive on purpose: these can only appear in a log if something logged the real value.
     static final String OA_USERNAME = "leaktest@example.invalid";
@@ -49,7 +31,6 @@ public class ServerHooks {
     static final List<String> SECRETS = List.of(OA_USERNAME, OA_PASSWORD, OA_MFA_CODE);
 
     private HttpServer server;
-    private HttpServer adminServer;
     private ListAppender<ILoggingEvent> logCapture;
     private Level originalRootLevel;
 
@@ -60,25 +41,18 @@ public class ServerHooks {
         startLogCapture();
 
         int port = freePort();
-        int adminPort = freePort();
 
         TestAppModule module = new TestAppModule(MONGO.getConnectionString());
         TestAppComponent component = DaggerTestAppComponent.builder()
             .testAppModule(module).build();
 
-        String authToken = component.sessionTokenService().issue(TEST_USER_ID);
+        component.userRepository().ensureSingleUser();
 
-        server = ServerBootstrap.start(port, component.otjServicesResource(), component.authResource(),
-            component.accountResource(), component.cryptoResource(), component.authenticationFilter());
-
-        adminServer = ServerBootstrap.start(adminPort, component.adminInviteResource(),
-            component.adminIdentityFilter());
+        server = ServerBootstrap.start(port, component.otjServicesResource(), component.accountResource());
 
         ScenarioContext.init();
         ScenarioContext.put("baseUrl", "http://localhost:" + port);
-        ScenarioContext.put("adminBaseUrl", "http://localhost:" + adminPort);
         ScenarioContext.put("db", component.mongoDatabase());
-        ScenarioContext.put("authToken", authToken);
         ScenarioContext.put("keycloakDriver", component.keycloakDriver());
         ScenarioContext.put("azurePushDriver", component.azurePushDriver());
     }
@@ -90,7 +64,6 @@ public class ServerHooks {
     @After
     public void stop() {
         if (server != null) server.shutdownNow();
-        if (adminServer != null) adminServer.shutdownNow();
         try {
             assertNothingLeaked();
         } finally {
