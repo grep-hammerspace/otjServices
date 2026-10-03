@@ -1,8 +1,7 @@
 package com.github.grepHammerspace.api.dto;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
-import com.github.grepHammerspace.db.model.ActivityLog;
-import com.github.grepHammerspace.llm.LlmParseError;
+import com.github.grepHammerspace.llm.ParsedActivities;
 
 import java.util.List;
 
@@ -10,6 +9,6 @@ import java.util.List;
 public record ActivityLogResponse(
         String status,
         int rowsAdded,
-        List<ActivityLog> rows,
-        List<LlmParseError> parseErrors
+        List<PendingActivity> rows,
+        List<ParsedActivities.ParseError> parseErrors
 ) {}

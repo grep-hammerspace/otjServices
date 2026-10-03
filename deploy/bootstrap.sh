@@ -1,22 +1,15 @@
 #!/usr/bin/env bash
-# Bootstrap the full otjServices stack (mongo, mongo-express, app).
-#
-# Usage:
-#   bash deploy/bootstrap.sh          # build and start in debug mode (default)
-#   bash deploy/bootstrap.sh --prod   # build and start in production mode
-#   bash deploy/bootstrap.sh --stop   # tear down stack (keeps Mongo data)
-#
+# Self-hosted stack (mongo + app), served on your tailnet.
+# Usage: bash deploy/bootstrap.sh [--prod | --stop]
+#   --prod  detach under nohup, so it survives closing the terminal
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 COMPOSE_FILE="$SCRIPT_DIR/podman-compose.yaml"
 ENV_FILE="$SCRIPT_DIR/../.env"
+REQUIRED_VARS=(MONGO_USER MONGO_PASSWORD ANTHROPIC_API_KEY)
 
 APP_PORT=8945
-ME_PORT=8081
-DEBUG_PORT=5005
-
-# ── Helpers ───────────────────────────────────────────────────────────────────
 
 die()  { echo "ERROR: $*" >&2; exit 1; }
 info() { echo "==> $*"; }
@@ -37,16 +30,11 @@ wait_for() {
   die "$name did not become ready in time."
 }
 
-# True if `tailscale serve` can run as $USER without sudo (operator delegated once via
-# `tailscale set --operator=$USER`). See deploy/README.md for why this is needed.
 tailscale_operator_set() {
-  command -v tailscale &>/dev/null || return 1
   local operator
   operator=$(tailscale debug prefs 2>/dev/null | jq -r '.OperatorUser // empty')
   [ -n "$operator" ] && [ "$operator" = "$USER" ]
 }
-
-# ── --stop shortcut ───────────────────────────────────────────────────────────
 
 if [[ "${1:-}" == "--stop" ]]; then
   info "Stopping all containers..."
@@ -55,96 +43,65 @@ if [[ "${1:-}" == "--stop" ]]; then
   exit 0
 fi
 
-# ── Mode ──────────────────────────────────────────────────────────────────────
-
-MODE="debug"
-DETACH=true
+DETACH=false
 for arg in "$@"; do
-  [[ "$arg" == "--prod"       ]] && MODE="prod"
-  [[ "$arg" == "--no-detach"  ]] && DETACH=false
+  [[ "$arg" == "--prod" ]] && DETACH=true
+  [[ "$arg" == "--no-detach" ]] && DETACH=false
 done
 
-if [ "$MODE" = "prod" ]; then
-  export JAVA_DEBUG=false
-else
-  export JAVA_DEBUG=true
-fi
-
-# In prod mode detach from the SSH session so the deploy survives disconnects.
-# The script re-execs itself under nohup with --no-detach to skip this block.
-if [ "$MODE" = "prod" ] && [ "$DETACH" = "true" ]; then
+if [ "$DETACH" = "true" ]; then
   LOG="/tmp/otj-deploy-$(date +%Y%m%d-%H%M%S).log"
-  info "Prod mode — detaching from terminal. Logs: $LOG"
-  nohup bash "$0" --prod --no-detach >"$LOG" 2>&1 &
+  info "Detaching from terminal. Logs: $LOG"
+  nohup bash "$0" --no-detach >"$LOG" 2>&1 &
   disown
   echo "    Running as PID $! — follow with: tail -f $LOG"
   exit 0
 fi
 
-# ── Pre-flight ────────────────────────────────────────────────────────────────
-
 require podman
 require podman-compose
+require curl
+require jq
+require tailscale
 
-[ -f "$ENV_FILE" ] || die ".env not found at $ENV_FILE"
-set -a; source "$ENV_FILE"; set +a
+[ -f "$ENV_FILE" ] || die ".env not found at $ENV_FILE — copy .env.example and fill it in."
+set -a
+# shellcheck source=/dev/null
+source "$ENV_FILE"
+set +a
 
-# ── Build app image ───────────────────────────────────────────────────────────
+missing=()
+for var in "${REQUIRED_VARS[@]}"; do
+  [ -n "${!var:-}" ] || missing+=("$var")
+done
+[ ${#missing[@]} -eq 0 ] || die "set these in .env: ${missing[*]}"
+export OTJ_DRIVER_LOG_LEVEL="${OTJ_DRIVER_LOG_LEVEL:-INFO}"
+
+tailscale_operator_set || die "tailscale serve needs root unless you are its operator. Run once:
+    sudo tailscale set --operator=$USER"
 
 info "Building app image (Maven build runs inside Podman, rootless)..."
 podman-compose -f "$COMPOSE_FILE" build app
 
-# ── Start stack ───────────────────────────────────────────────────────────────
-
-info "Starting full stack (mode: $MODE)..."
+info "Starting the stack..."
 podman-compose -f "$COMPOSE_FILE" up -d
-
-info "Containers started — current status:"
 podman-compose -f "$COMPOSE_FILE" ps
 
-# ── Wait for services ─────────────────────────────────────────────────────────
-
-if [ "$MODE" = "debug" ]; then
-  wait_for "mongo-express" "http://localhost:$ME_PORT"
-fi
 wait_for "app" "http://localhost:$APP_PORT/health"
 
-# ── Done ──────────────────────────────────────────────────────────────────────
+info "Serving the API on your tailnet..."
+tailscale serve --bg --https=443 "http://127.0.0.1:$APP_PORT" >/tmp/otj-tailscale-serve.log 2>&1 \
+  || { cat /tmp/otj-tailscale-serve.log; die "tailscale serve failed — is HTTPS enabled for your tailnet?"; }
+
+TS_NAME=$(tailscale status --self --json | jq -r '.Self.DNSName' | sed 's/\.$//')
 
 echo ""
 echo "  Stack is up."
 echo ""
-if [ "$MODE" = "debug" ]; then
-echo "  mongo-express  →  http://localhost:$ME_PORT"
-fi
-echo "  app            →  http://localhost:$APP_PORT/otj-services"
-if [ "$MODE" = "debug" ]; then
-echo "  debugger       →  localhost:$DEBUG_PORT  (attach IDE remote debugger)"
-fi
+echo "  In the app, tap \"Hosting the backend yourself?\" and enter:"
+echo "    https://$TS_NAME"
 echo ""
 echo "  Logs:  podman-compose -f deploy/podman-compose.yaml logs -f app"
 echo "  Stop:  bash deploy/bootstrap.sh --stop"
-echo "  Wipe:  clean-mongo  (removes Mongo data volume)"
-echo "  Deploy just mongo: podman-compose -f deploy/podman-compose.yaml up mongo -d (now you can run the server in debug mode)"
+echo "  Wipe:  clean-mongo  (removes the Mongo data volume)"
 echo ""
-
-# ── tailscale serve (optional — makes the app reachable from the tailnet) ─────
-
-if command -v tailscale &>/dev/null; then
-  if tailscale_operator_set; then
-    info "Wiring up tailscale serve (operator already delegated to $USER)..."
-    if tailscale serve --bg --https=443 "http://127.0.0.1:$APP_PORT" >/tmp/otj-tailscale-serve.log 2>&1; then
-      TS_NAME=$(tailscale status --self --json 2>/dev/null | jq -r '.Self.DNSName' | sed 's/\.$//')
-      echo "  tailnet        →  https://$TS_NAME/otj-services"
-    else
-      echo "  WARNING: 'tailscale serve' failed — see /tmp/otj-tailscale-serve.log"
-      cat /tmp/otj-tailscale-serve.log
-    fi
-  else
-    echo "  NOTE: tailscale operator is not set for '$USER' — 'tailscale serve' needs root without it."
-    echo "        Run this once (one-time sudo, never needed again):"
-    echo "          sudo tailscale set --operator=$USER"
-    echo "        Then re-run this script to wire up tailscale serve automatically."
-  fi
-  echo ""
-fi

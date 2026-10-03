@@ -5,10 +5,11 @@
     </encoder>
   </appender>
 
-  <logger name="com.github.grepHammerspace.web.OtjDriver" level="DEBUG"/>
-  <logger name="com.github.grepHammerspace.web.AzureIdDriver" level="DEBUG"/>
+  <!-- Never default the drivers to DEBUG: that once put Microsoft flow tokens in the production
+       log. OTJ_DRIVER_LOG_LEVEL=DEBUG enables it on purpose, until the next restart. -->
+  <logger name="com.github.grepHammerspace.web.OtjDriver"
+          level="${OTJ_DRIVER_LOG_LEVEL:-INFO}"/>
 
-  <!-- Suppress noisy MongoDB cluster monitor heartbeat logs -->
   <logger name="org.mongodb.driver" level="WARN"/>
 
   <root level="INFO">

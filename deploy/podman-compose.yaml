@@ -2,8 +2,9 @@ services:
   mongo:
     image: docker.io/library/mongo:8
     restart: unless-stopped
+    # Loopback only: on a tailnet, "outside this host" includes every other device.
     ports:
-      - "27017:27017"
+      - "127.0.0.1:27017:27017"
     environment:
       MONGO_INITDB_ROOT_USERNAME: ${MONGO_USER}
       MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASSWORD}
@@ -19,35 +20,20 @@ services:
       retries: 10
       start_period: 5s
 
-  mongo-express:
-    image: docker.io/library/mongo-express:latest
-    restart: unless-stopped
-    ports:
-      - "8081:8081"
-    environment:
-      ME_CONFIG_MONGODB_ADMINUSERNAME: ${MONGO_USER}
-      ME_CONFIG_MONGODB_ADMINPASSWORD: ${MONGO_PASSWORD}
-      ME_CONFIG_MONGODB_URL: mongodb://${MONGO_USER}:${MONGO_PASSWORD}@mongo:27017/
-      ME_CONFIG_BASICAUTH: false
-    depends_on:
-      mongo:
-        condition: service_healthy
-    networks:
-      - otj-net
-
   app:
     build:
       context: ..
       dockerfile: docker/otjService.Dockerfile
+    image: localhost/otj-services:local
     restart: unless-stopped
+    # Loopback only: the API has no auth, so tailscale serve must be the only way in.
     ports:
       - "127.0.0.1:8945:8945"
-      - "127.0.0.1:5005:5005"
     environment:
       MONGO_URI: mongodb://${MONGO_USER}:${MONGO_PASSWORD}@mongo:27017/otjdb?authSource=admin
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
-      PASSWORD_ENCRYPTION_KEY: ${PASSWORD_ENCRYPTION_KEY}
-      JAVA_DEBUG: ${JAVA_DEBUG:-true}
+      # Defaulted in bootstrap.sh: podman-compose passes ${VAR:-default} through literally.
+      OTJ_DRIVER_LOG_LEVEL: ${OTJ_DRIVER_LOG_LEVEL}
     depends_on:
       mongo:
         condition: service_healthy

@@ -5,13 +5,12 @@ import com.anthropic.errors.RateLimitException;
 import com.anthropic.errors.UnauthorizedException;
 import com.anthropic.models.messages.MessageCreateParams;
 import com.anthropic.models.messages.Model;
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import com.anthropic.models.messages.StopReason;
+import com.anthropic.models.messages.StructuredMessage;
+import com.anthropic.models.messages.StructuredMessageCreateParams;
 import com.github.grepHammerspace.db.model.ActivityLog;
-import com.github.grepHammerspace.llm.exception.LlmAuthException;
+import com.github.grepHammerspace.db.model.ActivityRules;
 import com.github.grepHammerspace.llm.exception.LlmException;
-import com.github.grepHammerspace.llm.exception.LlmJsonParseException;
 import com.github.grepHammerspace.llm.exception.LlmRateLimitException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -23,12 +22,19 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.EnumMap;
 import java.util.List;
+import java.util.Map;
 
 @Singleton
 public class LlmServiceImpl implements LlmService {
     private static final Logger log = LoggerFactory.getLogger(LlmServiceImpl.class);
-    private static final ObjectMapper MAPPER = new ObjectMapper();
+
+    private static final Model MODEL = Model.CLAUDE_HAIKU_4_5;
+
+    // A ceiling, not a budget: output is billed per token generated, and a truncated response fails
+    // the parse outright.
+    private static final long MAX_TOKENS = 2048L;
 
     private final AnthropicClient client;
     private final String systemPrompt;
@@ -41,32 +47,31 @@ public class LlmServiceImpl implements LlmService {
 
     @Override
     public LlmResult parseActivities(String diff, String today, String userId, String learnerId) {
-
         String userMessage = "Today's date: " + today + "\n\nNew activity content to log:\n" + diff;
 
-        log.info("Sending request to LLM (model: {})", Model.CLAUDE_SONNET_4_6);
+        log.info("Sending request to LLM (model: {})", MODEL);
         log.debug("User message sent to LLM:\n{}", userMessage);
 
-        String responseText;
-        try {
-            MessageCreateParams params = MessageCreateParams.builder()
-                    .model(Model.CLAUDE_SONNET_4_6)
-                    .maxTokens(2048)
-                    .system(systemPrompt)
-                    .addUserMessage(userMessage)
-                    .build();
+        StructuredMessageCreateParams<ParsedActivities> params = MessageCreateParams.builder()
+                .model(MODEL)
+                .maxTokens(MAX_TOKENS)
+                .system(systemPrompt)
+                .serviceTier(MessageCreateParams.ServiceTier.AUTO)
+                .addUserMessage(userMessage)
+                .outputConfig(ParsedActivities.class)
+                .build();
 
-            responseText = client.messages().create(params).content().stream()
-                    .flatMap(block -> block.text().stream())
-                    .map(tb -> tb.text())
-                    .collect(java.util.stream.Collectors.joining());
+        long startedAt = System.nanoTime();
+        StructuredMessage<ParsedActivities> message;
+        try {
+            message = client.messages().create(params);
         } catch (UnauthorizedException e) {
             String msg = "Anthropic API authentication failed. " +
                     "Expected: a valid ANTHROPIC_API_KEY set in the environment. " +
                     "Got: " + e.getMessage() + ". " +
                     "Check that ANTHROPIC_API_KEY is set correctly and the key is active.";
             log.error(msg);
-            throw new LlmAuthException(msg, e);
+            throw new LlmException(msg, e);
         } catch (RateLimitException e) {
             String msg = "Anthropic API rate limit hit. " +
                     "The API rejected the request because too many requests were made in a short period. " +
@@ -78,66 +83,88 @@ public class LlmServiceImpl implements LlmService {
             log.error(msg, e);
             throw new LlmException(msg, e);
         }
+        long elapsedMs = (System.nanoTime() - startedAt) / 1_000_000;
 
-        log.debug("Raw LLM response:\n{}", responseText);
+        log.info("LLM call complete in {} ms (model: {}, {} in / {} out tokens)",
+                elapsedMs, MODEL, message.usage().inputTokens(), message.usage().outputTokens());
 
-        try {
-            return processResponse(responseText, userId, learnerId);
-        } catch (JsonProcessingException e) {
-            String msg = "The LLM returned a response that could not be parsed as JSON. " +
-                    "Expected: a JSON array of row objects. " +
-                    "Got a response that failed JSON parsing at: " + e.getMessage() + ". " +
-                    "Check llm_prompt.txt to ensure the model is instructed to return only raw JSON.";
+        if (message.stopReason().filter(StopReason.MAX_TOKENS::equals).isPresent()) {
+            String msg = "The LLM response was cut off at the " + MAX_TOKENS + "-token limit, " +
+                    "so the structured result is incomplete. " +
+                    "Expected: the submitted content to produce fewer activity rows than the limit allows. " +
+                    "Split the submission into smaller batches, or raise MAX_TOKENS in LlmServiceImpl.";
             log.error(msg);
-            throw new LlmJsonParseException(msg, e);
+            throw new LlmException(msg, null);
         }
+
+        ParsedActivities parsed = message.content().stream()
+                .flatMap(block -> block.text().stream())
+                .findFirst()
+                .map(block -> block.text())
+                .orElseThrow(() -> {
+                    String msg = "The LLM returned no content block to deserialise. " +
+                            "Expected: one structured text block matching ParsedActivities. " +
+                            "Got a response with " + message.content().size() + " block(s).";
+                    log.error(msg);
+                    return new LlmException(msg, null);
+                });
+
+        return toResult(parsed, userId, learnerId);
     }
 
-    /** Visible for testing: strips fences, parses the JSON array, and maps rows to ActivityLog/LlmParseError. */
-    LlmResult processResponse(String responseText, String userId, String learnerId) throws JsonProcessingException {
-        String cleaned = responseText.trim();
-        if (cleaned.startsWith("```")) {
-            cleaned = cleaned.substring(cleaned.indexOf('\n') + 1);
-            int fence = cleaned.lastIndexOf("```");
-            if (fence >= 0) cleaned = cleaned.substring(0, fence).trim();
-            log.debug("Stripped markdown fences. Cleaned response:\n{}", cleaned);
+    LlmResult toResult(ParsedActivities parsed, String userId, String learnerId) {
+        log.info("LLM returned {} entry/entries and {} error(s)",
+                parsed.entries().size(), parsed.errors().size());
+
+        List<ParsedActivities.ParseError> errors = new ArrayList<>();
+        Map<ParsedActivities.ErrorCode, Integer> reported = new EnumMap<>(ParsedActivities.ErrorCode.class);
+        for (ParsedActivities.ParseError error : parsed.errors()) {
+            log.warn("LLM could not parse input line — {}: {}", error.error(), error.raw());
+            errors.add(error);
+            reported.merge(error.error(), 1, Integer::sum);
         }
 
-        JsonNode array = MAPPER.readTree(cleaned);
-        log.info("LLM returned {} row(s)", array.size());
-
+        // The prompt forbids incomplete entries, but the model sometimes emits one alongside the
+        // error for the same line, and saving it leaves a near-duplicate once the user fixes it.
         List<ActivityLog> ok = new ArrayList<>();
-        List<LlmParseError> errors = new ArrayList<>();
-
-        for (int i = 0; i < array.size(); i++) {
-            JsonNode node = array.get(i);
-            if (node.has("error")) {
-                LlmParseError err = MAPPER.treeToValue(node, LlmParseError.class);
-                log.warn("LLM could not parse input line — {}: {}", err.error(), err.raw());
-                errors.add(err);
-            } else {
-                log.debug("  Row {}: {}", i + 1, node);
-                ok.add(toActivityLog(node, userId, learnerId));
+        for (ParsedActivities.Entry entry : parsed.entries()) {
+            log.debug("  Entry: {}", entry);
+            ActivityLog row = new ActivityLog(userId, learnerId, entry.comments(), entry.date(),
+                    entry.startTime(), entry.hours(), entry.minutes(), false, null);
+            ActivityRules.Violation violation = ActivityRules.check(row);
+            if (violation == null) {
+                ok.add(row);
+                continue;
+            }
+            ParsedActivities.ErrorCode code = codeFor(violation.kind());
+            log.warn("Dropped an incomplete LLM entry as {}", code);
+            // Errors aren't linked to entries, so only synthesise one the model didn't report.
+            if (reported.merge(code, -1, Integer::sum) < 0) {
+                errors.add(new ParsedActivities.ParseError(code, messageFor(code), entry.comments()));
             }
         }
 
         return new LlmResult(ok, errors);
     }
 
-    private ActivityLog toActivityLog(JsonNode node, String userId, String learnerId) {
-        String date = node.has("date") ? node.get("date").asText() : "";
-        String[] hoursMinutes = parseTimeSpent(node.has("time-spent") ? node.get("time-spent").asText("0:00") : "0:00");
-        String startTime = node.has("start-time") ? node.get("start-time").asText("") : "";
-        String comments = node.has("comments") ? node.get("comments").asText() : "";
-
-        return new ActivityLog(userId, learnerId, comments, "", date, startTime, 0,
-                Integer.parseInt(hoursMinutes[0]), Integer.parseInt(hoursMinutes[1]), false, null);
+    private static ParsedActivities.ErrorCode codeFor(ActivityRules.Kind kind) {
+        return switch (kind) {
+            case DATE -> ParsedActivities.ErrorCode.invalid_date;
+            case START_TIME -> ParsedActivities.ErrorCode.missing_start_time;
+            case WORKING_HOURS -> ParsedActivities.ErrorCode.outside_working_hours;
+            case DURATION -> ParsedActivities.ErrorCode.missing_duration;
+            case DESCRIPTION -> ParsedActivities.ErrorCode.missing_description;
+        };
     }
 
-    private static String[] parseTimeSpent(String timeSpent) {
-        String[] parts = timeSpent.split(":");
-        if (parts.length != 2) return new String[]{"0", "0"};
-        return parts;
+    private static String messageFor(ParsedActivities.ErrorCode code) {
+        return switch (code) {
+            case invalid_date -> "Could not work out a valid date";
+            case missing_start_time -> "No start time found in input";
+            case outside_working_hours -> "Start time is outside 09:00-18:00";
+            case missing_duration -> "No duration found in input";
+            case missing_description -> "No description found in input";
+        };
     }
 
     private static String loadPrompt() {

@@ -1,53 +1,134 @@
 package integration;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.classic.spi.IThrowableProxy;
+import ch.qos.logback.core.read.ListAppender;
 import com.github.grepHammerspace.ServerBootstrap;
+import com.github.grepHammerspace.SingleUser;
 import io.cucumber.java.After;
 import io.cucumber.java.Before;
 import org.glassfish.grizzly.http.server.HttpServer;
+import org.slf4j.LoggerFactory;
 import org.testcontainers.containers.MongoDBContainer;
 
 import java.io.IOException;
 import java.net.ServerSocket;
+import java.util.ArrayList;
+import java.util.List;
 
-/**
- * Cucumber lifecycle hooks that manage infrastructure for each scenario.
- *
- * <p>Before each scenario a fresh Grizzly server is started on a random available port and
- * wired via {@link TestAppComponent} / {@link TestAppModule}. After the scenario the server
- * is shut down. The MongoDB Testcontainer is shared across all scenarios in the suite — it is
- * started lazily on the first scenario and left running for the remainder of the test run.
- * Note that because the database is not wiped between scenarios, tests should not depend on
- * the collection being empty.
- */
+import static org.junit.jupiter.api.Assertions.fail;
+
+// The Mongo container is shared and never wiped between scenarios.
 public class ServerHooks {
     static final MongoDBContainer MONGO = new MongoDBContainer("mongo:8");
-    private HttpServer server;
+    static final String TEST_USER_ID = SingleUser.USER_ID;
 
-    /**
-     * Starts the MongoDB container if not already running, boots a Grizzly server on a random
-     * free port, and publishes {@code "baseUrl"} and {@code "db"} into {@link ScenarioContext}
-     * for use by step definitions.
-     */
+    // Distinctive on purpose: these can only appear in a log if something logged the real value.
+    static final String OA_USERNAME = "leaktest@example.invalid";
+    static final String OA_PASSWORD = "pw-DO-NOT-LOG-9f2a";
+    static final String OA_MFA_CODE = "919191";
+    static final List<String> SECRETS = List.of(OA_USERNAME, OA_PASSWORD, OA_MFA_CODE);
+
+    private HttpServer server;
+    private ListAppender<ILoggingEvent> logCapture;
+    private Level originalRootLevel;
+
     @Before
     public void start() throws IOException {
         if (!MONGO.isRunning()) MONGO.start();
 
-        int port;
-        try (ServerSocket s = new ServerSocket(0)) { port = s.getLocalPort(); }
+        startLogCapture();
 
-        TestAppModule module = new TestAppModule(MONGO.getConnectionString(), "test-user-id");
+        int port = freePort();
+
+        TestAppModule module = new TestAppModule(MONGO.getConnectionString());
         TestAppComponent component = DaggerTestAppComponent.builder()
             .testAppModule(module).build();
 
-        server = ServerBootstrap.start(port, component.otjServicesResource());
+        component.userRepository().ensureSingleUser();
+
+        server = ServerBootstrap.start(port, component.otjServicesResource(), component.accountResource());
+
         ScenarioContext.init();
         ScenarioContext.put("baseUrl", "http://localhost:" + port);
         ScenarioContext.put("db", component.mongoDatabase());
+        ScenarioContext.put("keycloakDriver", component.keycloakDriver());
+        ScenarioContext.put("azurePushDriver", component.azurePushDriver());
     }
 
-    /** Shuts down the Grizzly server after each scenario. */
+    private static int freePort() throws IOException {
+        try (ServerSocket s = new ServerSocket(0)) { return s.getLocalPort(); }
+    }
+
     @After
     public void stop() {
         if (server != null) server.shutdownNow();
+        try {
+            assertNothingLeaked();
+        } finally {
+            stopLogCapture();
+        }
+    }
+
+    // TRACE, not the configured level: this proves the code never builds the string, not just that
+    // the enabled lines are clean.
+    private void startLogCapture() {
+        ch.qos.logback.classic.Logger root =
+                (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(org.slf4j.Logger.ROOT_LOGGER_NAME);
+        originalRootLevel = root.getLevel();
+        root.setLevel(Level.TRACE);
+        logCapture = new ListAppender<>();
+        logCapture.start();
+        root.addAppender(logCapture);
+    }
+
+    private void stopLogCapture() {
+        ch.qos.logback.classic.Logger root =
+                (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(org.slf4j.Logger.ROOT_LOGGER_NAME);
+        if (logCapture != null) {
+            root.detachAppender(logCapture);
+            logCapture.stop();
+            logCapture = null;
+        }
+        root.setLevel(originalRootLevel);
+    }
+
+    // Checks message, arguments and the throwable chain: the drivers put URLs in exception
+    // messages.
+    private void assertNothingLeaked() {
+        if (logCapture == null) return;
+        List<String> offenders = new ArrayList<>();
+
+        for (ILoggingEvent event : List.copyOf(logCapture.list)) {
+            StringBuilder haystack = new StringBuilder(event.getFormattedMessage());
+            if (event.getArgumentArray() != null) {
+                for (Object argument : event.getArgumentArray()) {
+                    haystack.append(' ').append(String.valueOf(argument));
+                }
+            }
+            for (IThrowableProxy t = event.getThrowableProxy(); t != null; t = t.getCause()) {
+                haystack.append(' ').append(t.getClassName()).append(' ').append(t.getMessage());
+            }
+
+            String text = haystack.toString();
+            for (String secret : SECRETS) {
+                if (text.contains(secret)) {
+                    offenders.add(event.getLoggerName() + " [" + event.getLevel() + "] leaked "
+                            + describe(secret) + ": " + event.getFormattedMessage());
+                }
+            }
+        }
+
+        if (!offenders.isEmpty()) {
+            fail("Credentials reached the log:\n  " + String.join("\n  ", offenders));
+        }
+    }
+
+    // Names the secret without repeating it: this message ends up in CI output.
+    private static String describe(String secret) {
+        if (secret.equals(OA_USERNAME)) return "the OneAdvanced username";
+        if (secret.equals(OA_PASSWORD)) return "the OneAdvanced password";
+        return "the MFA code";
     }
 }

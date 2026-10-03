@@ -1,7 +1,6 @@
 { pkgs ? import (builtins.fetchTarball {
     url = "https://channels.nixos.org/nixos-25.05/nixexprs.tar.xz";
   }) {} }:
-
 pkgs.mkShell {
   buildInputs = with pkgs; [
     podman-compose
@@ -21,7 +20,7 @@ pkgs.mkShell {
       set +a
       echo "Loaded env from .env"
     else
-      echo "Warning: .env not found at $ENV_FILE"
+      echo "Warning: .env not found at $ENV_FILE (copy .env.example)"
     fi
 
     clean-mongo() {
@@ -32,9 +31,11 @@ pkgs.mkShell {
     export -f clean-mongo
 
     echo ""
-    echo "otj dev shell ready"
-    echo "  ./bootstrap.sh   start mongo + mongo-express"
-    echo "  clean-mongo      stop containers and wipe Mongo data"
+    echo "otj self-host shell ready"
+    echo "  ./bootstrap.sh --prod   build, start and serve on your tailnet (detached)"
+    echo "  ./bootstrap.sh          the same, in the foreground"
+    echo "  ./bootstrap.sh --stop   stop the stack (data kept)"
+    echo "  clean-mongo             stop and wipe Mongo data"
     echo ""
   '';
 }

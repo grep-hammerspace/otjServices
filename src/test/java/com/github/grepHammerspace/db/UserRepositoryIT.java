@@ -1,18 +1,17 @@
 package com.github.grepHammerspace.db;
 
-import com.github.grepHammerspace.crypto.PasswordCipher;
+import com.github.grepHammerspace.SingleUser;
 import com.github.grepHammerspace.db.model.User;
 import com.mongodb.client.MongoClients;
 import com.mongodb.client.MongoDatabase;
-import com.mongodb.client.model.Filters;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.testcontainers.containers.MongoDBContainer;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 class UserRepositoryIT {
-
     static final MongoDBContainer MONGO = new MongoDBContainer("mongo:8");
     static UserRepository repository;
     static MongoDatabase database;
@@ -21,61 +20,65 @@ class UserRepositoryIT {
     static void startMongo() {
         MONGO.start();
         database = MongoClients.create(MONGO.getConnectionString()).getDatabase("testdb");
-        PasswordCipher cipher = new PasswordCipher(testutil.TestKeys.PASSWORD_ENCRYPTION_KEY);
-        repository = new UserRepository(database, cipher);
+        repository = new UserRepository(database);
+    }
+
+    @BeforeEach
+    void emptyUsers() {
+        database.getCollection("users").deleteMany(new org.bson.Document());
     }
 
     @Test
-    void save_then_findByUserId_returnsUser() {
-        repository.save(new User("uid-1", "alice", "secret", "L001"));
+    void ensureSingleUser_createsTheAccountWithNoLearnerId() {
+        repository.ensureSingleUser();
 
-        User found = repository.findByUserId("uid-1");
+        User found = repository.findByUserId(SingleUser.USER_ID);
         assertNotNull(found);
-        assertEquals("alice", found.username());
-        assertEquals("secret", found.password());
-        assertEquals("L001", found.learnerId());
+        assertEquals(SingleUser.USERNAME, found.appUsername());
+        assertNull(found.learnerId());
+        assertNotNull(found.createdAt());
     }
 
     @Test
-    void save_twice_upsertsNotDuplicates() {
-        repository.save(new User("uid-2", "bob", "pass1", "L002"));
-        repository.save(new User("uid-2", "bob", "pass2", "L003"));
+    void ensureSingleUser_isIdempotent() {
+        repository.ensureSingleUser();
+        repository.ensureSingleUser();
 
-        User found = repository.findByUserId("uid-2");
-        assertNotNull(found);
-        assertEquals("pass2", found.password());
-        assertEquals("L003", found.learnerId());
+        assertEquals(1, database.getCollection("users").countDocuments());
+    }
 
-        long count = database.getCollection("users").countDocuments(Filters.eq("userId", "uid-2"));
-        assertEquals(1, count, "upsert should not create a duplicate document");
+    @Test
+    void ensureSingleUser_keepsALearnerIdAlreadySet() {
+        repository.ensureSingleUser();
+        repository.updateLearnerId(SingleUser.USER_ID, "L-KEEP");
+        User before = repository.findByUserId(SingleUser.USER_ID);
+
+        repository.ensureSingleUser();
+
+        User after = repository.findByUserId(SingleUser.USER_ID);
+        assertEquals("L-KEEP", after.learnerId());
+        assertEquals(before.createdAt(), after.createdAt());
     }
 
     @Test
     void findByUserId_unknownUser_returnsNull() {
-        assertNull(repository.findByUserId("uid-does-not-exist"));
+        assertNull(repository.findByUserId("no-such-user"));
     }
 
     @Test
-    void saveLastContent_then_getLastContent_returnsValue() {
-        repository.save(new User("uid-3", "carol", "p", "L003"));
-        repository.saveLastContent("uid-3", "my notes");
+    void updateLearnerId_returnsUpdatedUser() {
+        repository.ensureSingleUser();
 
-        assertEquals("my notes", repository.getLastContent("uid-3"));
+        User updated = repository.updateLearnerId(SingleUser.USER_ID, "L-NEW");
+
+        assertNotNull(updated);
+        assertEquals("L-NEW", updated.learnerId());
+        assertEquals(SingleUser.USERNAME, updated.appUsername());
     }
 
     @Test
-    void clearLastContent_removesField() {
-        repository.save(new User("uid-4", "dave", "p", "L004"));
-        repository.saveLastContent("uid-4", "some content");
-        repository.clearLastContent("uid-4");
-
-        assertNull(repository.getLastContent("uid-4"), "getLastContent should return null after clear");
-    }
-
-    @Test
-    void getLastContent_withNoContentSaved_returnsNull() {
-        repository.save(new User("uid-5", "eve", "p", "L005"));
-
-        assertNull(repository.getLastContent("uid-5"));
+    void updateLearnerId_unknownUser_returnsNullAndInsertsNothing() {
+        assertNull(repository.updateLearnerId("ghost", "L-NOPE"));
+        assertEquals(0, database.getCollection("users").countDocuments());
     }
 }

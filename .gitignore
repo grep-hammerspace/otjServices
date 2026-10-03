@@ -41,3 +41,7 @@ build/
 .idea/
 .mvn/
 .env
+.claude/*.tmp.*
+
+# master's CDK app; its untracked build output lingers after switching branches
+aws/

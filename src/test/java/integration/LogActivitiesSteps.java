@@ -14,15 +14,21 @@ public class LogActivitiesSteps {
     private static final MediaType JSON = MediaType.get("application/json");
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
-    @Given("a registered user with learnerId {string}")
-    public void registerUser(String learnerId) throws Exception {
-        String base = (String) ScenarioContext.get("baseUrl");
-        String body = "{\"username\":\"testuser\",\"password\":\"testpass\",\"learnerId\":\"" + learnerId + "\"}";
-        Request req = new Request.Builder()
-                .url(base + "/otj-services/register")
-                .post(RequestBody.create(body, JSON))
-                .build();
-        HTTP.newCall(req).execute().close();
+    // The hook has already created the account; the suite's Mongo isn't wiped between scenarios.
+    @Given("the account has learnerId {string}")
+    public void accountHasLearnerId(String learnerId) {
+        MongoDatabase db = (MongoDatabase) ScenarioContext.get("db");
+        db.getCollection("users").updateOne(
+                new org.bson.Document("userId", ServerHooks.TEST_USER_ID),
+                new org.bson.Document("$set", new org.bson.Document("learnerId", learnerId)));
+    }
+
+    @Given("the account has no learner ID")
+    public void accountHasNoLearnerId() {
+        MongoDatabase db = (MongoDatabase) ScenarioContext.get("db");
+        db.getCollection("users").updateOne(
+                new org.bson.Document("userId", ServerHooks.TEST_USER_ID),
+                new org.bson.Document("$unset", new org.bson.Document("learnerId", "")));
     }
 
     @Given("I have already logged {string}")
@@ -44,13 +50,13 @@ public class LogActivitiesSteps {
         ScenarioContext.put("lastResponseBody", responseBody);
     }
 
-    @And("there is {int} activity log in the database for user {string}")
-    public void checkActivityLogCount(int expectedCount, String userId) {
+    @And("there is/are {int} activity log(s) in the database")
+    public void checkActivityLogCount(int expectedCount) {
         MongoDatabase db = (MongoDatabase) ScenarioContext.get("db");
         long count = db.getCollection("activitylogs")
-                .countDocuments(new org.bson.Document("tailscaleUserId", userId));
+                .countDocuments(new org.bson.Document("tailscaleUserId", ServerHooks.TEST_USER_ID));
         assertEquals(expectedCount, count,
-                "Expected " + expectedCount + " activity log(s) for user " + userId + " but found " + count);
+                "Expected " + expectedCount + " activity log(s) but found " + count);
     }
 
     private void postLogActivities(String content) throws Exception {

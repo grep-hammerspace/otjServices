@@ -1,97 +1,34 @@
 package com.github.grepHammerspace.web;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.grepHammerspace.db.ActivityLogRepository;
-import com.github.grepHammerspace.db.model.ActivityLog;
-import okhttp3.*;
+import okhttp3.FormBody;
+import okhttp3.Response;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import javax.inject.Inject;
 import java.io.IOException;
-import java.util.ArrayList;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
 
-public class OtjDriver implements Driver {
-    private static final Logger log = LoggerFactory.getLogger(OtjDriver.class);
-    private static final MediaType JSON_TYPE = MediaType.get("application/json");
-
-    // Entry point for the OneAdvanced SSO/Keycloak discovery flow.
-    // Double-encoded redirectUri passes through two layers of redirect before landing
-    // back at education.oneadvanced.com after a successful login.
+public class OtjDriver extends OneAdvancedDriver {
+    // redirectUri is double-encoded: it passes through two redirects.
     private static final String DISCOVER_URL =
             "https://auth.identity.oneadvanced.com/auth/discover"
             + "?redirectUri=https%3A%2F%2Feducation.oneadvanced.com%2Fparseauth"
             + "%3FredirectUri%3Dhttps%253A%252F%252Feducation.oneadvanced.com%252F";
 
-    private static final String ACTIVITY_LOG_API =
-            "https://education.oneadvanced.com/api/cloud-education/v1/learner/%s/activity-log";
-
-    private static final String USER_AGENT =
-            "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:151.0) Gecko/20100101 Firefox/151.0";
-
-    private final OkHttpClient httpClient;
     private String mfaActionUrl;
-    private final ActivityLogRepository activityLogRepository;
-    private final ObjectMapper mapper;
 
     @Inject
     public OtjDriver(ActivityLogRepository activityLogRepository) {
-        this.activityLogRepository = activityLogRepository;
-        this.mapper = new ObjectMapper();
-
-        this.httpClient = new OkHttpClient.Builder()
-                .cookieJar(new InMemoryCookieJar())
-                .followRedirects(true)
-                .build();
+        super(activityLogRepository);
     }
 
-    private static final class InMemoryCookieJar implements CookieJar {
-        private final List<Cookie> store = new ArrayList<>();
-
-        @Override
-        public synchronized void saveFromResponse(HttpUrl url, List<Cookie> cookies) {
-            for (Cookie incoming : cookies) {
-                store.removeIf(existing ->
-                        existing.name().equals(incoming.name()) &&
-                        existing.domain().equals(incoming.domain()) &&
-                        existing.path().equals(incoming.path()));
-                store.add(incoming);
-            }
-        }
-
-        @Override
-        public synchronized List<Cookie> loadForRequest(HttpUrl url) {
-            return store.stream().filter(c -> c.matches(url)).toList();
-        }
-
-        synchronized List<String> cookieNames() {
-            return store.stream().map(Cookie::name).toList();
-        }
-    }
-
-    /**
-     * Performs the multi-step Keycloak OIDC login flow over plain HTTP, stopping at the
-     * TOTP/MFA page. The session cookies and the MFA form action URL are retained in
-     * this instance so the caller can supply the OTP code separately.
-     */
     @Override
     public PrepareResult prepare(String username, String password) throws IOException {
         boolean isEmail = username.contains("@");
 
-        Request initialRequest = new Request.Builder()
-                .url(DISCOVER_URL)
-                .header("User-Agent", USER_AGENT)
-                .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
-                .header("Accept-Language", "en-US,en;q=0.9")
-                .build();
-
-        Response resp = httpClient.newCall(initialRequest).execute();
+        Response resp = get(DISCOVER_URL);
         String currentUrl = resp.request().url().toString();
         String currentBody = resp.body().string();
         resp.close();
@@ -101,15 +38,17 @@ public class OtjDriver implements Driver {
 
             if (doc.selectFirst("input[name=otp]") != null) {
                 Element form = doc.selectFirst("form");
-                if (form == null) throw new IOException("MFA page has no form — URL: " + currentUrl);
+                if (form == null) throw new IOException("MFA page has no form — URL: " + SafeUrl.redact(currentUrl));
                 mfaActionUrl = form.absUrl("action");
-                log.info("MFA page reached after {} step(s), action={}", step - 1, mfaActionUrl);
-                return PrepareResult.mfaPushSent();
+                // Keycloak action URLs carry session_code / execution / tab_id, which identify
+                // this live authentication attempt.
+                log.info("MFA page reached after {} step(s), action={}", step - 1, SafeUrl.redact(mfaActionUrl));
+                return PrepareResult.otpRequired();
             }
 
             Element form = doc.selectFirst("form");
             if (form == null) {
-                throw new IOException("No form found at step " + step + " — URL: " + currentUrl);
+                throw new IOException("No form found at step " + step + " — URL: " + SafeUrl.redact(currentUrl));
             }
 
             FormBody.Builder formBody = new FormBody.Builder();
@@ -132,118 +71,31 @@ public class OtjDriver implements Driver {
             }
 
             String action = form.absUrl("action");
-            log.info("Step {} — POSTing to {}", step, action);
+            log.info("Step {} — POSTing to {}", step, SafeUrl.redact(action));
 
-            Request postRequest = new Request.Builder()
-                    .url(action)
-                    .header("User-Agent", USER_AGENT)
-                    .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
-                    .post(formBody.build())
-                    .build();
-
-            resp = httpClient.newCall(postRequest).execute();
+            resp = post(action, formBody.build());
             currentUrl = resp.request().url().toString();
             currentBody = resp.body().string();
             resp.close();
         }
 
-        throw new IOException("Did not reach MFA page after 5 steps — last URL: " + currentUrl);
+        throw new IOException("Did not reach MFA page after 5 steps — last URL: " + SafeUrl.redact(currentUrl));
     }
 
-    /**
-     * Completes login by POSTing the TOTP code to the stored MFA form action URL.
-     * Keycloak follows the OIDC callback chain and sets the final session cookies,
-     * which the cookie jar carries automatically into subsequent API calls.
-     */
     @Override
     public void completeMfa(String mfaToken) throws IOException {
         if (mfaActionUrl == null) {
             throw new IllegalStateException("No MFA action URL — call prepare first");
         }
 
-        FormBody body = new FormBody.Builder().add("otp", mfaToken).build();
-        Request request = new Request.Builder()
-                .url(mfaActionUrl)
-                .header("User-Agent", USER_AGENT)
-                .post(body)
-                .build();
-
-        try (Response response = httpClient.newCall(request).execute()) {
-            response.body().string(); // consume to complete the redirect chain
+        try (Response response = post(mfaActionUrl, new FormBody.Builder().add("otp", mfaToken).build())) {
+            response.body().string();
             String landingUrl = response.request().url().toString();
-            log.info("MFA submitted, landing URL: {}", landingUrl);
-            log.debug("Cookies after MFA: {}", ((InMemoryCookieJar) httpClient.cookieJar()).cookieNames());
+            log.info("MFA submitted, landing URL: {}", SafeUrl.redact(landingUrl));
+            log.debug("Cookies after MFA: {}", cookieJar.cookieNames());
             if (!landingUrl.startsWith("https://education.oneadvanced.com")) {
                 throw new IOException("MFA code rejected — still on login page. Use a fresh OTP and try again.");
             }
         }
-    }
-
-    /**
-     * Fetches all unposted OTJs from MongoDB and POSTs each one to the activity-log API.
-     * The httpClient already carries the authenticated session cookies from the login flow.
-     */
-    @Override
-    public OtjSubmitResult submitPendingOtjs(String userId) {
-        List<ActivityLog> pending = activityLogRepository.getUnpostedActivityLogsFor(userId);
-
-        if (pending.isEmpty()) {
-            log.info("No unposted OTJs found for user {}", userId);
-            return new OtjSubmitResult(List.of(), List.of());
-        }
-
-        String postUrl = String.format(ACTIVITY_LOG_API, pending.get(0).learnerId().strip());
-        log.info("Submitting {} pending OTJ(s) to {} for user {}", pending.size(), postUrl, userId);
-
-        List<String> posted = new ArrayList<>();
-        List<String> failed = new ArrayList<>();
-
-        for (ActivityLog activityLog : pending) {
-            try {
-                String json = mapper.writeValueAsString(buildPayload(activityLog));
-
-                Request request = new Request.Builder()
-                        .url(postUrl)
-                        .header("User-Agent", USER_AGENT)
-                        .post(RequestBody.create(json, JSON_TYPE))
-                        .build();
-
-                try (Response response = httpClient.newCall(request).execute()) {
-                    if (response.isSuccessful()) {
-                        activityLogRepository.markAsPosted(activityLog);
-                        posted.add(activityLog.id());
-                        log.info("Posted activity log {} ({})", activityLog.id(), activityLog.activityDate());
-                    } else {
-                        failed.add(activityLog.id());
-                        log.warn("Failed to post activity log {} — HTTP {} WWW-Authenticate: [{}] body: {}",
-                                activityLog.id(), response.code(),
-                                response.header("WWW-Authenticate"),
-                                response.body() != null ? response.body().string() : "null");
-                    }
-                }
-            } catch (Exception e) {
-                failed.add(activityLog.id());
-                log.error("Exception posting activity log {}: {}", activityLog.id(), e.getMessage());
-            }
-        }
-
-        log.info("Done — {}/{} posted, {} failed", posted.size(), pending.size(), failed.size());
-        return new OtjSubmitResult(posted, failed);
-    }
-
-    private Map<String, Object> buildPayload(ActivityLog log) {
-        Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("learnerId", log.learnerId().strip());
-        payload.put("activityImpact", log.activityImpact());
-        payload.put("unitId", "ef974f73-5d9d-447e-8652-379ba9535229");
-        payload.put("activityDate", log.activityDate().replace("/", "-"));
-        payload.put("activityTime", "T" + log.activityTime() + ":00");
-        // ActivityLog.activityType() is always 0 (never set by the LLM parser) — the
-        // real OneAdvanced activity-log API expects a fixed code here, confirmed working at 16.
-        payload.put("activityType", 16);
-        payload.put("hours", log.hours());
-        payload.put("minutes", String.format("%02d", log.minutes()));
-        OtjDriver.log.info("Posting payload: {}", payload);
-        return payload;
     }
 }
