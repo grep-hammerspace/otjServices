@@ -62,15 +62,17 @@ src/main/java/com/github/grepHammerspace/
   crypto/                 sealed OneAdvanced credentials (credential-encryption-spec.md)
   db/                     repositories (User, Session, ActivityLog, InviteCode)
     model/                  User, Session, ActivityLog, InviteCode documents
-  llm/                    LlmService/LlmServiceImpl, LlmResult / LlmParseError,
-                          exception/ hierarchy
-  stateStore/             UserStateStore — ConcurrentHashMap of userId → UserState,
+  llm/                    LlmService/LlmServiceImpl, LlmResult, ParsedActivities (the
+                          structured-output schema), LlmException / LlmRateLimitException
+  stateStore/             LoginSessions — ConcurrentHashMap of userId → LoginSession,
                           keeps a logged-in Driver alive between prepare and MFA calls
     LoginSession, LoginFlow  one parked login: which flow, its driver, its background
                              login future, and when it started (5 min TTL)
   bind/                   AppModule + AppComponent (main API),
                           AdminModule + AdminComponent (admin API)
   web/                    Driver interface + implementations
+    OneAdvancedDriver       base of both real drivers: cookie jar, browser-like requests, and
+                            the one submitPendingOtjs that posts the queued rows
     OtjDriver               direct OneAdvanced/Keycloak discover login
     AzureIdDriver           QMUL Azure AD federation path; bypasses discover with a
                             hand-built PKCE flow, then Microsoft Authenticator push
@@ -233,13 +235,16 @@ Notes:
   through the existing claim filter. `InviteCodeRepository.claim` is a single atomic
   `findOneAndUpdate` and deliberately knows nothing about revocation — leave it that way.
 - Login is a two-phase dance because MFA codes live ~30 s: `prepare*` opens and parks
-  the session in `UserStateStore`, then `submit-with-mfa` / `azure-id/complete`
+  the session in `LoginSessions`, then `submit-with-mfa` / `azure-id/complete`
   finishes it. The two halves are **not interchangeable** — a `LoginSession` records which
   `LoginFlow` it belongs to and the wrong complete gets a 409. Without that check an Azure
   session would be accepted by `submit-with-mfa`, and `AzureIdDriver.completeMfa` ignores the
   token it is given, so it would start a second Microsoft poll racing the first.
 - A parked session expires after `LoginSession.TTL` (5 min) and is dropped as soon as it is
-  spent. It holds live OneAdvanced cookies, so it must not outlive its use.
+  spent. It holds live OneAdvanced cookies, so it must not outlive its use. Replacing or dropping
+  one cancels its Azure poll, which stops only because the poll runs on an executor whose futures
+  interrupt: `CompletableFuture.cancel(true)` never interrupts, and the poll used to run on for
+  two minutes after its session was gone.
 - The learner ID used when posting is read from the **account at submit time**, not from the
   rows being posted, so a correction through `PATCH /auth/me` also rescues activities already
   queued. The value stored on each row is left alone as a record of what was intended when it

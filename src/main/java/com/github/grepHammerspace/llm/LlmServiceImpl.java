@@ -10,9 +10,7 @@ import com.anthropic.models.messages.StructuredMessage;
 import com.anthropic.models.messages.StructuredMessageCreateParams;
 import com.github.grepHammerspace.db.model.ActivityLog;
 import com.github.grepHammerspace.db.model.ActivityRules;
-import com.github.grepHammerspace.llm.exception.LlmAuthException;
 import com.github.grepHammerspace.llm.exception.LlmException;
-import com.github.grepHammerspace.llm.exception.LlmJsonParseException;
 import com.github.grepHammerspace.llm.exception.LlmRateLimitException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -73,7 +71,7 @@ public class LlmServiceImpl implements LlmService {
                     "Got: " + e.getMessage() + ". " +
                     "Check that ANTHROPIC_API_KEY is set correctly and the key is active.";
             log.error(msg);
-            throw new LlmAuthException(msg, e);
+            throw new LlmException(msg, e);
         } catch (RateLimitException e) {
             String msg = "Anthropic API rate limit hit. " +
                     "The API rejected the request because too many requests were made in a short period. " +
@@ -108,7 +106,7 @@ public class LlmServiceImpl implements LlmService {
                             "Expected: one structured text block matching ParsedActivities. " +
                             "Got a response with " + message.content().size() + " block(s).";
                     log.error(msg);
-                    return new LlmJsonParseException(msg, null);
+                    return new LlmException(msg, null);
                 });
 
         return toResult(parsed, userId, learnerId);
@@ -118,11 +116,11 @@ public class LlmServiceImpl implements LlmService {
         log.info("LLM returned {} entry/entries and {} error(s)",
                 parsed.entries().size(), parsed.errors().size());
 
-        List<LlmParseError> errors = new ArrayList<>();
+        List<ParsedActivities.ParseError> errors = new ArrayList<>();
         Map<ParsedActivities.ErrorCode, Integer> reported = new EnumMap<>(ParsedActivities.ErrorCode.class);
         for (ParsedActivities.ParseError error : parsed.errors()) {
             log.warn("LLM could not parse input line — {}: {}", error.error(), error.raw());
-            errors.add(new LlmParseError(error.error().name(), error.message(), error.raw()));
+            errors.add(error);
             reported.merge(error.error(), 1, Integer::sum);
         }
 
@@ -131,8 +129,8 @@ public class LlmServiceImpl implements LlmService {
         List<ActivityLog> ok = new ArrayList<>();
         for (ParsedActivities.Entry entry : parsed.entries()) {
             log.debug("  Entry: {}", entry);
-            ActivityLog row = new ActivityLog(userId, learnerId, entry.comments(), "", entry.date(),
-                    entry.startTime(), 0, entry.hours(), entry.minutes(), false, null);
+            ActivityLog row = new ActivityLog(userId, learnerId, entry.comments(), entry.date(),
+                    entry.startTime(), entry.hours(), entry.minutes(), false, null);
             ActivityRules.Violation violation = ActivityRules.check(row);
             if (violation == null) {
                 ok.add(row);
@@ -142,7 +140,7 @@ public class LlmServiceImpl implements LlmService {
             log.warn("Dropped an incomplete LLM entry as {}", code);
             // Errors aren't linked to entries, so only synthesise one the model didn't report.
             if (reported.merge(code, -1, Integer::sum) < 0) {
-                errors.add(new LlmParseError(code.name(), messageFor(code), entry.comments()));
+                errors.add(new ParsedActivities.ParseError(code, messageFor(code), entry.comments()));
             }
         }
 

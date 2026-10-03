@@ -137,10 +137,8 @@ public class PendingSteps {
                 .append("tailscaleUserId", userId)
                 .append("learnerId", "L999")
                 .append("activityImpact", SEEDED_IMPACT)
-                .append("unitId", "")
                 .append("activityDate", "2026/05/30")
                 .append("activityTime", "09:00")
-                .append("activityType", 0)
                 .append("hours", 1)
                 .append("minutes", 0)
                 .append("posted", posted);

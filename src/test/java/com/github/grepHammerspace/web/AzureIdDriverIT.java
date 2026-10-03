@@ -36,10 +36,8 @@ class AzureIdDriverIT {
                 TEST_USER_ID,
                 LEARNER_ID,
                 "Reviewed and refactored the Azure AD OTJ submission integration.",
-                "",
                 "2026/07/13",
                 "09:00",
-                0,
                 1,
                 30,
                 false,
@@ -60,9 +58,9 @@ class AzureIdDriverIT {
 
         System.out.println("[IT] Step 1/3 — starting login (PKCE -> Keycloak -> Azure AD)...");
         PrepareResult prepareResult = driver.prepare(USERNAME, PASSWORD);
-        System.out.println("[IT] prepare() returned status=" + prepareResult.status() + " — " + prepareResult.userMessage());
+        System.out.println("[IT] prepare() returned status=" + prepareResult.status());
 
-        if (prepareResult.requiresMfa()) {
+        if (prepareResult.status() != PrepareResult.Status.LOGGED_IN) {
             System.out.println("[IT] Step 2/3 — approve the push on Microsoft Authenticator now. "
                     + "Waiting up to 2 minutes for approval...");
             driver.completeMfa("");
@@ -71,20 +69,20 @@ class AzureIdDriverIT {
             System.out.println("[IT] Step 2/3 — existing Microsoft SSO session completed login, no MFA needed.");
         }
 
-        System.out.println("[IT] Cookies on oneadvanced.com after login: " + driver.cookieNamesFor("oneadvanced"));
+        System.out.println("[IT] Cookies on oneadvanced.com after login: " + driver.cookieJar.cookieNames());
 
         System.out.println("[IT] Step 3/3 — posting the 1 mocked activity log to the OneAdvanced activity-log API...");
         OtjSubmitResult result = driver.submitPendingOtjs(TEST_USER_ID, LEARNER_ID);
 
         System.out.println("[IT] submitPendingOtjs() result — posted=" + result.posted() + " failed=" + result.failed());
-        if (result.allPosted()) {
+        if (result.failed().isEmpty()) {
             System.out.println("[IT] SUCCESS — activity log posted and marked as posted in Mongo.");
-        } else if (result.allFailed()) {
+        } else if (result.posted().isEmpty()) {
             System.out.println("[IT] FAILED — see AzureIdDriver logs above for the HTTP status. "
                     + "This is expected to need a look on the very first live run per the submission plan's notes.");
         }
 
-        assertFalse(result.nothingToPost(), "expected the driver to attempt posting the seeded mocked activity log");
+        assertFalse(result.posted().isEmpty() && result.failed().isEmpty(), "expected the driver to attempt posting the seeded mocked activity log");
 
         List<ActivityLog> stillPending = repository.getUnpostedActivityLogsFor(TEST_USER_ID);
         System.out.println("[IT] Unposted logs remaining for user after run: " + stillPending.size());

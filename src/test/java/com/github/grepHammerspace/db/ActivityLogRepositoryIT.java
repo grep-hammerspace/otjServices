@@ -20,8 +20,8 @@ class ActivityLogRepositoryIT {
     }
 
     private static ActivityLog logFor(String userId, String impact) {
-        return new ActivityLog(userId, "learner-x", impact, "",
-                "2026/05/30", "09:00", 0, 1, 0, false, null);
+        return new ActivityLog(userId, "learner-x", impact,
+                "2026/05/30", "09:00", 1, 0, false, null);
     }
 
     @BeforeAll
@@ -35,8 +35,8 @@ class ActivityLogRepositoryIT {
     @Test
     void savedActivityLog_hasIdPopulatedOnRead() {
         ActivityLog saved = new ActivityLog(
-                "user-1", "learner-1", "Worked on assignment", "",
-                "2026/05/30", "10:00", 0, 2, 0, false, null
+                "user-1", "learner-1", "Worked on assignment",
+                "2026/05/30", "10:00", 2, 0, false, null
         );
         assertNull(saved.id(), "id should be null before saving");
 
@@ -55,8 +55,8 @@ class ActivityLogRepositoryIT {
     @Test
     void markAsPosted_updatesDocumentInPlace_notDuplicated() {
         ActivityLog saved = new ActivityLog(
-                "user-2", "learner-2", "Reading session", "",
-                "2026/05/30", "14:00", 0, 1, 30, false, null
+                "user-2", "learner-2", "Reading session",
+                "2026/05/30", "14:00", 1, 30, false, null
         );
         repository.saveActivityLog(saved);
 
@@ -164,8 +164,8 @@ class ActivityLogRepositoryIT {
 
     @Test
     void saveActivityLog_refusesARowWithNoStartTime() {
-        ActivityLog incomplete = new ActivityLog("user-17", "learner-x", "No time given", "",
-                "2026/05/30", "", 0, 1, 0, false, null);
+        ActivityLog incomplete = new ActivityLog("user-17", "learner-x", "No time given",
+                "2026/05/30", "", 1, 0, false, null);
 
         assertThrows(IllegalArgumentException.class, () -> repository.saveActivityLog(incomplete));
         assertTrue(repository.findUnpostedNewestFirst("user-17").isEmpty());
@@ -191,8 +191,6 @@ class ActivityLogRepositoryIT {
 
         assertEquals(before.tailscaleUserId(), updated.tailscaleUserId());
         assertEquals(before.learnerId(), updated.learnerId());
-        assertEquals(before.unitId(), updated.unitId());
-        assertEquals(before.activityType(), updated.activityType());
         assertFalse(updated.posted(), "an edit must never flip posted");
     }
 

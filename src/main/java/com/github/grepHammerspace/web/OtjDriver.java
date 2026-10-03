@@ -1,90 +1,34 @@
 package com.github.grepHammerspace.web;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.grepHammerspace.db.ActivityLogRepository;
-import com.github.grepHammerspace.db.model.ActivityLog;
-import okhttp3.*;
+import okhttp3.FormBody;
+import okhttp3.Response;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import javax.inject.Inject;
 import java.io.IOException;
-import java.util.ArrayList;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
 
-public class OtjDriver implements Driver {
-    private static final Logger log = LoggerFactory.getLogger(OtjDriver.class);
-    private static final MediaType JSON_TYPE = MediaType.get("application/json");
-
+public class OtjDriver extends OneAdvancedDriver {
     // redirectUri is double-encoded: it passes through two redirects.
     private static final String DISCOVER_URL =
             "https://auth.identity.oneadvanced.com/auth/discover"
             + "?redirectUri=https%3A%2F%2Feducation.oneadvanced.com%2Fparseauth"
             + "%3FredirectUri%3Dhttps%253A%252F%252Feducation.oneadvanced.com%252F";
 
-    private static final String ACTIVITY_LOG_API =
-            "https://education.oneadvanced.com/api/cloud-education/v1/learner/%s/activity-log";
-
-    private static final String USER_AGENT =
-            "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:151.0) Gecko/20100101 Firefox/151.0";
-
-    private final OkHttpClient httpClient;
     private String mfaActionUrl;
-    private final ActivityLogRepository activityLogRepository;
-    private final ObjectMapper mapper;
 
     @Inject
     public OtjDriver(ActivityLogRepository activityLogRepository) {
-        this.activityLogRepository = activityLogRepository;
-        this.mapper = new ObjectMapper();
-
-        this.httpClient = new OkHttpClient.Builder()
-                .cookieJar(new InMemoryCookieJar())
-                .followRedirects(true)
-                .build();
-    }
-
-    private static final class InMemoryCookieJar implements CookieJar {
-        private final List<Cookie> store = new ArrayList<>();
-
-        @Override
-        public synchronized void saveFromResponse(HttpUrl url, List<Cookie> cookies) {
-            for (Cookie incoming : cookies) {
-                store.removeIf(existing ->
-                        existing.name().equals(incoming.name()) &&
-                        existing.domain().equals(incoming.domain()) &&
-                        existing.path().equals(incoming.path()));
-                store.add(incoming);
-            }
-        }
-
-        @Override
-        public synchronized List<Cookie> loadForRequest(HttpUrl url) {
-            return store.stream().filter(c -> c.matches(url)).toList();
-        }
-
-        synchronized List<String> cookieNames() {
-            return store.stream().map(Cookie::name).toList();
-        }
+        super(activityLogRepository);
     }
 
     @Override
     public PrepareResult prepare(String username, String password) throws IOException {
         boolean isEmail = username.contains("@");
 
-        Request initialRequest = new Request.Builder()
-                .url(DISCOVER_URL)
-                .header("User-Agent", USER_AGENT)
-                .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
-                .header("Accept-Language", "en-US,en;q=0.9")
-                .build();
-
-        Response resp = httpClient.newCall(initialRequest).execute();
+        Response resp = get(DISCOVER_URL);
         String currentUrl = resp.request().url().toString();
         String currentBody = resp.body().string();
         resp.close();
@@ -99,7 +43,7 @@ public class OtjDriver implements Driver {
                 // Keycloak action URLs carry session_code / execution / tab_id, which identify
                 // this live authentication attempt.
                 log.info("MFA page reached after {} step(s), action={}", step - 1, SafeUrl.redact(mfaActionUrl));
-                return PrepareResult.mfaPushSent();
+                return PrepareResult.otpRequired();
             }
 
             Element form = doc.selectFirst("form");
@@ -129,14 +73,7 @@ public class OtjDriver implements Driver {
             String action = form.absUrl("action");
             log.info("Step {} — POSTing to {}", step, SafeUrl.redact(action));
 
-            Request postRequest = new Request.Builder()
-                    .url(action)
-                    .header("User-Agent", USER_AGENT)
-                    .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
-                    .post(formBody.build())
-                    .build();
-
-            resp = httpClient.newCall(postRequest).execute();
+            resp = post(action, formBody.build());
             currentUrl = resp.request().url().toString();
             currentBody = resp.body().string();
             resp.close();
@@ -151,95 +88,14 @@ public class OtjDriver implements Driver {
             throw new IllegalStateException("No MFA action URL — call prepare first");
         }
 
-        FormBody body = new FormBody.Builder().add("otp", mfaToken).build();
-        Request request = new Request.Builder()
-                .url(mfaActionUrl)
-                .header("User-Agent", USER_AGENT)
-                .post(body)
-                .build();
-
-        try (Response response = httpClient.newCall(request).execute()) {
+        try (Response response = post(mfaActionUrl, new FormBody.Builder().add("otp", mfaToken).build())) {
             response.body().string();
             String landingUrl = response.request().url().toString();
             log.info("MFA submitted, landing URL: {}", SafeUrl.redact(landingUrl));
-            log.debug("Cookies after MFA: {}", ((InMemoryCookieJar) httpClient.cookieJar()).cookieNames());
+            log.debug("Cookies after MFA: {}", cookieJar.cookieNames());
             if (!landingUrl.startsWith("https://education.oneadvanced.com")) {
                 throw new IOException("MFA code rejected — still on login page. Use a fresh OTP and try again.");
             }
         }
-    }
-
-    @Override
-    public OtjSubmitResult submitPendingOtjs(String userId, String learnerId) {
-        List<ActivityLog> pending = activityLogRepository.getUnpostedActivityLogsFor(userId);
-
-        if (pending.isEmpty()) {
-            log.info("No unposted OTJs found for user {}", userId);
-            return new OtjSubmitResult(List.of(), List.of());
-        }
-
-        String postUrl = String.format(ACTIVITY_LOG_API, learnerId.strip());
-        // The URL is withheld at INFO (the learner ID is in the path) and printed at DEBUG.
-        log.info("Submitting {} pending OTJ(s) for user {}", pending.size(), userId);
-        log.debug("POST target: {}", postUrl);
-
-        List<String> posted = new ArrayList<>();
-        List<String> failed = new ArrayList<>();
-
-        for (ActivityLog activityLog : pending) {
-            try {
-                String json = mapper.writeValueAsString(buildPayload(activityLog, learnerId));
-                log.debug("POST body for activity log {}: {}", activityLog.id(), json);
-
-                Request request = new Request.Builder()
-                        .url(postUrl)
-                        .header("User-Agent", USER_AGENT)
-                        .post(RequestBody.create(json, JSON_TYPE))
-                        .build();
-
-                try (Response response = httpClient.newCall(request).execute()) {
-                    if (response.isSuccessful()) {
-                        activityLogRepository.markAsPosted(activityLog);
-                        posted.add(activityLog.id());
-                        log.info("Posted activity log {} ({})", activityLog.id(), activityLog.activityDate());
-                    } else {
-                        failed.add(activityLog.id());
-                        // Status only at WARN: the WWW-Authenticate challenge and the response
-                        // body are upstream material that can carry session and account detail.
-                        log.warn("Failed to post activity log {} — HTTP {}", activityLog.id(), response.code());
-                        // DEBUG gets the body: OneAdvanced puts the rejection reason there.
-                        if (log.isDebugEnabled()) {
-                            log.debug("Rejected activity log {} — HTTP {}, WWW-Authenticate: [{}], body: {}",
-                                    activityLog.id(), response.code(),
-                                    response.header("WWW-Authenticate"),
-                                    response.body() == null ? "<none>" : response.body().string());
-                        }
-                    }
-                }
-            } catch (Exception e) {
-                failed.add(activityLog.id());
-                // Type only at ERROR: an OkHttp failure names the URL it was calling, and that
-                // URL has the learner ID in its path.
-                log.error("Exception posting activity log {}: {}", activityLog.id(), e.getClass().getSimpleName());
-                log.debug("Exception posting activity log {}", activityLog.id(), e);
-            }
-        }
-
-        log.info("Done — {}/{} posted, {} failed", posted.size(), pending.size(), failed.size());
-        return new OtjSubmitResult(posted, failed);
-    }
-
-    private Map<String, Object> buildPayload(ActivityLog activityLog, String learnerId) {
-        Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("learnerId", learnerId.strip());
-        payload.put("activityImpact", activityLog.activityImpact());
-        payload.put("unitId", "ef974f73-5d9d-447e-8652-379ba9535229");
-        payload.put("activityDate", activityLog.activityDate().replace("/", "-"));
-        payload.put("activityTime", "T" + activityLog.activityTime() + ":00");
-        // The API expects 16 here; activityType is never set by the parser.
-        payload.put("activityType", 16);
-        payload.put("hours", activityLog.hours());
-        payload.put("minutes", String.format("%02d", activityLog.minutes()));
-        return payload;
     }
 }

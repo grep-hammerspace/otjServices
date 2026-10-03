@@ -32,25 +32,15 @@ public class ActivityLogRepository {
     }
 
     public List<ActivityLog> getUnpostedActivityLogsFor(String userId){
-        Bson filter = Filters.and(
-            Filters.eq("tailscaleUserId", userId),
-            Filters.eq("posted", false)
-        );
-
-        return collection.find(filter)
-                .map(document -> fromDoc(document))
+        return collection.find(unposted(userId))
+                .map(this::fromDoc)
                 .into(new ArrayList<>());
     }
 
     // Separate from getUnpostedActivityLogsFor, whose order decides submission order: don't add a
     // sort there.
     public List<ActivityLog> findUnpostedNewestFirst(String userId) {
-        Bson filter = Filters.and(
-            Filters.eq("tailscaleUserId", userId),
-            Filters.eq("posted", false)
-        );
-
-        return collection.find(filter)
+        return collection.find(unposted(userId))
                 .sort(Sorts.descending("_id"))
                 .map(this::fromDoc)
                 .into(new ArrayList<>());
@@ -58,13 +48,7 @@ public class ActivityLogRepository {
 
     // Ownership is in the filter, so a caller can't learn that an id it doesn't own exists.
     public boolean deleteUnpostedById(String userId, ObjectId id) {
-        Document deleted = collection.findOneAndDelete(
-                Filters.and(
-                        Filters.eq("_id", id),
-                        Filters.eq("tailscaleUserId", userId),
-                        Filters.eq("posted", false)
-                )
-        );
+        Document deleted = collection.findOneAndDelete(Filters.and(Filters.eq("_id", id), unposted(userId)));
         if (deleted != null) {
             log.info("Deleted activity log {} for user {}", id.toHexString(), userId);
             return true;
@@ -80,10 +64,7 @@ public class ActivityLogRepository {
                                           int hours, int minutes, String activityImpact) {
         requireComplete(ActivityRules.check(activityDate, activityTime, hours, minutes, activityImpact));
         Document updated = collection.findOneAndUpdate(
-                Filters.and(
-                        Filters.eq("_id", id),
-                        Filters.eq("tailscaleUserId", userId),
-                        Filters.eq("posted", false)),
+                Filters.and(Filters.eq("_id", id), unposted(userId)),
                 Updates.combine(
                         Updates.set("activityDate", activityDate),
                         Updates.set("activityTime", activityTime),
@@ -106,10 +87,8 @@ public class ActivityLogRepository {
                 .append("tailscaleUserId", activityLog.tailscaleUserId())
                 .append("learnerId", activityLog.learnerId())
                 .append("activityImpact", activityLog.activityImpact())
-                .append("unitId", activityLog.unitId())
                 .append("activityDate", activityLog.activityDate())
                 .append("activityTime", activityLog.activityTime())
-                .append("activityType", activityLog.activityType())
                 .append("hours", activityLog.hours())
                 .append("minutes", activityLog.minutes())
                 .append("posted", activityLog.posted());
@@ -138,15 +117,17 @@ public class ActivityLogRepository {
         }
     }
 
+    private static Bson unposted(String userId) {
+        return Filters.and(Filters.eq("tailscaleUserId", userId), Filters.eq("posted", false));
+    }
+
     private ActivityLog fromDoc(Document doc) {
         return new ActivityLog(
                 doc.getString("tailscaleUserId"),
                 doc.getString("learnerId"),
                 doc.getString("activityImpact"),
-                doc.getString("unitId"),
                 doc.getString("activityDate"),
                 doc.getString("activityTime"),
-                doc.getInteger("activityType"),
                 doc.getInteger("hours"),
                 doc.getInteger("minutes"),
                 doc.getBoolean("posted"),

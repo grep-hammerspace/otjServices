@@ -5,10 +5,10 @@ import com.github.grepHammerspace.crypto.CredentialKeyRing;
 import com.github.grepHammerspace.db.model.ActivityLog;
 import com.github.grepHammerspace.llm.LlmResult;
 import com.github.grepHammerspace.llm.LlmService;
-import com.github.grepHammerspace.stateStore.UserStateStore;
 import com.github.grepHammerspace.web.AzurePush;
 import com.github.grepHammerspace.web.Driver;
 import com.github.grepHammerspace.web.Keycloak;
+import com.github.grepHammerspace.web.PrepareResult;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
 import com.mongodb.client.MongoDatabase;
@@ -27,9 +27,6 @@ public class TestAppModule {
     public TestAppModule(String mongoUri) {
         this.mongoUri = mongoUri;
     }
-
-    @Provides @Singleton
-    UserStateStore provideUserStateStore() { return new UserStateStore(); }
 
     @Provides @Singleton
     AdminAllowlist provideAdminAllowlist() { return AdminAllowlist.parse(ServerHooks.ADMIN_LOGIN); }
@@ -52,7 +49,7 @@ public class TestAppModule {
         return (diff, today, userId, learnerId) -> {
             List<ActivityLog> ok = Arrays.stream(diff.split("\n"))
                     .filter(line -> !line.isBlank())
-                    .map(line -> new ActivityLog(userId, learnerId, line.trim(), "", today.replace('-', '/'), "10:00", 0, 1, 0, false, null))
+                    .map(line -> new ActivityLog(userId, learnerId, line.trim(), today.replace('-', '/'), "10:00", 1, 0, false, null))
                     .collect(Collectors.toList());
             return new LlmResult(ok, List.of());
         };
@@ -67,8 +64,8 @@ public class TestAppModule {
     Driver provideAzurePushDriver(@AzurePush FakeDriver fake) { return fake; }
 
     @Provides @Singleton @Keycloak
-    FakeDriver provideKeycloakFake() { return new FakeDriver(); }
+    FakeDriver provideKeycloakFake() { return new FakeDriver(PrepareResult.otpRequired()); }
 
     @Provides @Singleton @AzurePush
-    FakeDriver provideAzurePushFake() { return new FakeDriver(); }
+    FakeDriver provideAzurePushFake() { return new FakeDriver(PrepareResult.pushSent(null)); }
 }

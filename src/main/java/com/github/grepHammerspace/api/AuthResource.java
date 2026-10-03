@@ -44,8 +44,9 @@ public class AuthResource {
             "$2a$12$KmAXjDu8YKcsMbZIRfgItOfwgykh/XjK3U3DiLkff2tssjtqNtSdm";
 
     /** One message for invalid, used and expired codes alike — never leak which it was. */
-    private static final String INVITE_REJECTED = "{\"error\": \"Invalid, used or expired invite code\"}";
-    private static final String CREDENTIALS_REJECTED = "{\"error\": \"Invalid username or password\"}";
+    private static final ApiError INVITE_REJECTED = new ApiError("Invalid, used or expired invite code");
+    private static final ApiError CREDENTIALS_REJECTED = new ApiError("Invalid username or password");
+    private static final ApiError USERNAME_TAKEN = new ApiError("That username is already taken");
 
     // Successes count too: a flood of valid logins is still a flood.
     private static final int LOGIN_LIMIT = 10;
@@ -91,7 +92,7 @@ public class AuthResource {
         if (!userRepository.insert(user)) {
             log.info("Signup rejected — username {} is already taken", username);
             return Response.status(Response.Status.CONFLICT)
-                    .entity("{\"error\": \"That username is already taken\"}").build();
+                    .entity(USERNAME_TAKEN).build();
         }
 
         log.info("Signed up user {} with username {}", userId, username);
