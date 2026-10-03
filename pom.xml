@@ -28,12 +28,6 @@
         </dependency>
 
         <dependency>
-            <groupId>at.favre.lib</groupId>
-            <artifactId>bcrypt</artifactId>
-            <version>0.10.2</version>
-        </dependency>
-
-        <dependency>
             <groupId>org.glassfish.jersey.containers</groupId>
             <artifactId>jersey-container-grizzly2-servlet</artifactId>
             <version>3.1.9</version>
@@ -186,7 +180,7 @@
                                 </transformer>
                                 <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
                             </transformers>
-                            <!-- Signed dependencies (at.favre.lib:bcrypt/bytes) carry META-INF
+                            <!-- Signed dependencies carry META-INF
                                  signature files whose digests no longer match once shaded, which
                                  makes the JVM reject the uber-jar with a SecurityException. -->
                             <filters>

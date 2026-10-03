@@ -10,10 +10,9 @@ public class Main {
 
     public static void main(String[] args) throws Exception {
         AppComponent component = DaggerAppComponent.create();
+        component.userRepository().ensureSingleUser();
 
-        ServerBootstrap.start(8945, component.otjServicesResource(), component.authResource(),
-                component.accountResource(), component.cryptoResource(),
-                component.authenticationFilter());
+        ServerBootstrap.start(8945, component.otjServicesResource(), component.accountResource());
 
         log.info("Server started at http://0.0.0.0:8945");
         Thread.currentThread().join();

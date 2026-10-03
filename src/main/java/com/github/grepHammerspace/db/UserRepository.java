@@ -1,15 +1,15 @@
 package com.github.grepHammerspace.db;
 
+import com.github.grepHammerspace.SingleUser;
 import com.github.grepHammerspace.db.model.User;
-import com.mongodb.MongoWriteException;
 import com.mongodb.client.MongoCollection;
 import com.mongodb.client.MongoDatabase;
 import com.mongodb.client.model.Filters;
 import com.mongodb.client.model.FindOneAndUpdateOptions;
 import com.mongodb.client.model.IndexOptions;
 import com.mongodb.client.model.Indexes;
-import com.mongodb.client.model.ReplaceOptions;
 import com.mongodb.client.model.ReturnDocument;
+import com.mongodb.client.model.UpdateOptions;
 import com.mongodb.client.model.Updates;
 import org.bson.Document;
 import org.slf4j.Logger;
@@ -28,21 +28,17 @@ public class UserRepository {
     @Inject
     public UserRepository(MongoDatabase database) {
         this.collection = database.getCollection("users");
-        collection.createIndex(Indexes.ascending("appUsername"), new IndexOptions().unique(true));
+        collection.createIndex(Indexes.ascending("userId"), new IndexOptions().unique(true));
     }
 
-    public boolean insert(User user) {
-        try {
-            collection.insertOne(toDocument(user));
-            log.info("Created user {}", user.userId());
-            return true;
-        } catch (MongoWriteException e) {
-            if (e.getError().getCategory() == com.mongodb.ErrorCategory.DUPLICATE_KEY) {
-                log.info("Rejected duplicate appUsername for new user");
-                return false;
-            }
-            throw e;
-        }
+    // $setOnInsert only, so a restart never clobbers the learner ID set through PATCH /auth/me.
+    public void ensureSingleUser() {
+        collection.updateOne(
+                Filters.eq("userId", SingleUser.USER_ID),
+                Updates.setOnInsert(new Document()
+                        .append("appUsername", SingleUser.USERNAME)
+                        .append("createdAt", new Date())),
+                new UpdateOptions().upsert(true));
     }
 
     public User findByUserId(String userId) {
@@ -65,26 +61,12 @@ public class UserRepository {
         return fromDocument(updated);
     }
 
-    public User findByAppUsername(String appUsername) {
-        return fromDocument(collection.find(Filters.eq("appUsername", appUsername)).first());
-    }
-
-    private static Document toDocument(User user) {
-        return new Document()
-                .append("userId", user.userId())
-                .append("appUsername", user.appUsername())
-                .append("appPasswordHash", user.appPasswordHash())
-                .append("learnerId", user.learnerId())
-                .append("createdAt", user.createdAt() == null ? null : Date.from(user.createdAt()));
-    }
-
     private static User fromDocument(Document doc) {
         if (doc == null) return null;
         Date createdAt = doc.getDate("createdAt");
         return new User(
                 doc.getString("userId"),
                 doc.getString("appUsername"),
-                doc.getString("appPasswordHash"),
                 doc.getString("learnerId"),
                 createdAt == null ? null : createdAt.toInstant()
         );
