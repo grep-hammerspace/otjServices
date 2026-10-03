@@ -126,7 +126,7 @@ public class PendingSteps {
         assertNotNull(doc, "the seeded row should still be there");
         assertEquals(SEEDED_IMPACT, doc.getString("activityImpact"),
                 "a miss must leave the row alone, not partially write it");
-        assertEquals("2026/05/30", doc.getString("activityDate"));
+        assertEquals("2026/05/29", doc.getString("activityDate"));
     }
 
     private static final String SEEDED_IMPACT = "Seeded row";
@@ -137,7 +137,7 @@ public class PendingSteps {
                 .append("tailscaleUserId", userId)
                 .append("learnerId", "L999")
                 .append("activityImpact", SEEDED_IMPACT)
-                .append("activityDate", "2026/05/30")
+                .append("activityDate", "2026/05/29")
                 .append("activityTime", "09:00")
                 .append("hours", 1)
                 .append("minutes", 0)

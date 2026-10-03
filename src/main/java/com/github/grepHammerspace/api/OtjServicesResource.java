@@ -19,6 +19,7 @@ import com.github.grepHammerspace.crypto.SealedCredentialsException;
 import com.github.grepHammerspace.db.ActivityLogRepository;
 import com.github.grepHammerspace.db.UserRepository;
 import com.github.grepHammerspace.db.model.ActivityLog;
+import com.github.grepHammerspace.db.model.ActivityRules;
 import com.github.grepHammerspace.db.model.User;
 import com.github.grepHammerspace.llm.LlmResult;
 import com.github.grepHammerspace.llm.LlmService;
@@ -93,6 +94,8 @@ public class OtjServicesResource {
             "No account found for this session. Sign up again.");
     private static final ApiError CONTENT_MISSING = new ApiError(
             "The 'content' field is missing or empty.");
+    private static final ApiError ENTRY_TOO_LONG = new ApiError(
+            "Each entry must be " + ActivityRules.MAX_IMPACT_CHARS + " characters or fewer.");
     private static final ApiError QUOTA_EXHAUSTED = new ApiError(
             "Daily limit of " + LlmQuotaService.DAILY_LIMIT
                     + " AI requests reached. It resets at midnight UTC.");
@@ -146,6 +149,9 @@ public class OtjServicesResource {
         String content = body == null || body.content() == null ? "" : body.content().strip();
         if (content.isEmpty()) {
             return error(Response.Status.BAD_REQUEST, CONTENT_MISSING);
+        }
+        if (content.lines().anyMatch(line -> line.strip().length() > ActivityRules.MAX_IMPACT_CHARS)) {
+            return error(Response.Status.BAD_REQUEST, ENTRY_TOO_LONG);
         }
 
         User user = userRepository.findByUserId(userId);

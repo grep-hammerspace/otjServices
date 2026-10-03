@@ -3,6 +3,7 @@ package com.github.grepHammerspace.web;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.grepHammerspace.db.ActivityLogRepository;
 import com.github.grepHammerspace.db.model.ActivityLog;
+import com.github.grepHammerspace.db.model.ActivityRules;
 import okhttp3.Cookie;
 import okhttp3.CookieJar;
 import okhttp3.HttpUrl;
@@ -63,6 +64,13 @@ abstract class OneAdvancedDriver implements Driver {
         List<String> failed = new ArrayList<>();
 
         for (ActivityLog activityLog : pending) {
+            // Rows stored before a rule existed are held back until they are edited to pass it.
+            ActivityRules.Violation violation = ActivityRules.check(activityLog);
+            if (violation != null) {
+                failed.add(activityLog.id());
+                log.warn("Not posting activity log {} — breaks the {} rule", activityLog.id(), violation.kind());
+                continue;
+            }
             try {
                 String json = mapper.writeValueAsString(buildPayload(activityLog, learnerId));
 

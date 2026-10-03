@@ -225,11 +225,14 @@ Notes:
   check after the read, so unknown / someone else's / already-posted all give the same 404 as
   the delete endpoint. Its rules are hand-written rather than with `@Valid`, because only an
   `{"error": "..."}` body reaches the mobile user as a real message.
-- **A row is stored only when complete**: date, start time inside 09:00–18:00, a non-zero
-  duration and a description, all defined once in `db/model/ActivityRules`. The LLM path drops
-  an incomplete entry as a parse error, PUT answers 400, and `ActivityLogRepository` throws as
-  the backstop. There is no "no start time" row any more: one used to be saved beside the
-  model's warning, and fixing it in the app left a near-duplicate.
+- **A row is stored only when complete**: a past weekday, a start time inside 09:00–18:00, a
+  non-zero duration and a description of at most 500 characters, all defined once in
+  `db/model/ActivityRules`. The LLM path drops an incomplete entry as a parse error, PUT answers
+  400, `ActivityLogRepository` throws as the backstop, and `OneAdvancedDriver` won't post a row
+  that breaks a rule (one stored before the rule existed). `log-activities` also refuses any line
+  over 500 characters, before the quota is spent. There is no "no start time" row any more: one
+  used to be saved beside the model's warning, and fixing it in the app left a near-duplicate.
+  Test fixtures need weekday dates; the suite must pass when run at a weekend.
 - Revocation sets `revokedAt` *and* pulls `expiresAt` back to now, so a revoked code dies
   through the existing claim filter. `InviteCodeRepository.claim` is a single atomic
   `findOneAndUpdate` and deliberately knows nothing about revocation — leave it that way.

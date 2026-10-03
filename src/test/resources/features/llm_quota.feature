@@ -34,3 +34,9 @@ Feature: Daily LLM quota
     Given the test user has used 10 LLM calls today
     When I POST "/otj-services/log-activities" with content ""
     Then the response status is 400
+
+  Scenario: An over-long entry is rejected without spending quota
+    Given the test user has used 10 LLM calls today
+    When I POST "/otj-services/log-activities" with one entry of 501 characters
+    Then the response status is 400
+    And the response body contains "500 characters"

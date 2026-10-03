@@ -47,6 +47,11 @@ public class LogActivitiesSteps {
         ScenarioContext.put("lastResponseBody", responseBody);
     }
 
+    @When("I POST {string} with one entry of {int} characters")
+    public void postEntryOfLength(String path, int length) throws Exception {
+        postLogActivitiesTo(path, "Worked 1 hour from 10:00 on " + "x".repeat(length - 28));
+    }
+
     @And("there is/are {int} activity log(s) in the database for user {string}")
     public void checkActivityLogCount(int expectedCount, String userId) {
         MongoDatabase db = (MongoDatabase) ScenarioContext.get("db");
