@@ -9,6 +9,17 @@ Feature: Log activities via LLM
     Then the response status is 400
     And the response body contains "content"
 
+  Scenario: An entry of exactly 500 characters is accepted
+    When I POST "/otj-services/log-activities" with one entry of 500 characters
+    Then the response status is 200
+    And there is 1 activity log in the database
+
+  Scenario: One over-long entry rejects the whole request
+    When I POST "/otj-services/log-activities" with one entry of 501 characters
+    Then the response status is 400
+    And the response body contains "500 characters"
+    And there are 0 activity logs in the database
+
   Scenario: Valid content returns 200 with rows saved to MongoDB
     When I POST "/otj-services/log-activities" with content "Worked 2 hours on assignment from 10:00"
     Then the response status is 200
