@@ -1,5 +1,6 @@
 package com.github.grepHammerspace;
 
+import com.github.grepHammerspace.api.CorsFilter;
 import com.github.grepHammerspace.bind.AppComponent;
 import com.github.grepHammerspace.bind.DaggerAppComponent;
 import org.slf4j.Logger;
@@ -12,7 +13,8 @@ public class Main {
         AppComponent component = DaggerAppComponent.create();
         component.userRepository().ensureSingleUser();
 
-        ServerBootstrap.start(8945, component.otjServicesResource(), component.accountResource());
+        ServerBootstrap.start(8945, component.otjServicesResource(), component.accountResource(),
+                new CorsFilter());
 
         log.info("Server started at http://0.0.0.0:8945");
         Thread.currentThread().join();
