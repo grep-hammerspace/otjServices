@@ -5,6 +5,7 @@ import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.classic.spi.IThrowableProxy;
 import ch.qos.logback.core.read.ListAppender;
 import com.github.grepHammerspace.ServerBootstrap;
+import com.github.grepHammerspace.api.CorsFilter;
 import io.cucumber.java.After;
 import io.cucumber.java.Before;
 import org.glassfish.grizzly.http.server.HttpServer;
@@ -69,7 +70,8 @@ public class ServerHooks {
         String authToken = component.sessionTokenService().issue(TEST_USER_ID);
 
         server = ServerBootstrap.start(port, component.otjServicesResource(), component.authResource(),
-            component.accountResource(), component.cryptoResource(), component.authenticationFilter());
+            component.accountResource(), component.cryptoResource(), component.authenticationFilter(),
+            new CorsFilter());
 
         adminServer = ServerBootstrap.start(adminPort, component.adminInviteResource(),
             component.adminIdentityFilter());
