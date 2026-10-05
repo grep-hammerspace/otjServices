@@ -49,6 +49,7 @@ src/main/java/com/github/grepHammerspace/
     OtjServicesResource     /otj-services — all automation endpoints (@Authenticated)
     HealthResource          /health
     CryptoResource          /otj-services/crypto/public-key, the key to seal credentials to
+    CorsFilter              lets the app's web build (a PWA on Vercel) call from a browser
     dto/                    request/response records
   admin/                  the SECOND server — see "Two processes" below
     AdminMain.java          entry point, port 8946
@@ -349,6 +350,19 @@ on the prod box):
 
 ## Conventions and gotchas
 
+- **CORS is for the app's web build only, and only for exact origins.** `api/CorsFilter` lists the
+  PWA's production and preview addresses on Vercel plus `expo start --web` in `ALLOWED_ORIGINS`.
+  Adding an origin means a code change and a deploy, on purpose. Never put a pattern there: anyone
+  can deploy to `*.vercel.app`. Things to preserve:
+  - It is **`@PreMatching`**, so a preflight is answered before `AuthenticationFilter`. Browsers
+    send `OPTIONS` without the `Authorization` header, and a 401 there blocks the real call.
+  - The response half stamps **every** response, 401s included. The app has to be able to read a
+    401 to notice an expired session; without the header, the browser reports a network error.
+  - No `Allow-Credentials`: there are no cookies, and the bearer token is the only credential.
+  - Responses HAProxy builds itself (its 429s and 413) carry no CORS headers, so a browser sees them
+    as network errors. That is acceptable for the PWA; don't go copying the allowlist into HAProxy
+    for it.
+  - The admin server doesn't register it. Nothing calls that from a browser.
 - **Login is rate limited per username**, 10 attempts per 15 minutes, via `auth/RateLimiter` — an
   in-memory sliding window, correct because there is exactly one app instance. Things to preserve:
   - The check sits **above `findByAppUsername`**, so an unknown username is limited exactly like a
