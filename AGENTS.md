@@ -93,6 +93,13 @@ differences:
   only, so `tailscale serve` is the only way in. Publishing `8945` wider, or adding
   `tailscale funnel`, hands the owner's OneAdvanced account to whoever finds it. `deploy/README.md`
   tells owners who share a tailnet to restrict it with ACLs.
+- **CORS widens that boundary to three web origins, and no further.** `api/CorsFilter` (shared
+  with `master`) lets the app's web build, a PWA on Vercel, call this server from a browser on the
+  tailnet. With no auth here, any page served from an origin in `ALLOWED_ORIGINS` can drive the
+  server from such a browser, so that set is part of the trust boundary: exact origins only, never
+  a pattern (anyone can deploy to `*.vercel.app`), and adding one is a decision, not a convenience.
+  It is `@PreMatching`, and the response half stamps error responses too, so the app can read
+  them.
 - **Credentials are not sealed here.** Sealing exists on `master` because Cloudflare terminates
   TLS in front of it. Here TLS ends at `tailscale serve` on the owner's own machine. Sealing also
   couldn't work: the store app pins the identity key paired with the hosted seed. The app skips

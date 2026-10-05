@@ -6,6 +6,7 @@ import ch.qos.logback.classic.spi.IThrowableProxy;
 import ch.qos.logback.core.read.ListAppender;
 import com.github.grepHammerspace.ServerBootstrap;
 import com.github.grepHammerspace.SingleUser;
+import com.github.grepHammerspace.api.CorsFilter;
 import io.cucumber.java.After;
 import io.cucumber.java.Before;
 import org.glassfish.grizzly.http.server.HttpServer;
@@ -48,7 +49,8 @@ public class ServerHooks {
 
         component.userRepository().ensureSingleUser();
 
-        server = ServerBootstrap.start(port, component.otjServicesResource(), component.accountResource());
+        server = ServerBootstrap.start(port, component.otjServicesResource(), component.accountResource(),
+            new CorsFilter());
 
         ScenarioContext.init();
         ScenarioContext.put("baseUrl", "http://localhost:" + port);
