@@ -31,6 +31,7 @@ import com.github.grepHammerspace.stateStore.LoginSessions;
 import com.github.grepHammerspace.web.AzurePush;
 import com.github.grepHammerspace.web.Driver;
 import com.github.grepHammerspace.web.Keycloak;
+import com.github.grepHammerspace.web.LoginChainException;
 import com.github.grepHammerspace.web.OtjSubmitResult;
 import com.github.grepHammerspace.web.PrepareResult;
 import jakarta.ws.rs.*;
@@ -268,7 +269,7 @@ public class OtjServicesResource {
         try {
             session.driver().completeMfa(body.mfaCode());
         } catch (IllegalStateException | IOException e) {
-            log.warn("MFA completion failed for user {} — {}", userId, e.getClass().getSimpleName());
+            log.warn("MFA completion failed for user {} — {}", userId, failureReason(e));
             return error(Response.Status.BAD_REQUEST, MFA_REJECTED);
         }
 
@@ -312,8 +313,7 @@ public class OtjServicesResource {
         try {
             result = driver.prepare(body.username().strip(), body.password());
         } catch (IOException | RuntimeException e) {
-            // Type only. The message is the leak channel.
-            log.warn("Prepare failed for user {} on {} — {}", userId, flow, e.getClass().getSimpleName());
+            log.warn("Prepare failed for user {} on {} — {}", userId, flow, failureReason(e));
             return error(Response.Status.UNAUTHORIZED, LOGIN_FAILED);
         }
 
@@ -346,8 +346,7 @@ public class OtjServicesResource {
         } catch (TimeoutException e) {
             return Response.status(408).entity(MFA_TIMED_OUT).build();
         } catch (ExecutionException e) {
-            log.warn("Azure ID complete failed for user {} — {}", userId,
-                    e.getCause() == null ? "unknown" : e.getCause().getClass().getSimpleName());
+            log.warn("Azure ID complete failed for user {} — {}", userId, failureReason(e.getCause()));
             return error(Response.Status.BAD_REQUEST, LOGIN_FAILED);
         } catch (CancellationException e) {
             return error(Response.Status.CONFLICT, NO_SESSION);
@@ -406,6 +405,16 @@ public class OtjServicesResource {
 
     private static ApiError invalidId(String id) {
         return new ApiError("'" + id + "' is not a valid activity id.");
+    }
+
+    // For log lines only, never a response body. A LoginChainException's message is built from
+    // redacted URLs and Microsoft's page ids, so it's logged; any other message is the leak channel,
+    // so only its type is.
+    private static String failureReason(Throwable e) {
+        if (e == null) return "unknown";
+        return e instanceof LoginChainException
+                ? e.getClass().getSimpleName() + ": " + e.getMessage()
+                : e.getClass().getSimpleName();
     }
 
     private static Response error(Response.Status status, ApiError error) {

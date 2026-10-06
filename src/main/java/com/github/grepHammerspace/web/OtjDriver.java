@@ -38,7 +38,7 @@ public class OtjDriver extends OneAdvancedDriver {
 
             if (doc.selectFirst("input[name=otp]") != null) {
                 Element form = doc.selectFirst("form");
-                if (form == null) throw new IOException("MFA page has no form — URL: " + SafeUrl.redact(currentUrl));
+                if (form == null) throw new LoginChainException("MFA page has no form — URL: " + SafeUrl.redact(currentUrl));
                 mfaActionUrl = form.absUrl("action");
                 // Keycloak action URLs carry session_code / execution / tab_id, which identify
                 // this live authentication attempt.
@@ -48,7 +48,7 @@ public class OtjDriver extends OneAdvancedDriver {
 
             Element form = doc.selectFirst("form");
             if (form == null) {
-                throw new IOException("No form found at step " + step + " — URL: " + SafeUrl.redact(currentUrl));
+                throw new LoginChainException("No form found at step " + step + " — URL: " + SafeUrl.redact(currentUrl));
             }
 
             FormBody.Builder formBody = new FormBody.Builder();
@@ -79,7 +79,7 @@ public class OtjDriver extends OneAdvancedDriver {
             resp.close();
         }
 
-        throw new IOException("Did not reach MFA page after 5 steps — last URL: " + SafeUrl.redact(currentUrl));
+        throw new LoginChainException("Did not reach MFA page after 5 steps — last URL: " + SafeUrl.redact(currentUrl));
     }
 
     @Override
@@ -94,7 +94,7 @@ public class OtjDriver extends OneAdvancedDriver {
             log.info("MFA submitted, landing URL: {}", SafeUrl.redact(landingUrl));
             log.debug("Cookies after MFA: {}", cookieJar.cookieNames());
             if (!landingUrl.startsWith("https://education.oneadvanced.com")) {
-                throw new IOException("MFA code rejected — still on login page. Use a fresh OTP and try again.");
+                throw new LoginChainException("MFA code rejected — still on login page. Use a fresh OTP and try again.");
             }
         }
     }
