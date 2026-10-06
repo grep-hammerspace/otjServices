@@ -77,6 +77,23 @@ public class AzureIdDriver extends OneAdvancedDriver {
         return m.find() ? m.group(1) : null;
     }
 
+    private static final Pattern ERROR_CODE =
+            Pattern.compile("\"(?:iErrorCode|sErrorCode)\"\\s*:\\s*\"?(\\d+)");
+
+    // Structural fields only, never the body or its text: a Microsoft page's $Config carries sFT and
+    // sCtx. urlPost is where the page would send the browser next, e.g. /kmsi for "Stay signed in?".
+    static String describePage(String html, String baseUrl) {
+        String urlPost = cfg(html, "urlPost");
+        HttpUrl base = HttpUrl.parse(baseUrl);
+        HttpUrl next = urlPost == null || base == null ? null : base.resolve(urlPost);
+
+        Matcher error = ERROR_CODE.matcher(html);
+        return "pgid=" + cfg(html, "pgid")
+                + ", forms=" + Jsoup.parse(html, baseUrl).select("form").size()
+                + ", urlPost=" + (urlPost == null ? "none" : SafeUrl.redact(next))
+                + (error.find() ? ", errorCode=" + error.group(1) : "");
+    }
+
     @Override
     public PrepareResult prepare(String username, String password) throws IOException {
         this.mfaLogin = username;
@@ -124,7 +141,7 @@ public class AzureIdDriver extends OneAdvancedDriver {
         Document doc = Jsoup.parse(body, currentUrl);
         Element brokerAnchor = doc.selectFirst("a[href*=broker/asso-qm-aad]");
         if (brokerAnchor == null) {
-            throw new IOException("Azure AD broker link not found on Keycloak page — URL: " + SafeUrl.redact(currentUrl));
+            throw new LoginChainException("Azure AD broker link not found on Keycloak page — URL: " + SafeUrl.redact(currentUrl));
         }
         resp = get(brokerAnchor.absUrl("href"));
         currentUrl = resp.request().url().toString();
@@ -134,7 +151,7 @@ public class AzureIdDriver extends OneAdvancedDriver {
 
         doc = Jsoup.parse(body, currentUrl);
         Element samlFormEl = doc.selectFirst("form");
-        if (samlFormEl == null) throw new IOException("SAML form not found on broker page — URL: " + SafeUrl.redact(currentUrl));
+        if (samlFormEl == null) throw new LoginChainException("SAML form not found on broker page — URL: " + SafeUrl.redact(currentUrl));
         resp = post(samlFormEl.absUrl("action"), hiddenInputsOf(samlFormEl));
         currentUrl = resp.request().url().toString();
         body = resp.body().string();
@@ -145,7 +162,7 @@ public class AzureIdDriver extends OneAdvancedDriver {
         if (body.contains("oPostParams")) {
             log.info("Handling Microsoft SSO interstitial");
             Matcher m = Pattern.compile("\"oPostParams\"\\s*:\\s*\\{([^}]+)\\}").matcher(body);
-            if (!m.find()) throw new IOException("oPostParams block not found in Microsoft redirect page");
+            if (!m.find()) throw new LoginChainException("oPostParams block not found in Microsoft redirect page");
 
             FormBody.Builder reloadForm = new FormBody.Builder();
             Matcher kv = Pattern.compile("\"([^\"]+)\"\\s*:\\s*\"([^\"]*)\"").matcher(m.group(1));
@@ -168,7 +185,7 @@ public class AzureIdDriver extends OneAdvancedDriver {
         // The sign-in page is JS-rendered with no <form>: POST to $Config's urlPost directly.
         String pgid = cfg(body, "pgid");
         if (!"ConvergedSignIn".equals(pgid)) {
-            throw new IOException("Expected Microsoft login page (ConvergedSignIn), got pgid=" + pgid
+            throw new LoginChainException("Expected Microsoft login page (ConvergedSignIn), got pgid=" + pgid
                     + " — URL: " + SafeUrl.redact(currentUrl));
         }
         String urlPost      = cfg(body, "urlPost");
@@ -222,7 +239,7 @@ public class AzureIdDriver extends OneAdvancedDriver {
 
         String mfaPgid = cfg(body, "pgid");
         if (!"ConvergedTFA".equals(mfaPgid)) {
-            throw new IOException("Expected MFA page (ConvergedTFA), got pgid=" + mfaPgid
+            throw new LoginChainException("Expected MFA page (ConvergedTFA), got pgid=" + mfaPgid
                     + " — URL: " + SafeUrl.redact(currentUrl) + ". Credentials may be wrong.");
         }
 
@@ -232,7 +249,7 @@ public class AzureIdDriver extends OneAdvancedDriver {
         mfaSessionId = cfg(body, "sessionId");
 
         if (mfaCtx == null || mfaFlowToken == null) {
-            throw new IOException("Could not extract sCtx/sFT from Microsoft MFA page");
+            throw new LoginChainException("Could not extract sCtx/sFT from Microsoft MFA page");
         }
 
         String beginBody = mapper.writeValueAsString(Map.of(
@@ -265,7 +282,7 @@ public class AzureIdDriver extends OneAdvancedDriver {
                 String hint = "UserAuthFailedDuplicateRequest".equals(rv)
                         ? " — a push is already pending; deny it on your phone (or wait ~60 s) then retry"
                         : "";
-                throw new IOException("BeginAuth failed: " + rv + hint);
+                throw new LoginChainException("BeginAuth failed: " + rv + hint);
             }
             String updated = json.path("FlowToken").asText(null);
             if (updated != null && !updated.isEmpty()) mfaFlowToken = updated;
@@ -338,7 +355,7 @@ public class AzureIdDriver extends OneAdvancedDriver {
                 if (!"AuthenticationPending".equals(result)) {
                     // ResultValue alone. The full body would carry the refreshed FlowToken, and
                     // this message is echoed to the HTTP caller.
-                    throw new IOException("Unexpected MFA poll result: " + result);
+                    throw new LoginChainException("Unexpected MFA poll result: " + result);
                 }
                 log.debug("Poll {}/{}: pending", poll, MAX_POLL_ATTEMPTS);
             }
@@ -346,12 +363,12 @@ public class AzureIdDriver extends OneAdvancedDriver {
             try { Thread.sleep(POLL_INTERVAL_MS); }
             catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
-                throw new IOException("Interrupted while waiting for MFA approval", e);
+                throw new LoginChainException("Interrupted while waiting for MFA approval", e);
             }
         }
 
         if (!approved) {
-            throw new IOException("Timed out waiting for Microsoft Authenticator approval");
+            throw new LoginChainException("Timed out waiting for Microsoft Authenticator approval");
         }
 
         FormBody processBody = new FormBody.Builder()
@@ -371,9 +388,11 @@ public class AzureIdDriver extends OneAdvancedDriver {
 
         Response processResp = post(PROCESS_AUTH_URL, processBody);
         String processUrl  = processResp.request().url().toString();
+        int processStatus  = processResp.code();
         String processHtml = processResp.body().string();
         processResp.close();
-        log.info("ProcessAuth at: {}", SafeUrl.redact(processUrl));
+        log.info("ProcessAuth at: {} — HTTP {}, {}", SafeUrl.redact(processUrl), processStatus,
+                describePage(processHtml, processUrl));
 
         completeSamlChain(processHtml, processUrl);
     }
@@ -381,16 +400,25 @@ public class AzureIdDriver extends OneAdvancedDriver {
     private void completeSamlChain(String html, String baseUrl) throws IOException {
         Document doc = Jsoup.parse(html, baseUrl);
         Element samlForm = doc.selectFirst("form");
-        if (samlForm == null) throw new IOException("SAMLResponse form not found — URL: " + SafeUrl.redact(baseUrl));
-
-        Response finalResp = post(samlForm.absUrl("action"), hiddenInputsOf(samlForm));
+        if (samlForm == null) {
+            throw new LoginChainException("SAMLResponse form not found — URL: " + SafeUrl.redact(baseUrl)
+                    + " — " + describePage(html, baseUrl));
+        }
+        String action = samlForm.absUrl("action");
+        if (samlForm.selectFirst("input[name=SAMLResponse]") == null) {
+            log.warn("Form posting to {} has no SAMLResponse input — posting it anyway",
+                    SafeUrl.redact(action));
+        }
+        log.info("Posting SAMLResponse to: {}", SafeUrl.redact(action));
+        Response finalResp = post(action, hiddenInputsOf(samlForm));
         String landingUrl = finalResp.request().url().toString();
+        int landingStatus = finalResp.code();
         finalResp.body().string();
         finalResp.close();
 
-        log.info("Login complete — landing URL: {}", SafeUrl.redact(landingUrl));
+        log.info("Login complete — landing URL: {} — HTTP {}", SafeUrl.redact(landingUrl), landingStatus);
         if (!landingUrl.contains("education.oneadvanced.com")) {
-            throw new IOException("Login failed — unexpected landing URL: " + SafeUrl.redact(landingUrl));
+            throw new LoginChainException("Login failed — unexpected landing URL: " + SafeUrl.redact(landingUrl));
         }
     }
 

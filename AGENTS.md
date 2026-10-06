@@ -80,6 +80,7 @@ src/main/java/com/github/grepHammerspace/
     Keycloak, AzurePush     Dagger qualifiers selecting between the two drivers, so the
                             resource names neither and tests can bind fakes
     SafeUrl                 strips query strings before a URL reaches a log or exception
+    LoginChainException     a failure the driver detected itself; its message is safe to log
     PrepareResult, OtjSubmitResult
 
 src/main/resources/       app.properties, llm_prompt.txt (system prompt), logback.xml
@@ -412,6 +413,12 @@ on the prod box):
     exception messages are echoed to the caller.
   - The drivers log named fields (`Success`, `ResultValue`, HTTP status), never a raw upstream
     request or response body — those carry Microsoft's `FlowToken`, which is bearer-equivalent.
+    An unexpected page is described by `AzureIdDriver.describePage`: `pgid`, form count, the
+    redacted `urlPost` and a numeric error code, never its text.
+  - The resource logs a driver failure's message only for a `LoginChainException`, whose
+    message the driver builds from those same safe parts. Any other exception is logged by type
+    alone: an OkHttp or Jackson message can quote the upstream body. Throw `LoginChainException`
+    for a failure the driver detects, and keep its message to redacted URLs and Microsoft's codes.
   - `logback.xml` deliberately does **not** pin the drivers to DEBUG. It used to, which is what
     put those tokens in the production log.
   - `ServerHooks` captures every log event at TRACE and fails any scenario in which a sentinel
