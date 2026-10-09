@@ -47,6 +47,11 @@ public class AzureIdDriver extends OneAdvancedDriver {
     private static final String MS_SAML_URL =
             "https://login.microsoftonline.com/569df091-b013-40e3-86ee-bd9cb9e25814/saml2";
 
+    // "Not now" on the security-info prompt, as a browser sends it (seen in a recorded sign-in).
+    private static final String SKIP_PROOF_UP_URL =
+            "https://login.microsoftonline.com/569df091-b013-40e3-86ee-bd9cb9e25814/resume"
+            + "?skipmfaregistration=1";
+
     private static final String BEGIN_AUTH_URL =
             "https://login.microsoftonline.com/common/SAS/BeginAuth";
 
@@ -113,14 +118,51 @@ public class AzureIdDriver extends OneAdvancedDriver {
         return String.join(",", keys);
     }
 
-    // Checked wherever Microsoft could interrupt: before the MFA page, and after ProcessAuth, where
-    // a SAML form was expected. Logs the page's key names so a skip link, if Microsoft offers one,
-    // can be found and followed in a later change rather than guessed at.
-    private void rejectProofUp(String html, String url) throws SecurityInfoRequiredException {
-        if (!PROOF_UP_PGID.equals(cfg(html, "pgid"))) return;
-        log.warn("Microsoft wants security info registered — {} — $Config keys: {}",
-                describePage(html, url), configKeys(html));
-        throw new SecurityInfoRequiredException();
+    // The page a request landed on: its HTML and where it ended up after redirects.
+    record Page(String html, String url) {}
+
+    // The form "Not now" posts, built from the proof-up page's own $Config, or null when the page
+    // lacks any of it. Values are the page's, so never logged.
+    static FormBody proofUpSkipForm(String html) {
+        String flowToken = cfg(html, "sFT");
+        String ctx       = cfg(html, "sCtx");
+        String canary    = cfg(html, "canary");
+        if (flowToken == null || ctx == null || canary == null) return null;
+        return new FormBody.Builder()
+                .add("flowtoken", flowToken)
+                .add("ctx",       ctx)
+                .add("canary",    canary)
+                .build();
+    }
+
+    // Microsoft's proof-up interrupt is a nudge with a "Not now" button, so press it and carry on
+    // from whatever page comes next — SAML after the MFA, the MFA page itself before it. Checked
+    // wherever it has appeared: before the MFA page, and after ProcessAuth. When Microsoft won't
+    // let it be skipped (the nudge has run out of snoozes, or registration is compulsory), the user
+    // has to visit mysignins, so SecurityInfoRequiredException says so; the key names are logged
+    // to show what the page offered instead.
+    private Page skipProofUp(Page page) throws IOException {
+        if (!PROOF_UP_PGID.equals(cfg(page.html(), "pgid"))) return page;
+
+        FormBody skip = proofUpSkipForm(page.html());
+        if (skip == null) {
+            log.warn("Microsoft wants security info registered and offers no skip — {} — "
+                    + "$Config keys: {}", describePage(page.html(), page.url()), configKeys(page.html()));
+            throw new SecurityInfoRequiredException();
+        }
+
+        Response resp = post(SKIP_PROOF_UP_URL, skip);
+        Page next = new Page(resp.body().string(), resp.request().url().toString());
+        resp.close();
+
+        if (PROOF_UP_PGID.equals(cfg(next.html(), "pgid"))) {
+            log.warn("Microsoft refused to skip the security-info prompt — {} — $Config keys: {}",
+                    describePage(next.html(), next.url()), configKeys(next.html()));
+            throw new SecurityInfoRequiredException();
+        }
+        log.info("Skipped Microsoft's security-info prompt — now at: {}",
+                describePage(next.html(), next.url()));
+        return next;
     }
 
     @Override
@@ -259,6 +301,10 @@ public class AzureIdDriver extends OneAdvancedDriver {
         resp.close();
         log.debug("After cred POST: pgid={} url={}", cfg(body, "pgid"), SafeUrl.redact(currentUrl));
 
+        Page afterCreds = skipProofUp(new Page(body, currentUrl));
+        body = afterCreds.html();
+        currentUrl = afterCreds.url();
+
         if (body.contains("name=\"SAMLResponse\"") || body.contains("name='SAMLResponse'")) {
             log.info("Microsoft returned SAMLResponse directly — completing login without MFA");
             completeSamlChain(body, currentUrl);
@@ -266,7 +312,6 @@ public class AzureIdDriver extends OneAdvancedDriver {
             return PrepareResult.loggedIn();
         }
 
-        rejectProofUp(body, currentUrl);
         String mfaPgid = cfg(body, "pgid");
         if (!"ConvergedTFA".equals(mfaPgid)) {
             throw new LoginChainException("Expected MFA page (ConvergedTFA), got pgid=" + mfaPgid
@@ -424,8 +469,8 @@ public class AzureIdDriver extends OneAdvancedDriver {
         log.info("ProcessAuth at: {} — HTTP {}, {}", SafeUrl.redact(processUrl), processStatus,
                 describePage(processHtml, processUrl));
 
-        rejectProofUp(processHtml, processUrl);
-        completeSamlChain(processHtml, processUrl);
+        Page afterMfa = skipProofUp(new Page(processHtml, processUrl));
+        completeSamlChain(afterMfa.html(), afterMfa.url());
     }
 
     private void completeSamlChain(String html, String baseUrl) throws IOException {
