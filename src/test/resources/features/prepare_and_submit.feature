@@ -42,8 +42,21 @@ Feature: Preparing a OneAdvanced session and submitting pending activities
     And I sign up with inviteCode "OTJ-PRE-0004", username "prep4", password "pw", learnerId "L-4"
     And the "azure" driver will reject the credentials
     When I POST "/otj-services/azure-id/prepare" with the OneAdvanced credentials using the signup token
-    Then the response status is 401
+    Then the response status is 422
     And the response body contains "Could not sign in to OneAdvanced"
+    And the response body does not contain "invalid_token"
+    And the response body does not contain "ConvergedSignIn"
+
+  # Not 401 either: the app signs out on a 401, and nothing about the user's own session went wrong.
+  # Not the password message: the password may well be right.
+  Scenario: A login that breaks for any other reason asks for a retry, not a new password
+    Given an unused invite code "OTJ-PRE-0016" expiring in 7 days
+    And I sign up with inviteCode "OTJ-PRE-0016", username "prep16", password "pw", learnerId "L-16"
+    And the "keycloak" driver will fail to reach OneAdvanced
+    When I POST "/otj-services/prepare-browser" with the OneAdvanced credentials using the signup token
+    Then the response status is 502
+    And the response body contains "Try again in a moment"
+    And the response body does not contain "Check the username and password"
     And the response body does not contain "login_hint"
     And the response body does not contain "leaktest@example.invalid"
 

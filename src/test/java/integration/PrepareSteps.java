@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.grepHammerspace.api.dto.CredentialKeyResponse;
 import com.github.grepHammerspace.api.dto.SealedEnvelope;
 import com.github.grepHammerspace.crypto.TestSealer;
+import com.github.grepHammerspace.web.LoginChainException;
 import com.github.grepHammerspace.web.PrepareResult;
 import io.cucumber.java.en.And;
 import io.cucumber.java.en.Given;
@@ -47,12 +48,20 @@ public class PrepareSteps {
 
     @Given("the {string} driver will reject the credentials")
     public void driverWillRejectCredentials(String which) {
-        // Shaped like the real failure: the URL carries login_hint=<username>, which the endpoint
-        // must not pass through.
-        driver(which).willFail(new IOException(
+        // Shaped like AzureIdDriver's own: a LoginChainException's URL is SafeUrl-redacted, which is
+        // why its message is allowed into the log.
+        driver(which).willFail(new LoginChainException(
                 "Expected MFA page (ConvergedTFA), got pgid=ConvergedSignIn — URL: "
-                        + "https://login.microsoftonline.com/common/oauth2/authorize"
-                        + "?login_hint=" + ServerHooks.OA_USERNAME + ". Credentials may be wrong."));
+                        + "https://login.microsoftonline.com/common/oauth2/authorize"));
+    }
+
+    @Given("the {string} driver will fail to reach OneAdvanced")
+    public void driverWillFailToReachOneAdvanced(String which) {
+        // A plain IOException's message is the leak channel: it can carry an unredacted login-chain
+        // URL with login_hint=<username>, which must reach neither the response nor the log.
+        driver(which).willFail(new IOException(
+                "Connection reset fetching https://education.oneadvanced.com/?login_hint="
+                        + ServerHooks.OA_USERNAME));
     }
 
     @When("I POST {string} with the OneAdvanced credentials using the signup token")

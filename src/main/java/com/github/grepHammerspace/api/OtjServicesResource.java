@@ -71,10 +71,14 @@ public class OtjServicesResource {
     // Its futures interrupt on cancel, so replacing or dropping a session stops the Microsoft poll.
     private static final ExecutorService LOGIN_POLLS = Executors.newVirtualThreadPerTaskExecutor();
 
+    private static final int UNPROCESSABLE_ENTITY = 422;
+
     // Fixed messages only: a driver's or the LLM's own message can carry login-chain URLs with the
     // username in them, or upstream detail.
     private static final ApiError LOGIN_FAILED = new ApiError(
             "Could not sign in to OneAdvanced. Check the username and password and try again.");
+    private static final ApiError ONEADVANCED_UNAVAILABLE = new ApiError(
+            "Could not complete the OneAdvanced sign-in. Try again in a moment.");
     private static final ApiError CREDENTIALS_MISSING = new ApiError(
             "Both 'username' and 'password' are required.");
     private static final ApiError MFA_CODE_MISSING = new ApiError(
@@ -309,12 +313,19 @@ public class OtjServicesResource {
                 ? keycloakDriverProvider.get()
                 : azurePushDriverProvider.get();
 
+        // Never 401: that status means "your bearer token is dead" and the app signs out on it. A
+        // LoginChainException is the chain not going where a good login goes, which is what a wrong
+        // password looks like from here; anything else is the network or a page we failed to parse,
+        // and blaming the password for that sends someone to retype one that was fine.
         PrepareResult result;
         try {
             result = driver.prepare(body.username().strip(), body.password());
+        } catch (LoginChainException e) {
+            log.warn("Prepare failed for user {} on {} — {}", userId, flow, failureReason(e));
+            return error(UNPROCESSABLE_ENTITY, LOGIN_FAILED);
         } catch (IOException | RuntimeException e) {
             log.warn("Prepare failed for user {} on {} — {}", userId, flow, failureReason(e));
-            return error(Response.Status.UNAUTHORIZED, LOGIN_FAILED);
+            return error(Response.Status.BAD_GATEWAY, ONEADVANCED_UNAVAILABLE);
         }
 
         // A push is approved on the phone, not here: a background poll finishes the login, and
@@ -418,6 +429,11 @@ public class OtjServicesResource {
     }
 
     private static Response error(Response.Status status, ApiError error) {
+        return Response.status(status).entity(error).build();
+    }
+
+    // For statuses Response.Status has no constant for.
+    private static Response error(int status, ApiError error) {
         return Response.status(status).entity(error).build();
     }
 
