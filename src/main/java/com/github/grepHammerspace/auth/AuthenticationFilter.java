@@ -26,7 +26,10 @@ public class AuthenticationFilter implements ContainerRequestFilter {
     private static final Logger log = LoggerFactory.getLogger(AuthenticationFilter.class);
 
     private static final String BEARER_PREFIX = "Bearer ";
-    private static final ApiError INVALID_TOKEN = new ApiError("Missing or invalid bearer token");
+    // The app signs out on exactly this code, so no other 401 may carry it — and nothing else should
+    // be a 401 that a client could mistake for this one.
+    private static final ApiError INVALID_TOKEN =
+            new ApiError("Missing or invalid bearer token", "invalid_token");
 
     private final SessionTokenService sessionTokenService;
 

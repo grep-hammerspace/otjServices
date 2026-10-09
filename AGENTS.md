@@ -177,6 +177,14 @@ accepted on these bodies: Jackson rejects the unknown property with a 400 on the
 the JSON sealed inside it, and `prepare_and_submit.feature` pins both. The MFA code is not sealed:
 it dies in ~30 s, and sealing it would put a key fetch in front of the most time-critical call.
 
+**A failed OneAdvanced login is never a 401.** The app signs out on a 401 carrying
+`"code": "invalid_token"`, which only `AuthenticationFilter` sends, and older app builds sign out
+on *any* 401. Prepare used to answer 401 for every driver failure, so a mistyped OneAdvanced
+password, or OneAdvanced hiccuping, signed people out of this app. Now a `LoginChainException`
+(the chain didn't land where a good login does, which is what a wrong password looks like) is
+**422** with the "check the username and password" message, and any other failure is **502**
+"try again". Don't give either message to the other case.
+
 Authenticated, outside `/otj-services` — the account itself, on `AccountResource`:
 
 | Method | Path | Body → Result |
