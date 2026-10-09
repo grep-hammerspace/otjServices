@@ -83,6 +83,17 @@ Feature: Preparing a OneAdvanced session and submitting pending activities
     And the response body contains "mysignins.microsoft.com/security-info"
     And the response body does not contain "Check the username and password"
 
+  # QMUL's Keycloak hands a Microsoft-federated username straight to Microsoft, where there is no
+  # OneAdvanced code to type. The answer is the other route, not a bad password.
+  Scenario: A Microsoft account on the code route is pointed at the Microsoft route
+    Given an unused invite code "OTJ-PRE-0019" expiring in 7 days
+    And I sign up with inviteCode "OTJ-PRE-0019", username "prep19", password "pw", learnerId "L-19"
+    And the "keycloak" driver will find the account signs in with Microsoft
+    When I POST "/otj-services/prepare-browser" with the OneAdvanced credentials using the signup token
+    Then the response status is 409
+    And the response body contains "Choose Microsoft on the Submit screen"
+    And the response body does not contain "Check the username and password"
+
   Scenario: A missing password is refused before any login is attempted
     Given an unused invite code "OTJ-PRE-0005" expiring in 7 days
     And I sign up with inviteCode "OTJ-PRE-0005", username "prep5", password "pw", learnerId "L-5"

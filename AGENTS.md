@@ -72,11 +72,14 @@ src/main/java/com/github/grepHammerspace/
   bind/                   AppModule + AppComponent (main API),
                           AdminModule + AdminComponent (admin API)
   web/                    Driver interface + implementations
-    OneAdvancedDriver       base of both real drivers: cookie jar, browser-like requests, and
-                            the one submitPendingOtjs that posts the queued rows
-    OtjDriver               direct OneAdvanced/Keycloak discover login
-    AzureIdDriver           QMUL Azure AD federation path; bypasses discover with a
-                            hand-built PKCE flow, then Microsoft Authenticator push
+    OneAdvancedDriver       base of both real drivers: cookie jar, browser-like requests,
+                            qmulLoginUrl (both start at QMUL's realm, never OneAdvanced's
+                            discover page, which only maps se24.qmul.ac.uk emails to QMUL),
+                            and the one submitPendingOtjs that posts the queued rows
+    OtjDriver               OneAdvanced's own login on QMUL's Keycloak realm: username,
+                            password, then a TOTP code
+    AzureIdDriver           QMUL Azure AD federation path: the realm's broker link to
+                            Microsoft, then a Microsoft Authenticator push
     Keycloak, AzurePush     Dagger qualifiers selecting between the two drivers, so the
                             resource names neither and tests can bind fakes
     SafeUrl                 strips query strings before a URL reaches a log or exception
@@ -183,7 +186,9 @@ on *any* 401. Prepare used to answer 401 for every driver failure, so a mistyped
 password, or OneAdvanced hiccuping, signed people out of this app. Now a `LoginChainException`
 (the chain didn't land where a good login does, which is what a wrong password looks like) is
 **422** with the "check the username and password" message, and any other failure is **502**
-"try again". Don't give either message to the other case.
+"try again". Don't give either message to the other case. On the code route, a username QMUL's Keycloak hands
+to Microsoft is a `MicrosoftAccountException` → **409** "choose Microsoft", and a form that comes
+back unchanged (a refused username or password) stops the loop at once rather than resubmitting.
 
 Authenticated, outside `/otj-services` — the account itself, on `AccountResource`:
 

@@ -16,7 +16,13 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.security.SecureRandom;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -30,6 +36,24 @@ abstract class OneAdvancedDriver implements Driver {
             "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:151.0) Gecko/20100101 Firefox/151.0";
 
     private static final String ACCEPT_HTML = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8";
+
+    // QMUL's own Keycloak realm, where both drivers start. A browser starts one step earlier, at
+    // OneAdvanced's discover page, which picks the organisation from what is typed — but only maps
+    // se24.qmul.ac.uk emails to QMUL, so anything else looped there. Coming here directly means
+    // setting the PKCE cookies discover would have, or the final redirect can't be redeemed.
+    private static final String QMUL_AUTH_URL =
+            "https://identity.oneadvanced.com/auth/realms/queen-mary-university-london"
+            + "/protocol/openid-connect/auth";
+
+    private static final String OA_REDIRECT_URI =
+            "https://auth.identity.oneadvanced.com/auth/redirect";
+
+    // No authenticationDomain: including one routes to a per-customer cookie-bounce host that
+    // doesn't exist for education.oneadvanced.com.
+    private static final String STATE_JSON =
+            "{\"clientId\":\"advancedsso\","
+            + "\"redirectUri\":\"https://education.oneadvanced.com/parseauth?redirectUri=https://education.oneadvanced.com/\","
+            + "\"organizationRef\":\"queen-mary-university-london\"}";
 
     private static final String ACTIVITY_LOG_API =
             "https://education.oneadvanced.com/api/cloud-education/v1/learner/%s/activity-log";
@@ -119,6 +143,42 @@ abstract class OneAdvancedDriver implements Driver {
         log.debug("Posting activity log {} — {}h{}m on {}", activityLog.id(),
                 activityLog.hours(), activityLog.minutes(), activityLog.activityDate());
         return payload;
+    }
+
+    // Sets the PKCE cookies and returns QMUL's login URL. loginHint pre-fills the username, which
+    // the Azure route wants; null leaves the realm's own form to ask for it.
+    String qmulLoginUrl(String loginHint) {
+        byte[] verifierBytes = new byte[32];
+        new SecureRandom().nextBytes(verifierBytes);
+        String codeVerifier = Base64.getUrlEncoder().withoutPadding().encodeToString(verifierBytes);
+        byte[] challengeHash;
+        try {
+            challengeHash = MessageDigest.getInstance("SHA-256")
+                    .digest(codeVerifier.getBytes(StandardCharsets.US_ASCII));
+        } catch (NoSuchAlgorithmException e) {
+            throw new AssertionError("SHA-256 unavailable", e);
+        }
+        String codeChallenge = Base64.getUrlEncoder().withoutPadding().encodeToString(challengeHash);
+
+        String stateValue = Base64.getUrlEncoder().withoutPadding()
+                .encodeToString(STATE_JSON.getBytes(StandardCharsets.UTF_8));
+        HttpUrl authBase = HttpUrl.parse("https://auth.identity.oneadvanced.com/");
+        cookieJar.saveFromResponse(authBase, List.of(
+                new Cookie.Builder().domain("auth.identity.oneadvanced.com").path("/")
+                        .name("CODE_VERIFIER").value(codeVerifier).httpOnly().secure().build(),
+                new Cookie.Builder().domain("auth.identity.oneadvanced.com").path("/")
+                        .name("STATE").value(stateValue).httpOnly().secure().build()
+        ));
+        log.info("PKCE ready — going directly to QMUL's Keycloak");
+
+        return QMUL_AUTH_URL
+                + "?client_id=advancedsso"
+                + "&response_type=code"
+                + "&redirect_uri=" + URLEncoder.encode(OA_REDIRECT_URI, StandardCharsets.UTF_8)
+                + "&code_challenge=" + codeChallenge
+                + "&code_challenge_method=S256"
+                + "&scope=openid+email+profile"
+                + (loginHint == null ? "" : "&login_hint=" + URLEncoder.encode(loginHint, StandardCharsets.UTF_8));
     }
 
     Response get(String url) throws IOException {
