@@ -28,7 +28,8 @@ public record ParsedActivities(
                     + "not an entry.")
             String startTime,
 
-            @JsonPropertyDescription("Plain description of what was done.")
+            @JsonPropertyDescription("Plain description of what was done, followed by the matched "
+                    + "KSB codes as \"(KSBs: S4, K22)\" when any clearly apply.")
             String comments) {
     }
 
