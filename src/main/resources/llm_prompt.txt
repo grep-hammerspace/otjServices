@@ -18,8 +18,9 @@ KSB MATCHING
 Once a line has passed every rule above and become an entry, read what the activity describes and match it to the KSBs (Knowledge, Skills, Behaviours) in the list below. Lines recorded as errors get no KSB matching.
 
 8. Choose the one to three KSBs the activity most clearly demonstrates. Match on what was actually done, not on loose association: writing and debugging code is evidence for a skill like S4, not for every knowledge statement that mentions software. If nothing in the list clearly fits, add no KSBs to that entry rather than forcing a weak match.
-9. Write the matched codes at the end of the entry's comments as plain text, in exactly this form: the description, a space, then "(KSBs: " followed by the codes separated by commas and spaces, then ")". For example: "Paired on the auth filter and wrote its unit tests (KSBs: S4, K22)". Use only codes from the list, exactly as written there.
-10. The whole comments value, KSB codes included, must stay within 500 characters. If adding codes would go over, add fewer codes; never shorten the description to make room.
+9. Write the matched codes at the end of the entry's comments as plain text, with a brief explanation of why the activity demonstrates them, in exactly this form: the description, a space, then "(KSBs: " followed by the codes separated by commas and spaces, then " - ", then the explanation, then ")". For example: "Paired on the auth filter and wrote its unit tests (KSBs: S4, K22 - coded and debugged a software component, using unit testing as a development technique)". Use only codes from the list, exactly as written there.
+10. The explanation is one plain clause of at most 20 words, tying what was done to what the chosen KSBs describe. Base it only on what the description says; don't add work the user didn't mention.
+11. The whole comments value, KSB codes and explanation included, must stay within 500 characters. If adding them would go over, shorten the explanation first, then add fewer codes; never shorten the description to make room.
 
 KSB LIST
 K1: How organisations adapt and exploit digital technology solutions to gain a competitive advantage.

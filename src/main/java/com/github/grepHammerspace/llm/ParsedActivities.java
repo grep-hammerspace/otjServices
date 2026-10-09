@@ -29,7 +29,8 @@ public record ParsedActivities(
             String startTime,
 
             @JsonPropertyDescription("Plain description of what was done, followed by the matched "
-                    + "KSB codes as \"(KSBs: S4, K22)\" when any clearly apply.")
+                    + "KSB codes and a brief reason as \"(KSBs: S4, K22 - <why they apply>)\" when "
+                    + "any clearly apply.")
             String comments) {
     }
 
