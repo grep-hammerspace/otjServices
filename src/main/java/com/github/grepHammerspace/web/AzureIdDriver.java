@@ -2,7 +2,6 @@ package com.github.grepHammerspace.web;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.github.grepHammerspace.db.ActivityLogRepository;
-import okhttp3.Cookie;
 import okhttp3.FormBody;
 import okhttp3.HttpUrl;
 import okhttp3.Request;
@@ -14,36 +13,17 @@ import org.jsoup.nodes.Element;
 
 import javax.inject.Inject;
 import java.io.IOException;
-import java.net.URLEncoder;
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-import java.security.SecureRandom;
 import java.util.Base64;
 import java.util.LinkedHashMap;
-import java.util.List;
 import java.util.Map;
 import java.util.TreeSet;
 import java.util.UUID;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-// QMUL's Azure AD federation. OneAdvanced discover only recognises se24.qmul.ac.uk emails, so the
-// PKCE cookies discover would set are generated here instead.
+// QMUL's Azure AD federation: from QMUL's Keycloak realm (see OneAdvancedDriver.qmulLoginUrl) through
+// its "QMUL Azure AD" broker to Microsoft, and a Microsoft Authenticator push.
 public class AzureIdDriver extends OneAdvancedDriver {
-    private static final String KEYCLOAK_AUTH_URL =
-            "https://identity.oneadvanced.com/auth/realms/queen-mary-university-london"
-            + "/protocol/openid-connect/auth";
-
-    private static final String OA_REDIRECT_URI =
-            "https://auth.identity.oneadvanced.com/auth/redirect";
-
-    // No authenticationDomain: including one routes to a per-customer cookie-bounce host that
-    // doesn't exist for education.oneadvanced.com.
-    private static final String STATE_JSON =
-            "{\"clientId\":\"advancedsso\","
-            + "\"redirectUri\":\"https://education.oneadvanced.com/parseauth?redirectUri=https://education.oneadvanced.com/\","
-            + "\"organizationRef\":\"queen-mary-university-london\"}";
-
     private static final String MS_SAML_URL =
             "https://login.microsoftonline.com/569df091-b013-40e3-86ee-bd9cb9e25814/saml2";
 
@@ -170,37 +150,7 @@ public class AzureIdDriver extends OneAdvancedDriver {
         this.mfaLogin = username;
         this.loginComplete = false;
 
-        byte[] verifierBytes = new byte[32];
-        new SecureRandom().nextBytes(verifierBytes);
-        String codeVerifier  = Base64.getUrlEncoder().withoutPadding().encodeToString(verifierBytes);
-        byte[] challengeHash;
-        try {
-            challengeHash = MessageDigest.getInstance("SHA-256")
-                    .digest(codeVerifier.getBytes(StandardCharsets.US_ASCII));
-        } catch (java.security.NoSuchAlgorithmException e) {
-            throw new AssertionError("SHA-256 unavailable", e);
-        }
-        String codeChallenge = Base64.getUrlEncoder().withoutPadding().encodeToString(challengeHash);
-
-        String stateValue = Base64.getUrlEncoder().withoutPadding()
-                .encodeToString(STATE_JSON.getBytes(StandardCharsets.UTF_8));
-        HttpUrl authBase = HttpUrl.parse("https://auth.identity.oneadvanced.com/");
-        cookieJar.saveFromResponse(authBase, List.of(
-                new Cookie.Builder().domain("auth.identity.oneadvanced.com").path("/")
-                        .name("CODE_VERIFIER").value(codeVerifier).httpOnly().secure().build(),
-                new Cookie.Builder().domain("auth.identity.oneadvanced.com").path("/")
-                        .name("STATE").value(stateValue).httpOnly().secure().build()
-        ));
-        log.info("PKCE ready — going directly to Keycloak");
-
-        String keycloakUrl = KEYCLOAK_AUTH_URL
-                + "?client_id=advancedsso"
-                + "&response_type=code"
-                + "&redirect_uri=" + URLEncoder.encode(OA_REDIRECT_URI, StandardCharsets.UTF_8)
-                + "&code_challenge=" + codeChallenge
-                + "&code_challenge_method=S256"
-                + "&scope=openid+email+profile"
-                + "&login_hint=" + URLEncoder.encode(username, StandardCharsets.UTF_8);
+        String keycloakUrl = qmulLoginUrl(username);
 
         Response resp = get(keycloakUrl);
         String currentUrl = resp.request().url().toString();

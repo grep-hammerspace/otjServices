@@ -32,6 +32,7 @@ import com.github.grepHammerspace.web.AzurePush;
 import com.github.grepHammerspace.web.Driver;
 import com.github.grepHammerspace.web.Keycloak;
 import com.github.grepHammerspace.web.LoginChainException;
+import com.github.grepHammerspace.web.MicrosoftAccountException;
 import com.github.grepHammerspace.web.SecurityInfoRequiredException;
 import com.github.grepHammerspace.web.OtjSubmitResult;
 import com.github.grepHammerspace.web.PrepareResult;
@@ -82,6 +83,9 @@ public class OtjServicesResource {
             "Microsoft wants you to add or confirm your security info before it will sign you in. "
                     + "Sign in at https://mysignins.microsoft.com/security-info, follow its prompts, "
                     + "then submit again.");
+    private static final ApiError USES_MICROSOFT = new ApiError(
+            "This account signs in with Microsoft, not a OneAdvanced code. "
+                    + "Choose Microsoft on the Submit screen and try again.");
     private static final ApiError ONEADVANCED_UNAVAILABLE = new ApiError(
             "Could not complete the OneAdvanced sign-in. Try again in a moment.");
     private static final ApiError CREDENTIALS_MISSING = new ApiError(
@@ -328,6 +332,9 @@ public class OtjServicesResource {
         } catch (SecurityInfoRequiredException e) {
             log.warn("Prepare stopped for user {} on {} — {}", userId, flow, failureReason(e));
             return error(Response.Status.CONFLICT, SECURITY_INFO_REQUIRED);
+        } catch (MicrosoftAccountException e) {
+            log.warn("Prepare stopped for user {} on {} — {}", userId, flow, failureReason(e));
+            return error(Response.Status.CONFLICT, USES_MICROSOFT);
         } catch (LoginChainException e) {
             log.warn("Prepare failed for user {} on {} — {}", userId, flow, failureReason(e));
             return error(UNPROCESSABLE_ENTITY, LOGIN_FAILED);
