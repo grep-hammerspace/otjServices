@@ -32,6 +32,7 @@ import com.github.grepHammerspace.web.AzurePush;
 import com.github.grepHammerspace.web.Driver;
 import com.github.grepHammerspace.web.Keycloak;
 import com.github.grepHammerspace.web.LoginChainException;
+import com.github.grepHammerspace.web.SecurityInfoRequiredException;
 import com.github.grepHammerspace.web.OtjSubmitResult;
 import com.github.grepHammerspace.web.PrepareResult;
 import jakarta.ws.rs.*;
@@ -77,6 +78,10 @@ public class OtjServicesResource {
     // username in them, or upstream detail.
     private static final ApiError LOGIN_FAILED = new ApiError(
             "Could not sign in to OneAdvanced. Check the username and password and try again.");
+    private static final ApiError SECURITY_INFO_REQUIRED = new ApiError(
+            "Microsoft wants you to add or confirm your security info before it will sign you in. "
+                    + "Sign in at https://mysignins.microsoft.com/security-info, follow its prompts, "
+                    + "then submit again.");
     private static final ApiError ONEADVANCED_UNAVAILABLE = new ApiError(
             "Could not complete the OneAdvanced sign-in. Try again in a moment.");
     private static final ApiError CREDENTIALS_MISSING = new ApiError(
@@ -320,6 +325,9 @@ public class OtjServicesResource {
         PrepareResult result;
         try {
             result = driver.prepare(body.username().strip(), body.password());
+        } catch (SecurityInfoRequiredException e) {
+            log.warn("Prepare stopped for user {} on {} — {}", userId, flow, failureReason(e));
+            return error(Response.Status.CONFLICT, SECURITY_INFO_REQUIRED);
         } catch (LoginChainException e) {
             log.warn("Prepare failed for user {} on {} — {}", userId, flow, failureReason(e));
             return error(UNPROCESSABLE_ENTITY, LOGIN_FAILED);
@@ -358,6 +366,11 @@ public class OtjServicesResource {
             return Response.status(408).entity(MFA_TIMED_OUT).build();
         } catch (ExecutionException e) {
             log.warn("Azure ID complete failed for user {} — {}", userId, failureReason(e.getCause()));
+            // The push was approved and Microsoft then asked for security info: not a bad password,
+            // and something only the user can fix, at Microsoft.
+            if (e.getCause() instanceof SecurityInfoRequiredException) {
+                return error(Response.Status.CONFLICT, SECURITY_INFO_REQUIRED);
+            }
             return error(Response.Status.BAD_REQUEST, LOGIN_FAILED);
         } catch (CancellationException e) {
             return error(Response.Status.CONFLICT, NO_SESSION);

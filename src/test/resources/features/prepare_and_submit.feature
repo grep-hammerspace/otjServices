@@ -60,6 +60,29 @@ Feature: Preparing a OneAdvanced session and submitting pending activities
     And the response body does not contain "login_hint"
     And the response body does not contain "leaktest@example.invalid"
 
+  # Microsoft's "proof-up" interrupt: the organisation wants security info registered first. The
+  # password and the push were fine, so the answer must say what to do, not blame the password.
+  Scenario: Microsoft asking for security info after the push is approved says where to go
+    Given an unused invite code "OTJ-PRE-0017" expiring in 7 days
+    And I sign up with inviteCode "OTJ-PRE-0017", username "prep17", password "pw", learnerId "L-17"
+    And the "azure" driver will require a number match of 42
+    And the "azure" driver will stop at Microsoft's security info prompt after approval
+    When I POST "/otj-services/azure-id/prepare" with the OneAdvanced credentials using the signup token
+    Then the response status is 200
+    When I GET "/otj-services/azure-id/complete" with the signup token
+    Then the response status is 409
+    And the response body contains "mysignins.microsoft.com/security-info"
+    And the response body does not contain "Check the username and password"
+
+  Scenario: Microsoft asking for security info before the push says where to go
+    Given an unused invite code "OTJ-PRE-0018" expiring in 7 days
+    And I sign up with inviteCode "OTJ-PRE-0018", username "prep18", password "pw", learnerId "L-18"
+    And the "azure" driver will stop at Microsoft's security info prompt
+    When I POST "/otj-services/azure-id/prepare" with the OneAdvanced credentials using the signup token
+    Then the response status is 409
+    And the response body contains "mysignins.microsoft.com/security-info"
+    And the response body does not contain "Check the username and password"
+
   Scenario: A missing password is refused before any login is attempted
     Given an unused invite code "OTJ-PRE-0005" expiring in 7 days
     And I sign up with inviteCode "OTJ-PRE-0005", username "prep5", password "pw", learnerId "L-5"

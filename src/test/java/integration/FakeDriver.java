@@ -12,6 +12,7 @@ import java.util.List;
 public class FakeDriver implements Driver {
     private PrepareResult nextResult;
     private IOException nextFailure = null;
+    private IOException nextMfaFailure = null;
 
     private volatile String preparedUsername;
     private volatile String preparedPassword;
@@ -32,6 +33,10 @@ public class FakeDriver implements Driver {
         this.nextFailure = failure;
     }
 
+    public void willFailMfa(IOException failure) {
+        this.nextMfaFailure = failure;
+    }
+
     @Override
     public PrepareResult prepare(String username, String password) throws IOException {
         prepareCalls++;
@@ -42,8 +47,9 @@ public class FakeDriver implements Driver {
     }
 
     @Override
-    public void completeMfa(String mfaToken) {
+    public void completeMfa(String mfaToken) throws IOException {
         this.completedMfaCode = mfaToken;
+        if (nextMfaFailure != null) throw nextMfaFailure;
     }
 
     @Override

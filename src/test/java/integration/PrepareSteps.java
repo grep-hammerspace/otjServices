@@ -6,6 +6,7 @@ import com.github.grepHammerspace.api.dto.SealedEnvelope;
 import com.github.grepHammerspace.crypto.TestSealer;
 import com.github.grepHammerspace.web.LoginChainException;
 import com.github.grepHammerspace.web.PrepareResult;
+import com.github.grepHammerspace.web.SecurityInfoRequiredException;
 import io.cucumber.java.en.And;
 import io.cucumber.java.en.Given;
 import io.cucumber.java.en.Then;
@@ -53,6 +54,16 @@ public class PrepareSteps {
         driver(which).willFail(new LoginChainException(
                 "Expected MFA page (ConvergedTFA), got pgid=ConvergedSignIn — URL: "
                         + "https://login.microsoftonline.com/common/oauth2/authorize"));
+    }
+
+    @Given("the {string} driver will stop at Microsoft's security info prompt")
+    public void driverWillStopAtProofUp(String which) {
+        driver(which).willFail(new SecurityInfoRequiredException());
+    }
+
+    @Given("the {string} driver will stop at Microsoft's security info prompt after approval")
+    public void driverWillStopAtProofUpAfterApproval(String which) {
+        driver(which).willFailMfa(new SecurityInfoRequiredException());
     }
 
     @Given("the {string} driver will fail to reach OneAdvanced")

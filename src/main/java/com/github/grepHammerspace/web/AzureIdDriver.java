@@ -22,6 +22,7 @@ import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.TreeSet;
 import java.util.UUID;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -92,6 +93,34 @@ public class AzureIdDriver extends OneAdvancedDriver {
                 + ", forms=" + Jsoup.parse(html, baseUrl).select("form").size()
                 + ", urlPost=" + (urlPost == null ? "none" : SafeUrl.redact(next))
                 + (error.find() ? ", errorCode=" + error.group(1) : "");
+    }
+
+    static final String PROOF_UP_PGID = "ConvergedProofUpRedirect";
+
+    private static final Pattern CONFIG_BLOCK =
+            Pattern.compile("\\$Config\\s*=\\s*(\\{.*?\\});", Pattern.DOTALL);
+    private static final Pattern CONFIG_KEY = Pattern.compile("\"(\\w+)\"\\s*:");
+
+    // The names in a page's $Config, sorted, with no values: the values include sFT and sCtx, and on
+    // a proof-up page the user's masked phone number and email. Names are Microsoft's, so they say
+    // what the page offers (a skip link, say) without saying anything about the user.
+    static String configKeys(String html) {
+        Matcher block = CONFIG_BLOCK.matcher(html);
+        if (!block.find()) return "none";
+        TreeSet<String> keys = new TreeSet<>();
+        Matcher key = CONFIG_KEY.matcher(block.group(1));
+        while (key.find()) keys.add(key.group(1));
+        return String.join(",", keys);
+    }
+
+    // Checked wherever Microsoft could interrupt: before the MFA page, and after ProcessAuth, where
+    // a SAML form was expected. Logs the page's key names so a skip link, if Microsoft offers one,
+    // can be found and followed in a later change rather than guessed at.
+    private void rejectProofUp(String html, String url) throws SecurityInfoRequiredException {
+        if (!PROOF_UP_PGID.equals(cfg(html, "pgid"))) return;
+        log.warn("Microsoft wants security info registered — {} — $Config keys: {}",
+                describePage(html, url), configKeys(html));
+        throw new SecurityInfoRequiredException();
     }
 
     @Override
@@ -237,6 +266,7 @@ public class AzureIdDriver extends OneAdvancedDriver {
             return PrepareResult.loggedIn();
         }
 
+        rejectProofUp(body, currentUrl);
         String mfaPgid = cfg(body, "pgid");
         if (!"ConvergedTFA".equals(mfaPgid)) {
             throw new LoginChainException("Expected MFA page (ConvergedTFA), got pgid=" + mfaPgid
@@ -394,6 +424,7 @@ public class AzureIdDriver extends OneAdvancedDriver {
         log.info("ProcessAuth at: {} — HTTP {}, {}", SafeUrl.redact(processUrl), processStatus,
                 describePage(processHtml, processUrl));
 
+        rejectProofUp(processHtml, processUrl);
         completeSamlChain(processHtml, processUrl);
     }
 
