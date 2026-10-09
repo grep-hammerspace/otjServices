@@ -4,6 +4,8 @@ import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class AzureIdDriverTest {
@@ -72,6 +74,40 @@ class AzureIdDriverTest {
         assertFalse(keys.contains("SECRET"), keys);
         assertFalse(keys.contains("example.test"), keys);
         assertFalse(keys.contains("XXXX"), keys);
+    }
+
+    // Field names as a browser's "Not now" sent them in a recorded sign-in; values from the page.
+    @Test
+    void buildsTheNotNowFormFromTheProofUpPage() {
+        String page = """
+                <html><script>$Config={"pgid":"ConvergedProofUpRedirect","sFT":"FT-1",
+                "sCtx":"CTX-1","canary":"CANARY-1","apiCanary":"API-CANARY"};</script></html>
+                """;
+
+        okhttp3.FormBody form = AzureIdDriver.proofUpSkipForm(page);
+
+        assertNotNull(form);
+        assertEquals(3, form.size());
+        assertEquals("flowtoken", form.name(0));
+        assertEquals("FT-1", form.value(0));
+        assertEquals("ctx", form.name(1));
+        assertEquals("CTX-1", form.value(1));
+        assertEquals("canary", form.name(2));
+        assertEquals("CANARY-1", form.value(2));
+    }
+
+    @Test
+    void noNotNowFormWithoutTheFlowToken() {
+        String page = """
+                <html><script>$Config={"pgid":"ConvergedProofUpRedirect","sCtx":"CTX-1",
+                "canary":"CANARY-1"};</script></html>
+                """;
+        assertNull(AzureIdDriver.proofUpSkipForm(page));
+    }
+
+    @Test
+    void noNotNowFormWithoutConfig() {
+        assertNull(AzureIdDriver.proofUpSkipForm("<form action=/x></form>"));
     }
 
     @Test

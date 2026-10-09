@@ -424,14 +424,16 @@ on the prod box):
     An unexpected page is described by `AzureIdDriver.describePage`: `pgid`, form count, the
     redacted `urlPost` and a numeric error code, never its text.
   - Microsoft's "proof-up" interrupt (`pgid=ConvergedProofUpRedirect`, posting to
-    `mysignins.microsoft.com/.../registerMfaMethods`) means the organisation wants security info
-    registered before it lets the user in. `rejectProofUp` checks for it before the MFA page and
-    after `ProcessAuth`, throws `SecurityInfoRequiredException`, and the resource answers **409**
-    pointing the user at mysignins.microsoft.com. It is not a failed login, so it must never get
-    the "check the username and password" message. The page is logged with
-    `AzureIdDriver.configKeys`: its `$Config` key **names**, sorted, with no values, since the
-    values carry `sFT` and the user's masked phone and email. The names are there to show whether
-    Microsoft offers a skip link the driver could follow instead.
+    `mysignins.microsoft.com/.../registerMfaMethods`) is the organisation nudging the user to register
+    security info, with a "Not now" button. `skipProofUp` presses it, checked before the MFA page and
+    after `ProcessAuth`: it posts the page's own `sFT`/`sCtx`/`canary` as `flowtoken`/`ctx`/`canary` to
+    `/<tenant>/resume?skipmfaregistration=1` (the request a browser sent, from a recorded sign-in)
+    and carries on from the next page. A nudge can run out of snoozes or become compulsory, so when
+    the page lacks those fields or Microsoft shows it again, `SecurityInfoRequiredException` makes the
+    resource answer **409** pointing the user at mysignins.microsoft.com. Neither outcome is a failed
+    login, so neither may get the "check the username and password" message. Both fallbacks log the
+    page's `$Config` key **names** via `AzureIdDriver.configKeys`, never values: those carry `sFT`
+    and the user's masked phone and email.
   - The resource logs a driver failure's message only for a `LoginChainException`, whose
     message the driver builds from those same safe parts. Any other exception is logged by type
     alone: an OkHttp or Jackson message can quote the upstream body. Throw `LoginChainException`
