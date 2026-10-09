@@ -41,6 +41,44 @@ class AzureIdDriverTest {
         assertFalse(described.contains("example.test"), described);
     }
 
+    // Shaped like the page in the log that prompted this: no form, posting to registerMfaMethods.
+    private static final String PROOF_UP_PAGE = """
+            <html><script>$Config={"pgid":"ConvergedProofUpRedirect","iErrorCode":"50203",
+            "urlPost":"https://mysignins.microsoft.com/api/post/registerMfaMethods?ctx=SECRET-CTX",
+            "sFT":"SECRET-FLOW-TOKEN","sProofUpDisplay":"+44 XXXXXXX12","sPOST_Username":"user@example.test",
+            "urlSkipMfaRegistration":"https://login.microsoftonline.com/skip?ctx=SECRET-CTX",
+            "oProofUp":{"iRemainingDays":14}};
+            </script></html>
+            """;
+
+    @Test
+    void describesTheProofUpPage() {
+        assertEquals("pgid=ConvergedProofUpRedirect, forms=0, "
+                        + "urlPost=https://mysignins.microsoft.com/api/post/registerMfaMethods [ctx], "
+                        + "errorCode=50203",
+                AzureIdDriver.describePage(PROOF_UP_PAGE, PROCESS_AUTH));
+    }
+
+    @Test
+    void listsConfigKeyNamesSortedAndNested() {
+        assertEquals("iErrorCode,iRemainingDays,oProofUp,pgid,sFT,sPOST_Username,sProofUpDisplay,"
+                        + "urlPost,urlSkipMfaRegistration",
+                AzureIdDriver.configKeys(PROOF_UP_PAGE));
+    }
+
+    @Test
+    void configKeysCarryNoValues() {
+        String keys = AzureIdDriver.configKeys(PROOF_UP_PAGE);
+        assertFalse(keys.contains("SECRET"), keys);
+        assertFalse(keys.contains("example.test"), keys);
+        assertFalse(keys.contains("XXXX"), keys);
+    }
+
+    @Test
+    void configKeysOfAPageWithoutConfig() {
+        assertEquals("none", AzureIdDriver.configKeys("<form action=/x></form>"));
+    }
+
     @Test
     void describesAPageWithoutConfig() {
         assertEquals("pgid=null, forms=1, urlPost=none",

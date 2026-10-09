@@ -423,6 +423,15 @@ on the prod box):
     request or response body — those carry Microsoft's `FlowToken`, which is bearer-equivalent.
     An unexpected page is described by `AzureIdDriver.describePage`: `pgid`, form count, the
     redacted `urlPost` and a numeric error code, never its text.
+  - Microsoft's "proof-up" interrupt (`pgid=ConvergedProofUpRedirect`, posting to
+    `mysignins.microsoft.com/.../registerMfaMethods`) means the organisation wants security info
+    registered before it lets the user in. `rejectProofUp` checks for it before the MFA page and
+    after `ProcessAuth`, throws `SecurityInfoRequiredException`, and the resource answers **409**
+    pointing the user at mysignins.microsoft.com. It is not a failed login, so it must never get
+    the "check the username and password" message. The page is logged with
+    `AzureIdDriver.configKeys`: its `$Config` key **names**, sorted, with no values, since the
+    values carry `sFT` and the user's masked phone and email. The names are there to show whether
+    Microsoft offers a skip link the driver could follow instead.
   - The resource logs a driver failure's message only for a `LoginChainException`, whose
     message the driver builds from those same safe parts. Any other exception is logged by type
     alone: an OkHttp or Jackson message can quote the upstream body. Throw `LoginChainException`
